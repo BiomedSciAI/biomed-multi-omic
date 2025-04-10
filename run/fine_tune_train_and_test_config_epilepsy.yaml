@@ -1,0 +1,83 @@
+defaults:
+  - data_module: bulk_rna_labeled
+  - tokenizer: all_genes
+  - fields: genes_expressions_unmasked
+  - trainer: default
+  - task: train_and_test
+  - model: scbert
+  - _self_
+seed:
+  seed_value: 1234
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: "disease_label"
+    is_stratification_label: False
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: "tissue_label"
+    is_stratification_label: False
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: "seizure_frequency_threshold_20_label"
+    is_stratification_label: False
+
+model:
+  num_hidden_layers: 2
+  num_attention_heads: 2
+  intermediate_size: 256
+  hidden_act: "gelu"
+  hidden_size: 256
+  checkpoint: null
+
+
+data_module:
+  max_length: 256
+  data_dir: /dccstor/bmfm-targets/data/omics/transcriptome/epilepsy/brain/
+  processed_name: processed_epilepsy_with_new_labels
+  limit_genes: protein_coding
+  transform_datasets: false
+
+  transform_kwargs:
+    source_h5ad_file_name: "/dccstor/bmfm-targets/data/omics/transcriptome/epilepsy/brain/epilepsy_all_brain.h5ad"
+    transforms:
+       - transform_name: KeepVocabGenesTransform
+         transform_args:
+           vocab_identifier: all_genes
+
+       - transform_name: TPMNormalizationTransform
+         transform_args:
+           gtf_file: /dccstor/bmfm-targets/data/omics/transcriptome/bulkRNA/GRCh38_latest_genomic.gtf
+           filter_genes_min_value: 0.01
+           filter_genes_min_percentage: 0.01
+
+       - transform_name: LogTransform
+         transform_args:
+           add_one: False
+           base: 2
+      
+       - transform_name: BinTransform
+         transform_args:
+          num_bins: 15
+          binning_method: int_cast
+
+       - transform_name: FilterGenesTransform
+         transform_args:
+           min_counts: 1
+
+
+
+trainer:
+  losses: 
+    - label_column_name: disease_label
+      name: cross_entropy
+    - label_column_name: tissue_label 
+      name: cross_entropy
+    - label_column_name: seizure_frequency_threshold_20_label
+      name: cross_entropy
+
+
+output_directory: /dccstor/bmfm-targets/users/liransz/outputs/
+accelerator: cpu
+val_check_interval: 0.5
+max_epochs: 100
+accumulate_grad_batches: 5
+checkpoints_every_n_train_steps: 100

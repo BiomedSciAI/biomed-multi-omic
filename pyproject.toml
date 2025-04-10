@@ -44,6 +44,7 @@ dependencies = [
   "hic-straw",
   "anndata>=0.10.9",
   "focal-loss-torch @ git+https://github.com/mathiaszinnen/focal_loss_torch.git",
+  "scib"
 ]
 
 [project.optional-dependencies]
