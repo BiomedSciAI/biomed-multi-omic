@@ -40,16 +40,17 @@ class StreamingDNASeqChromatinProfileDataset(StreamingDataset):
     default_label_dict_path = (
         Path(__file__).parent / f"{DATASET_NAME.lower()}_all_labels.json"
     )
-    default_label_columns = (
-        ["dnase_" + str(i) for i in range(125)]
-        + ["tf_" + str(i) for i in range(125, 815)]
-        + ["histone_" + str(i) for i in range(815, 919)]
-    )
+    default_label_columns = [
+        "combined_chromatin_dnase",
+        "combined_chromatin_tf",
+        "combined_chromatin_histone",
+    ]
     HAS_LABELS = True
 
     def __init__(
         self,
         processed_data_source: str | Path,
+        dataset_name: str = DATASET_NAME,
         split: str | None = None,
         shuffle: bool = False,
         drop_last: bool | None = None,
@@ -94,8 +95,12 @@ class StreamingDNASeqChromatinProfileDataset(StreamingDataset):
         if self.label_columns is None:
             self.label_columns = self.default_label_columns
         self.regression_label_columns = regression_label_columns
-
-        input_dir = Path(processed_data_source) / split
+        self.dataset_name = dataset_name
+        input_dir = (
+            Path(processed_data_source) / split
+            if split is not None
+            else Path(processed_data_source)
+        )
         super().__init__(
             input_dir=str(input_dir),
             shuffle=shuffle,
@@ -120,7 +125,16 @@ class StreamingDNASeqChromatinProfileDataset(StreamingDataset):
         return label_dict
 
     def get_sub_label_dict(self, label_column_name, label_dict_path):
-        return load_and_update_all_labels_json(None, label_dict_path, label_column_name)
+        # return load_and_update_all_labels_json(None, label_dict_path, label_column_name)
+        if not Path(label_dict_path).exists():
+            raise FileNotFoundError(
+                str(label_dict_path)
+                + " json file cannot be automatically created for litdata.",
+            )
+        else:
+            return load_and_update_all_labels_json(
+                None, label_dict_path, label_column_name
+            )
 
     def __getitem__(self, idx: int) -> MultiFieldInstance:
         """
@@ -146,8 +160,8 @@ class StreamingDNASeqChromatinProfileDataset(StreamingDataset):
                 self.default_label_columns.index(lc) for lc in self.label_columns
             ]
             labels = [labels[ind] for ind in label_indices]
-        assert len(self.label_columns) == len(labels)
-        metadata = dict(zip(self.label_columns, labels))
+
+        metadata = {label: labels[ind] for ind, label in enumerate(self.label_columns)}
         return MultiFieldInstance(
             metadata=metadata,
             data={"dna_chunks": dna_chunks},
@@ -173,27 +187,6 @@ class StreamingDNASeqChromatinProfileDataModule(StreamingDataModule):
     """
 
     DATASET_FACTORY: type[StreamingDataset] = StreamingDNASeqChromatinProfileDataset
-
-    # @property
-    # def collate_fn(self):
-    #     """
-    #     Returns a collate function.
-
-    #     Returns
-    #     -------
-    #         Callable: Collate function
-    #     """
-    #     return MultiFieldCollator(
-    #         tokenizer=self.tokenizer,
-    #         fields=self.fields,
-    #         label_columns=self.label_columns,
-    #         label_dict=self.label_dict,
-    #         pad_to_multiple_of=self.pad_to_multiple_of,
-    #         max_length=self.max_length,
-    #         padding=self.padding,
-    #         truncation=self.truncation,
-    #         collation_strategy=self.collation_strategy,
-    #     )
 
 
 class DNASeqChromatinProfileDataset(BaseDNASeqDataset):

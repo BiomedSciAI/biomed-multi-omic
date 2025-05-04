@@ -50,7 +50,7 @@ class BaseTaskConfig:
     barebones: bool = False
     sync_batchnorm: bool = False
     reload_dataloaders_every_n_epochs: int = 0
-    default_root_dir: str | Path | None = "/dccstor/bmfm-targets/scbert-pretrained"
+    default_root_dir: str | Path | None = None
     # # permitted nonNone values of tf32_mode:  "highest","high","medium"
     tf32_mode: str | None = None
 
@@ -60,7 +60,7 @@ class TrainingTaskConfig(BaseTaskConfig):
     max_epochs: int = 20
     max_steps: int = -1  # -1 means no limit
     precision: str = "16-mixed"
-    val_check_interval: float | None = 0.05
+    val_check_interval: float | None = None
     accelerator: str = "auto"
     callbacks: list[Any] = field(default_factory=default_callbacks)
     accumulate_grad_batches: int = 1

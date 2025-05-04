@@ -236,9 +236,7 @@ def concat_batch_tensors(batch, outputs, predictions, loss_task):
     from .loss_handling import FieldLossTask, LabelLossTask
 
     if isinstance(loss_task, LabelLossTask):
-        logits_to_record = {
-            k: v for k, v in outputs.logits.items() if k.startswith(output_key)
-        }
+        logits_to_record = {k: v for k, v in outputs.logits.items() if k == output_key}
         batch_tensors = (
             concat_label_loss_batch_tensors(
                 input_ids=batch["input_ids"],
@@ -288,6 +286,5 @@ def create_label_predictions_df(
         columns += [f"{label_value}_logits" for label_value in label_values]
         preds_array = preds_array.astype(object)
         preds_array[:, :2] = np.array(label_values)[preds_array[:, :2].astype(int)]
-
     label_preds_df = pd.DataFrame(index=sample_names, data=preds_array, columns=columns)
     return label_preds_df

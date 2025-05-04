@@ -12,7 +12,12 @@ from bmfm_targets import config
 
 
 def register_configs_and_models():
-    from bmfm_targets.models.predictive import scbert, scnystromformer, scperformer
+    from bmfm_targets.models.predictive import (
+        scbert,
+        scmodernbert,
+        scnystromformer,
+        scperformer,
+    )
 
     _config_maps = [
         (
@@ -30,6 +35,11 @@ def register_configs_and_models():
             scnystromformer.SCNystromformerForMaskedLM,
             scnystromformer.SCNystromformerForSequenceClassification,
         ),
+        (
+            config.SCModernBertConfig,
+            scmodernbert.SCModernBertForMaskedLM,
+            scmodernbert.SCModernBertForSequenceClassification,
+        ),
     ]
 
     for config_class, lm_class, seqcls_class in _config_maps:
@@ -41,7 +51,12 @@ def register_configs_and_models():
 def get_model_from_config(
     model_config: config.SCModelConfigBase, modeling_strategy: str
 ):
-    from bmfm_targets.models.predictive import scbert, scnystromformer, scperformer
+    from bmfm_targets.models.predictive import (
+        scbert,
+        scmodernbert,
+        scnystromformer,
+        scperformer,
+    )
 
     # scbert
     if isinstance(model_config, config.SCBertConfig):
@@ -75,11 +90,27 @@ def get_model_from_config(
             return scnystromformer.SCNystromformerForSequenceLabeling(model_config)
         if modeling_strategy == "multitask":
             return scnystromformer.SCNystromformerForMultiTaskModeling(model_config)
+    # SCModernBert
+    if isinstance(model_config, config.SCModernBertConfig):
+        if modeling_strategy == "mlm":
+            return scmodernbert.SCModernBertForMaskedLM(model_config)
+        if modeling_strategy == "sequence_classification":
+            return scmodernbert.SCModernBertForSequenceClassification(model_config)
+        if modeling_strategy == "sequence_labeling":
+            return scmodernbert.SCModernBertForSequenceLabeling(model_config)
+        if modeling_strategy == "multitask":
+            return scmodernbert.SCModernBertForMultiTaskModeling(model_config)
+
     raise ValueError(f"Unknown model_config type {type(model_config)}")
 
 
 def get_base_model_from_config(model_config: config.SCModelConfigBase):
-    from bmfm_targets.models.predictive import scbert, scnystromformer, scperformer
+    from bmfm_targets.models.predictive import (
+        scbert,
+        scmodernbert,
+        scnystromformer,
+        scperformer,
+    )
 
     if isinstance(model_config, config.SCBertConfig):
         base_model = scbert.modeling_scbert.SCBertModel(
@@ -93,6 +124,9 @@ def get_base_model_from_config(model_config: config.SCModelConfigBase):
         base_model = scnystromformer.modeling_scnystromformer.SCNystromformerModel(
             model_config, add_pooling_layer=True
         )
+    elif isinstance(model_config, config.SCModernBertConfig):
+        base_model = scmodernbert.modeling_scmodernbert.SCModernBertModel(model_config)
+
     return base_model
 
 

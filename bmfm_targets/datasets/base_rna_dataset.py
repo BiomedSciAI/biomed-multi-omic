@@ -253,6 +253,7 @@ class BaseRNAExpressionDataset(Dataset):
         cm, cc = sc.pp.filter_cells(data, min_genes=1, inplace=False)
         data = data[cm, :]
         logger.info(f"Removed {sum(~cm)} cells which no longer have counts.")
+        data = data.copy()
         return data
 
     def get_sample_metadata(self, idx):

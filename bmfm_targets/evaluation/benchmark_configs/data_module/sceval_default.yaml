@@ -2,9 +2,17 @@ defaults:
  - base_seq_cls
 
 _target_: bmfm_targets.training.data_module.DataModule
-transform_datasets: True
-processed_name: processed
+transform_datasets: False
+processed_name: processed_no_bins
+log_normalize_transform: true
 dataset_kwargs:
   label_dict_path: ${data_module.data_dir}/labels.json
 transform_kwargs:
     source_h5ad_file_name: ${data_module.data_dir}/h5ad/original.h5ad
+    transforms:
+      - transform_name: RenameGenesTransform
+        transform_args:
+          gene_map: null
+      - transform_name: KeepGenesTransform
+        transform_args:
+          genes_to_keep: null

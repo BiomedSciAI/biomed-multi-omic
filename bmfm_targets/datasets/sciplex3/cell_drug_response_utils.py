@@ -7,6 +7,8 @@ import pandas as pd
 import seaborn as sns
 from sklearn.metrics import r2_score
 
+from bmfm_targets.training.metrics.plots import make_predictions_gt_density_plot
+
 
 def calculate_baseline_control_results(control_adata, target_adata, limit_genes=None):
     """
@@ -90,7 +92,7 @@ def assemble_model_results(model_results, clamp_negative=False):
 
     Args:
     ----
-    model_results (dict(str:dict(str, float))): dictionary of results per model name. For each model_name the value is a dictionary of gropu names and ehir aggregated r2 score
+    model_results (dict(str:dict(str, float))): dictionary of results per model name. For each model_name the value is a dictionary of gropu names and their aggregated r2 score
     clamp_negative(bool): wether to clamp netagive r2 values to zero.
 
     Returns:
@@ -126,8 +128,11 @@ def assemble_model_results(model_results, clamp_negative=False):
 
 def plot_cell_drug_response_model_results(model_results, filename=None):
     """
-    Plot cell drug reponse model results, holding r2 score per group of <cell_line, drug, dosage>.
-    The plot is similar to BioLord paper.
+    Box plot cell drug reponse model results, consisting of r2 metric value per group of <cell_line, drug, dosage>.
+    Each such group r2 is a dot in the box plot, and the boxes are aggregate per dosage. So we can see the
+    overall performance of the model in each dosage group.
+    The input model results may consist of several model results, and so this plot evnable compare the model performamce.
+    The plot is similar to the main plot in ChemCPA and BioLord paper.
 
     :model_results (pd.DataFrame) - results per model name. columns "cell_line", "drug", "dose", "combination", "r2"
     """
@@ -170,6 +175,36 @@ def plot_cell_drug_response_model_results(model_results, filename=None):
     return fig
 
 
+def plot_cell_drug_response_model_results_scatter(
+    model_results, model_a, model_b, model_name_column, metric_column
+):
+    """
+    Scatter plot of two cell drug reponse model results, consisting of metric values for some subsets of the data (eg r2 per group of <cell_line, drug, dosage>).
+    For each subset the two models metric value are represented bty a dot in the scatter plot.
+
+    :model_results (pd.DataFrame) - metric results per model name.
+    :model_a(str): first model name
+    :model_b(str): second model_name
+    :model_name_column: model_name column in model_results df
+    :metric_column: metric column in model_results df
+    """
+    results = pd.concat(
+        [
+            model_results[model_results[model_name_column] == model_a][metric_column],
+            model_results[model_results[model_name_column] == model_b][metric_column],
+        ],
+        axis=1,
+    )
+    results.columns = [model_a, model_b]
+    fig = make_predictions_gt_density_plot(
+        predictions_df=results,
+        predicted_label=model_a,
+        gt_label=model_b,
+        kind="scatter",
+    )
+    return fig
+
+
 def calc_control_mean_expression():
     """
     Calculate mean expression of control cells in each cell_line to be used as input during training.
@@ -197,7 +232,80 @@ def calc_control_mean_expression():
     )
 
 
-def cell_drug_response_aggregated_r2_scores(model_results, output_filename):
+def create_mean_expression_h5ad(source_h5ad_file_path, output_file_path):
+    """
+    Calculate mean expression of cells in each cell_line x durg x dosage group, to be used as a alternative input file
+    more suitable for the r2 aggregated metric
+    Saves as h5ad file to the Sciplex folder.
+    Intened to run onces in offline, to create an input file to experiments on the mean data.
+
+    :source_h5ad_file_path(str) - gene expression input data file, expecting a 'cov_drug_dose_name' observation.
+    :output_file_path(str) - path to save the output avaraged data h5ad.
+    """
+    import scanpy as sc
+
+    adata = sc.read(source_h5ad_file_path)
+    drug_name_to_smiles_mapping = (
+        adata.obs.groupby("product_name")["SMILES"].first().to_dict()
+    )
+
+    aggregated_adata = {}
+
+    for split in ["test", "ood", "train"]:
+        split_adata = adata[adata.obs["split_rep_ood"] == split]
+
+        groups = split_adata.obs["cov_drug_dose_name"].unique().tolist()
+
+        # Calculate means for each group, do it using a loop to maintain the order
+        # group_means = np.zeros((len(groups), split_adata.n_vars))
+        group_means = []
+        for group in groups:
+            group_means.append(
+                split_adata.X[split_adata.obs["cov_drug_dose_name"] == group].mean(
+                    axis=0
+                )
+            )
+
+        grouped_adata = sc.AnnData(
+            X=np.array(np.vstack(group_means)),
+            var=split_adata.var,
+        )
+        grouped_adata.obs["cov_drug_dose_name"] = groups
+        grouped_adata.obs["cell_type"] = (
+            grouped_adata.obs["cov_drug_dose_name"].str.split("_").str[0]
+        )
+        grouped_adata.obs["product_name"] = (
+            grouped_adata.obs["cov_drug_dose_name"].str.split("_").str[1]
+        )
+        grouped_adata.obs["dose"] = (
+            grouped_adata.obs["cov_drug_dose_name"].str.split("_").str[2]
+        )
+        grouped_adata.obs["SMILES"] = grouped_adata.obs["product_name"].map(
+            drug_name_to_smiles_mapping
+        )
+
+        # convert dose to mM to match original "dose" column
+        grouped_adata.obs["dose"] = pd.to_numeric(grouped_adata.obs["dose"]) * 10000
+
+        aggregated_adata[split] = grouped_adata
+
+    combined_adata = sc.concat(
+        [aggregated_adata["train"], aggregated_adata["test"], aggregated_adata["ood"]],
+        join="outer",
+        label="split_rep_ood",
+        keys=["train", "test", "ood"],
+    )
+
+    combined_adata.write(output_file_path)
+
+    # sc.pp.highly_variable_genes(combined_adata)
+    # top_genes = adata.var_names[combined_adata.var['highly_variable']][:20]
+    # sc.pl.heatmap(combined_adata, var_names=top_genes, groupby='cov_drug_dose_name', cmap='viridis', show=True, save="heatmap.png")
+
+
+def cell_drug_response_aggregated_r2_scores(
+    model_results, limit_genes, output_filename
+):
     """
     Compute median and mean per dosage of group (<cell_line, drug, dosage>) r2 scores for a set of models
     :model_results (pd.DataFrame) -  models results with columns "cell_line", "drug", "dose", "combination", "r2"
@@ -235,3 +343,15 @@ def cell_drug_response_aggregated_r2_scores(model_results, output_filename):
     if output_filename:
         res.to_csv(output_filename, index=False)
     return res
+
+
+if __name__ == "__main__":
+    source_h5ad_file_path = (
+        Path(os.environ["BMFM_TARGETS_SCIPLEX3_DATA"])
+        / "sciplex3_biolord_ibm_rep_validation.h5ad"
+    )
+    output_file_path = (
+        Path(os.environ["BMFM_TARGETS_SCIPLEX3_DATA"])
+        / "test_sciplex3_biolord_ibm_rep_validation_mean.h5ad"
+    )
+    create_mean_expression_h5ad(source_h5ad_file_path, output_file_path)

@@ -5,8 +5,11 @@ Generally based on the collected labels and predictions of a validation run.
 """
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sb
+
+from bmfm_targets.training.metrics.metric_functions import calculate_95_ci
 
 
 def make_predictions_gt_density_plot(
@@ -90,3 +93,68 @@ def make_top20_deg_perturbation_plot(
     plt.xticks(rotation=90)
     plt.tight_layout()
     return plt.gcf()
+
+
+def make_accuracy_by_target_plot(preds_df, label_column_name):
+    prediction_col = label_column_name + "_prediction"
+    label_col = label_column_name + "_label"
+
+    if prediction_col is None or label_col is None:
+        return None
+
+    if not isinstance(prediction_col, str) or not isinstance(label_col, str):
+        return None
+
+    if preds_df[label_col].nunique() > 50:
+        return None
+
+    accuracy_df = (
+        preds_df.sort_values(label_col)
+        .groupby(label_col)
+        .apply(
+            lambda group: pd.Series(
+                {
+                    "accuracy": calc_accuracy(group[prediction_col], group.name),
+                    "count": len(group),
+                }
+            )
+        )
+        .reset_index()
+    )
+
+    # Compute estimates and confidence intervals
+    estimates = []
+    lower_errors = []
+    upper_errors = []
+
+    for value, n in zip(accuracy_df["accuracy"], accuracy_df["count"]):
+        estimate, lower_CI, upper_CI = calculate_95_ci(value, n, ci_method="wilson")
+        estimates.append(estimate)
+        lower_errors.append(estimate - lower_CI)
+        upper_errors.append(upper_CI - estimate)
+
+    lower_errors = [max(0, err) for err in lower_errors]
+    upper_errors = [max(0, err) for err in upper_errors]
+    # Create error bars
+    display_labels = accuracy_df[label_col]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    y_positions = np.arange(len(display_labels))  # Positions for x-axis
+
+    ax.errorbar(
+        y_positions,
+        estimates,
+        yerr=np.array([lower_errors, upper_errors]),
+        fmt="o",
+        capsize=5,
+        color="b",
+    )
+
+    ax.set_xticks(y_positions)
+    ax.set_xticklabels(display_labels, rotation=45, ha="right")
+    ax.set_ylabel("Accuracy")
+
+    return fig
+
+
+def calc_accuracy(series, label):
+    return (series == label).mean()

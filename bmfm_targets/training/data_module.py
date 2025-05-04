@@ -54,12 +54,13 @@ class DataModule(pl.LightningDataModule):
         pad_to_multiple_of: int = 16,
         sequence_order: str | None = None,
         sequence_dropout_factor: int | float | None = None,
-        pad_zero_expression_strategy: str | None = None,
+        pad_zero_expression_strategy: str | dict | None = None,
         collation_strategy: Literal[
             "language_modeling",
             "sequence_classification",
             "sequence_labeling",
             "multitask",
+            "multilabel",
         ] = "language_modeling",
         mlm: bool = False,
         change_ratio: float = 0.15,
@@ -141,11 +142,14 @@ class DataModule(pl.LightningDataModule):
             Factor for dropping out sequences during training, by default None.
             If float: Probability of dropping sequences.
             If int: Number of contiguous samples to drop out.
-        pad_zero_expression_strategy : str | None, optional
-            Strategy for padding zero expression values, by default None.
-            - "batch_wise": Only include genes with zero expression if at least one sample
-            in the batch has nonzero expression.
-            - None: All zeros are included.
+        pad_zero_expression_strategy (dict) | None: The strategy for handling
+            zero-expression genes. Required key "strategy" can have values:
+                - 'batch_wise': Prioritizes genes expressed in the batch.
+                - 'random': Randomly selects zero-expression genes if needed.
+            optional keys:
+            - interleave_zero_ratio (float): Interleave a fixed ratio of zeros
+              (0 means first include all nonzero values, 1 means put all zeros first)
+            If no strategy is supplied, all zeros will be exposed.
         collation_strategy : "language_modeling" | "sequence_classification" | "sequence_labeling" | "multitask", optional
             Strategy for collating samples into batches, by default "language_modeling".
             - "language_modeling": For masked language modeling and causal language modeling tasks.
@@ -220,6 +224,14 @@ class DataModule(pl.LightningDataModule):
         self.sequence_order = sequence_order
         self.log_normalize_transform = log_normalize_transform
         self.rda_transform = rda_transform
+        if isinstance(pad_zero_expression_strategy, str):
+            logger.warning(
+                "str arguments for `pad_zero_expression_strategy` are deprecated"
+            )
+            logger.warning(
+                f"{pad_zero_expression_strategy} -> { {'strategy': pad_zero_expression_strategy} }"
+            )
+            pad_zero_expression_strategy = {"strategy": pad_zero_expression_strategy}
         self.pad_zero_expression_strategy = pad_zero_expression_strategy
         self.collation_strategy = collation_strategy
         self.mlm = mlm
@@ -262,7 +274,9 @@ class DataModule(pl.LightningDataModule):
 
     def get_trainer_callbacks(self) -> list:
         """Here datamodules can add their own callbacks to callback list for PL trainer."""
-        if self.masking_strategy and self.masking_strategy.should_update_from_errors:
+        if self.masking_strategy and hasattr(
+            self.masking_strategy, "get_trainer_callback"
+        ):
             return [self.masking_strategy.get_trainer_callback()]
         return []
 
@@ -842,7 +856,10 @@ class DNASeqDataModule(pl.LightningDataModule):
         truncation: TruncationStrategy | bool = True,
         pad_to_multiple_of: int = 16,
         collation_strategy: Literal[
-            "language_modeling", "sequence_classification", "sequence_labeling"
+            "language_modeling",
+            "sequence_classification",
+            "sequence_labeling",
+            "multilabel",
         ] = "sequence_classification",
         limit_dataset_samples: int | Mapping[str, int] | None = None,
         sequence_order: str | None = None,
@@ -896,7 +913,7 @@ class DNASeqDataModule(pl.LightningDataModule):
         self.limit_dataset_samples = limit_dataset_samples
         self.sequence_order = sequence_order
         self.collation_strategy = collation_strategy
-        if collation_strategy == "sequence_classification":
+        if collation_strategy in ["sequence_classification", "multilabel"]:
             self.mlm = False
         self.train_dataset = None
         self.dev_dataset = None

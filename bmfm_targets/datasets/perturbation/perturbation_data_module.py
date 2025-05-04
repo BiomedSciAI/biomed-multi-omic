@@ -30,9 +30,7 @@ class ScperturbDataModule(PerturbationDataModule):
 
 class GearsDataset(BasePerturbationDataset):
     DATASET_NAME = "norman"
-    source_h5ad_file_names = [
-        "/dccstor/bmfm-targets/data/omics/transcriptome/scRNA/finetune/Perturbation/Norman_GSE133344/preprocessed_GEARS/perturb_processed.h5ad"
-    ]
+    source_h5ad_file_names = ["perturb_processed.h5ad"]
 
 
 class GearsDataModule(PerturbationDataModule):

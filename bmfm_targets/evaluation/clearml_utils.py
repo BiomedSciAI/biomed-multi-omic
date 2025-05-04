@@ -1,7 +1,6 @@
 import datetime
 import logging
 import os
-import pickle
 import subprocess
 from time import time
 
@@ -141,30 +140,6 @@ def get_ccc_user_name():
         return result.stdout.strip()  # Strip newline from the output
     except subprocess.CalledProcessError:
         return None  # Unable to get current user
-
-
-def get_clearml_user_id(user_name):
-    """
-    Returns user id of ClearML user when its user name is provided
-       All user_names and ids of ClearML users are downloaded from the DB and managed in the external file.
-       Refreshing the external file is required if new users are added to ClearML system.
-
-    Args:
-    ----
-        user_name (Str): Name of the user in CleatML DB
-
-    Returns:
-    -------
-        Str: user_id of ClearML user
-        Exception is raised if user is not in the DB or DB is outdated
-    """
-    with open("/dccstor/bmfm-targets/shared/clearml_users.pkl", "rb") as handle:
-        users_dict = pickle.load(handle)
-    try:
-        user_id = users_dict[user_name]
-        return user_id
-    except Exception as ex:
-        logging.error("No such user name in the database, try again".format())
 
 
 def get_all_clearml_projects() -> pd.DataFrame:

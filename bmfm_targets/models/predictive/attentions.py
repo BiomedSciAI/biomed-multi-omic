@@ -1,3 +1,5 @@
+import warnings
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -28,7 +30,10 @@ def attention_factory(
     if attention == "torch":
         return SCBertCustomAttention(config, self_attention=SelfTorchAttention(config))
     else:
-        raise ValueError(f"Not supported attention {attention}. Select from torch, ...")
+        warnings.warn(
+            f"Not supported attention {attention}, reverting to default. Select from torch, ..."
+        )
+        return default_attention_class(config)
 
 
 class SelfTorchAttention(nn.Module):

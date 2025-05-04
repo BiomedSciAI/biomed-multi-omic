@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 name = "bmfm-targets"
 description = "Biomedical foundational models for target discovery"
 authors = [{ name = "Bharath Dandala", email = "bdand@us.ibm.com" }]
-version = "0.14.0"
+version = "0.15.0"
 readme = "README.md"
 # due to how PEP 440 defines version matching, prefer [incl, excl) definitions like below:
 requires-python = ">=3.10, <3.13"
@@ -21,7 +21,6 @@ dependencies = [
   "numpy<2",
   "scipy<1.15.0", #unpin when upstream fixes this https://github.com/scverse/anndata/issues/1811
   "torch",
-  "torchdata<0.10.0",
   "rdata",
   "pytorch-lightning>=2.0.0",
   "transformers>=4.40.0",
@@ -44,11 +43,19 @@ dependencies = [
   "hic-straw",
   "anndata>=0.10.9",
   "focal-loss-torch @ git+https://github.com/mathiaszinnen/focal_loss_torch.git",
+  "torchdata<0.10",
 ]
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
 bulk_rna = ["GEOparse", "biopython"]
+benchmarking = [
+  "scib",
+  "scib-metrics",
+  "pyliger",
+  "scanorama",
+  "harmony-pytorch",
+]
 
 [project.urls]
 repository = "https://github.com/BiomedSciAI/biomed-multi-omic/"

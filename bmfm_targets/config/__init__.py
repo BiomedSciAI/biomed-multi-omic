@@ -21,6 +21,7 @@ from .model_config import (
     SCPerformerConfig,
     SCNystromformerConfig,
     SCModelConfigBase,
+    SCModernBertConfig,
 )
 from .main_config import SCBertMainConfig, SCBertMainHydraConfigSchema
 
@@ -37,6 +38,7 @@ __all__ = [
     "SCBertConfig",
     "SCNystromformerConfig",
     "SCPerformerConfig",
+    "SCModernBertConfig",
     "TrainingTaskConfig",
     "TokenizerConfig",
     "PreTrainedEmbeddingConfig",

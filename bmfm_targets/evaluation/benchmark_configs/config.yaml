@@ -1,7 +1,7 @@
 defaults:
   - data_module: sceval_default
   - tokenizer: all_genes
-  - fields: default
+  - fields: genes_expressions_cve
   - trainer: default
   - task: train
   - model: scbert
@@ -23,7 +23,7 @@ track_clearml:
 max_finetuning_epochs: 2
 
 dataset_name: "" # do not modify, set by script
-checkpoint_path: /dccstor/bmfm-targets1/users/tanwi/training_runs/scbert_panglaodb_pretrain_CVE_exposeZeros_Proteincoding_RDA_24h_Back/last.ckpt
-#/dccstor/bmfm-targets/models/omics/transcriptome/scRNA/pretrain/bmfm.targets.slate.bert.110m.scRNA.RDA.v1/last-v3.ckpt
-checkpoint_name: rda_test
-output_directory: /dccstor/bmfm-targets1/users/dmichael/benchmarking/
+checkpoint_path: ""
+checkpoint_name: multitask_cellxgene_v2
+# checkpoint_name: multitask_cellxgene
+output_directory: ""

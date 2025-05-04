@@ -1,6 +1,6 @@
 """Vocabularies and tokenizers for scRNA expression prediction models."""
 
-from .multifield_instance import MultiFieldEncodedInstance, MultiFieldInstance
+from .multifield_instance import MultiFieldInstance
 from .multifield_vocabulary import MultiFieldVocabulary
 from .multifield_tokenizer import MultiFieldTokenizer
 from .multifield_collator import MultiFieldCollator
@@ -26,7 +26,6 @@ __all__ = [
     "get_ref2vec_tokenizer",
     "get_refgen2vec_BPEtokenizer",
     "MultiFieldInstance",
-    "MultiFieldEncodedInstance",
     "MultiFieldVocabulary",
     "MultiFieldTokenizer",
     "MultiFieldCollator",

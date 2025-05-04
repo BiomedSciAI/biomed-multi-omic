@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 import scanpy as sc
-import scib.metrics.metrics as scm
 import transformers
 from clearml.logger import Logger
 from lightning_utilities.core.rank_zero import rank_zero_only
@@ -15,7 +14,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.utilities import types as pl_types
 
 from bmfm_targets.datasets.datasets_utils import random_subsampling
-from bmfm_targets.training.masking import MaskingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -65,110 +63,20 @@ class InitialCheckpoint(ModelCheckpoint):
         trainer.save_checkpoint(self.dirpath + "/" + self.filename)
 
 
-class TokenErrorUpdateCallback(pl.Callback):
-    """
-    Callback for updating token errors.
-
-    Added automatically when DataModule initiated with `TokenProbabilityMaskingStrategy`.
-    Requires the token level errors to be calculated and saved to the trainer's
-    `token_level_errors` attribute.
-    """
-
-    def __init__(self, error_column_name="gene_err", n_bins=100) -> None:
-        self.error_column_name = error_column_name
-        self.n_bins = n_bins
-        super().__init__()
-
-    def on_validation_end(self, trainer, pl_module):
-        # Get token errors from the LightningModule
-        if "genes" not in pl_module.token_level_errors:
-            logger.warning(
-                "No gene level errors available to update masking. "
-                "No adaptive masking will take place."
-            )
-            return
-        errors = pl_module.token_level_errors["genes"]
-        if errors is not None:
-            # Compute token probabilities
-            token_probs = self.calculate_token_probs(errors)
-            masking_strategy = self.get_masking_strategy(trainer)
-            # Update masking strategy in the DataModule
-
-            if hasattr(masking_strategy, "update_token_masking_probs"):
-                masking_strategy.update_token_masking_probs(token_probs)
-            else:
-                raise AttributeError(
-                    "DataModule does not have valid masking_strategy attribute."
-                    " This callback should only be added with a valid masking strategy."
-                )
-
-    def get_masking_strategy(self, trainer: pl.Trainer) -> MaskingStrategy | None:
-        """
-        Load the masking_strategy object from the datamodule or dataloader.
-
-        Depending on how Trainer.fit() is called, there will be either a datamodule
-        or dataloaders. The masking_strategy object is shared between them, but where
-        it is stored needs to be deduced.
-
-        Args:
-        ----
-            trainer (pl.Trainer): the lightning trainer
-
-        Raises:
-        ------
-            ValueError: if there are no valid dataloaders at all. This would only happen
-              if this function is called outside the fit/test loop.
-
-        Returns:
-        -------
-            MaskingStrategy | None: the masking strategy or None if there is no masking
-              strategy defined
-
-        """
-        if getattr(trainer, "datamodule", None):
-            return getattr(trainer.datamodule, "masking_strategy", None)
-        if getattr(trainer, "train_dataloader", None):
-            collator = trainer.train_dataloader.collate_fn
-        elif getattr(trainer, "test_dataloader", None):
-            collator = trainer.test_dataloader.collate_fn
-        if hasattr(collator, "masker"):
-            return getattr(collator.masker, "masking_strategy", None)
-        else:
-            raise ValueError("No data module or dataloaders found")
-
-    def calculate_token_probs(self, errors: pd.DataFrame) -> dict[str, float]:
-        """
-        Calculate token masking probabilities based on token error dataframe.
-
-        This makes use of the `error_column_name` attribute to choose which error
-        definition to use to calculate masking probabilities. It transforms the errors
-        using a quantile transform and shifts the values from 1/n_bins to 1 so that
-        nothing has zero probability.
-
-        Args:
-        ----
-          errors (pd.DataFrame): the token_level error dataframe as produced, eg, by
-            `get_gene_level_expression_error`.
-
-        Returns:
-        -------
-            dict[str,float]: tokens and masking probabilities. The probabilities do not
-              need to be valid probabilities, they will be rescaled by the masking
-              function.
-
-        """
-        error_to_use = errors[self.error_column_name]
-        token_probs = pd.cut(error_to_use, bins=self.n_bins, labels=False)
-        # we don't want any zeros and we want normalized to 1
-        token_probs = (token_probs + 1) / (self.n_bins + 1)
-
-        return token_probs.to_dict()
-
-
 class BatchIntegrationCallback(pl.Callback):
-    def __init__(self, batch_column_name=None):
+    def __init__(
+        self,
+        batch_column_name=None,
+        benchmarking_methods=[
+            "Unintegrated",
+            "Scanorama",
+            "LIGER",
+            "Harmony",
+        ],
+    ):
         super().__init__()
         self.batch_column_name = batch_column_name
+        self.benchmarking_methods = benchmarking_methods
 
     def on_predict_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         self.cl = Logger.current_logger()
@@ -196,6 +104,8 @@ class BatchIntegrationCallback(pl.Callback):
         predictions = {k: _join_batches(k) for k in batch_preds[0].keys()}
         adata_orig = trainer.datamodule.predict_dataset.processed_data
         adata_emb = self.add_embed_to_obsm(adata_orig, predictions)
+        if not self.batch_column_name == "batch":
+            adata_emb.obs["batch"] = adata_emb.obs[self.batch_column_name]
         return adata_emb
 
     def report_batch_integartion_to_clearml(self, adata_emb):
@@ -223,6 +133,14 @@ class BatchIntegrationCallback(pl.Callback):
         )
         plt.close(fig)
 
+        fig = self.generate_pretty_benchmarking_table(adata_emb)
+        self.cl.report_matplotlib_figure(
+            title="Integration Benchmark",
+            series="scIB Summary",
+            figure=fig,
+            report_image=True,
+        )
+
     def generate_fig_batch_integration(self, adata_emb):
         target_col = self.target_column_name
         batch_col = self.batch_column_name
@@ -232,22 +150,19 @@ class BatchIntegrationCallback(pl.Callback):
             n_samples=min((10000, adata_emb.obs.shape[0])),
             shuffle=False,
         )
-        sc.pp.neighbors(sampling_adata_emb, use_rep="X_emb")
+        sc.pp.neighbors(sampling_adata_emb, use_rep="BMFM-RNA")
         sc.tl.umap(sampling_adata_emb)
         sampling_adata_emb.obs[batch_col] = sampling_adata_emb.obs[batch_col].astype(
             "category"
         )
-        fig, axs = plt.subplots(2, 1, figsize=(15, 15))
-        colors = [
-            target_col,
-            batch_col,
-        ]
+        fig, axs = plt.subplots(3, 1, figsize=(15, 15))
+        colors = [target_col, batch_col, "total_counts"]
         titles = [
             f"Targets embeddings: {target_col} ",
             f"Batch embeddings: {batch_col}",
+            "Embeddings colored by total counts per cell",
         ]
 
-        # Plot each UMAP separately
         for i, ax in enumerate(axs):
             sc.pl.umap(
                 sampling_adata_emb,
@@ -263,14 +178,16 @@ class BatchIntegrationCallback(pl.Callback):
     def generate_table_batch_integration(self, adata_emb):
         batch_col = self.batch_column_name
         label_col = self.target_column_name
-        sc.pp.neighbors(adata_emb, use_rep="X_emb")
+        sc.pp.neighbors(adata_emb, use_rep="BMFM-RNA")
         sc.tl.umap(adata_emb)
+        import scib.metrics.metrics as scm
+
         batch_int = scm(
             adata_emb,
             adata_int=adata_emb,
             batch_key=f"{batch_col}",
             label_key=f"{label_col}",
-            embed="X_emb",
+            embed="BMFM-RNA",
             isolated_labels_asw_=False,
             silhouette_=True,
             hvg_score_=False,
@@ -327,6 +244,100 @@ class BatchIntegrationCallback(pl.Callback):
         aligned_embeddings = np.array(
             [embeddings[name_to_index[name]] for name in adata_cell_names]
         )
-        adata_emb.obsm["X_emb"] = aligned_embeddings
-
+        adata_emb.obsm["BMFM-RNA"] = aligned_embeddings
         return adata_emb
+
+    def generate_pretty_benchmarking_table(self, adata_emb):
+        from scib_metrics.benchmark import BatchCorrection, Benchmarker, BioConservation
+
+        biocons = BioConservation(isolated_labels=False)
+
+        adata_emb.obsm["Unintegrated"] = self.get_pca_of_x(adata_emb)
+        adata_emb.obsm["Harmony"] = self.harmony_emb(adata_emb)
+        adata_emb.obsm["Scanorama"] = self.scanorama_emb(adata_emb)
+        adata_emb.obsm["LIGER"] = self.liger_emb(adata_emb)
+
+        bm = Benchmarker(
+            adata_emb,
+            batch_key=self.batch_column_name,
+            label_key=self.target_column_name,
+            embedding_obsm_keys=["BMFM-RNA"] + self.benchmarking_methods,
+            pre_integrated_embedding_obsm_key="Unintegrated",
+            bio_conservation_metrics=biocons,
+            batch_correction_metrics=BatchCorrection(),
+            n_jobs=-1,
+        )
+        bm.prepare()
+        bm.benchmark()
+        fig = bm.plot_results_table(min_max_scale=False)
+        return fig
+
+    def harmony_emb(self, adata):
+        from harmony import harmonize
+
+        if not "Harmony" in self.benchmarking_methods:
+            return np.zeros((adata.n_obs, 1))
+        if "Unintegrated" not in adata.obsm:
+            adata.obsm["X_pca"] = self.get_pca_of_x(adata)
+        return harmonize(
+            adata.obsm["X_pca"], adata.obs, batch_key=self.batch_column_name
+        )
+
+    def get_pca_of_x(self, adata):
+        adata.X = adata.X.astype("float64")
+        sc.pp.highly_variable_genes(
+            adata, n_top_genes=2000, batch_key=self.batch_column_name
+        )
+        sc.tl.pca(adata, n_comps=30, mask_var="highly_variable")
+        return adata.obsm["X_pca"]
+
+    def scanorama_emb(self, adata):
+        import scanorama
+
+        if not "Scanorama" in self.benchmarking_methods:
+            return np.zeros((adata.n_obs, 1))
+        batch_cats = adata.obs.batch.cat.categories
+        adata_list = [adata[adata.obs.batch == b].copy() for b in batch_cats]
+        scanorama.integrate_scanpy(adata_list)
+
+        adata.obsm["Scanorama"] = np.zeros(
+            (adata.shape[0], adata_list[0].obsm["X_scanorama"].shape[1])
+        )
+        for i, b in enumerate(batch_cats):
+            adata.obsm["Scanorama"][adata.obs.batch == b] = adata_list[i].obsm[
+                "X_scanorama"
+            ]
+
+        return adata.obsm["Scanorama"]
+
+    def liger_emb(self, adata):
+        import pyliger
+
+        if not "LIGER" in self.benchmarking_methods:
+            return np.zeros((adata.n_obs, 1))
+        batch_cats = adata.obs.batch.cat.categories
+        bdata = adata.copy()
+        adata_list = [bdata[bdata.obs.batch == b].copy() for b in batch_cats]
+        for i, ad in enumerate(adata_list):
+            ad.uns["sample_name"] = batch_cats[i]
+            ad.uns["var_gene_idx"] = np.arange(bdata.n_vars)
+
+        liger_data = pyliger.create_liger(
+            adata_list, remove_missing=False, make_sparse=False
+        )
+
+        liger_data.var_genes = bdata.var_names
+        pyliger.normalize(liger_data)
+        pyliger.scale_not_center(liger_data)
+        pyliger.optimize_ALS(liger_data, k=10)
+        pyliger.quantile_norm(liger_data)
+
+        bdata.obsm["LIGER"] = np.zeros(
+            (adata.shape[0], liger_data.adata_list[0].obsm["H_norm"].shape[1])
+        )
+        for i, b in enumerate(batch_cats):
+            bdata.obsm["LIGER"][adata.obs.batch == b] = liger_data.adata_list[i].obsm[
+                "H_norm"
+            ]
+
+        return bdata.obsm["LIGER"]

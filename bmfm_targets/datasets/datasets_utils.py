@@ -10,6 +10,11 @@ import scanpy as sc
 from sklearn.model_selection import StratifiedShuffleSplit
 
 logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 def get_split_column(
@@ -167,12 +172,14 @@ def random_subsampling(adata, n_samples, shuffle):
                     otherwise a random sub sample of size n.
     """
     if not shuffle:
-        return adata[: min(len(adata), n_samples)]
+        data = adata[: min(len(adata), n_samples)]
     else:
         samples = np.random.choice(
             len(adata), size=min(len(adata), n_samples), replace=False
         )
-        return adata[samples]
+        data = adata[samples]
+    data = data.copy()
+    return data
 
 
 def _single_only_split_perturbations(unique_perturbations, test_size=0.1):
@@ -606,3 +613,87 @@ def add_non_zero_non_dropout_de_gene_ranking(
     adata.uns["top_non_zero_de_20"] = top_non_zero_de_20
 
     return adata
+
+
+def equal_samples_per_set_downsample(
+    df: pd.DataFrame,
+    groupby_columns: str | list[str],
+    frac: float,
+    random_state: int | None = None,
+) -> pd.DataFrame:
+    """
+    Downsample a DataFrame to exactly (frac * total samples) while fairly distributing
+    samples across groups. Small groups keep all their samples; larger groups share
+    the remaining slots equally.
+
+    Guarantees:
+    1. Total samples = int(len(df) * frac) (exact match)
+    2. No group exceeds its original size
+    3. Groups contribute as equally as possible
+
+    Args:
+    ----
+        df: Input DataFrame to downsample
+        groupby_columns: Column name(s) defining groups (e.g., ["category"])
+        frac: Fraction of total samples to keep (e.g., 0.7 for 70%)
+        random_state: Optional random seed for reproducibility
+
+    Returns:
+    -------
+        Downsampled DataFrame with these properties:
+        - Small groups: Keep all their samples (if needed to reach total)
+        - Large groups: Equal samples after small groups are preserved
+
+    Example:
+    -------
+        Input: {"A":50, "B":150, "C":100}, frac=0.5 so target_size=200
+        Output: {"A":50, "B":75, "C":75} (exactly 200 samples)
+                (A keeps all, B/C split remaining 150 equally)
+    """
+    total_size = int(len(df) * frac)
+    logger.info(f"Downsampling {df.shape[0]} to {total_size}")
+    grouped = df.groupby(groupby_columns, observed=True)
+    group_sizes = grouped.size()
+    groups = group_sizes.index.tolist()
+    avail = group_sizes.values
+    num_groups = len(avail)
+    logger.info(
+        f"Attempting to construct equal sample sizes for {num_groups} combination of the following columns: {groupby_columns}"
+    )
+
+    # Step 1: Initial assignment (capped at group size)
+    base_quota = total_size // num_groups
+    assignment = np.minimum(base_quota, avail)
+    remaining_quota = total_size - assignment.sum()
+    logger.info(
+        f"Initial sample size of {base_quota} leaves {remaining_quota} remaining samples due to insufficient samples in some sets."
+    )
+
+    # Step 2: Fair redistribution with strict size enforcement
+    while remaining_quota > 0:
+        # Find groups that can take more samples
+        remaining_capacity = avail - assignment
+        eligible = remaining_capacity > 0
+        if not eligible.any():
+            break
+
+        # Distribute 1 sample per eligible group
+        extras = np.zeros(num_groups, dtype=int)
+        extras[eligible] = 1
+        extras = np.minimum(extras, remaining_capacity)
+        assignment += extras
+        remaining_quota -= extras.sum()
+
+    samples = []
+    for name, group in grouped:
+        n = assignment[groups.index(name)]
+        if n > 0:
+            samples.append(group.sample(n=n, random_state=random_state))
+    group_sizes, counts = np.unique(assignment, return_counts=True)
+    final_df = pd.concat(samples).reset_index(drop=True)
+    logger.info(f"Obtained {final_df.shape[0]} samples")
+    logger.info(
+        f"With {counts[-1]} downsampled to size {group_sizes[-1]} and {sum(counts[:-1])} smaller groups"
+    )
+
+    return final_df

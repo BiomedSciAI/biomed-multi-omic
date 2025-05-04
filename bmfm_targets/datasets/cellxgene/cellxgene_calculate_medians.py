@@ -106,7 +106,6 @@ def get_args():
         "-i",
         "--inputdir",
         type=path_type_not_exists,
-        default="/dccstor/bmfm-targets/data/omics/transcriptome/scRNA/pretrain/cellxgene/soma-2023-12-15",
         help="Input directory with CELLxGENE dataset.",
     )
     parser.add_argument(

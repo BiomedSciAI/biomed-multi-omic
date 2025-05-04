@@ -13,7 +13,6 @@ import hydra
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
-import scipy.stats as stats
 import torch
 import transformers
 from clearml import Task, TaskTypes
@@ -23,7 +22,10 @@ from torch.utils.data import DataLoader
 
 from bmfm_targets import config
 from bmfm_targets.training.data_module import DataModule
-from bmfm_targets.training.metrics import log_confusion_matrix_to_clearml
+from bmfm_targets.training.metrics import (
+    log_confusion_matrix_to_clearml,
+)
+from bmfm_targets.training.metrics.metric_functions import calculate_95_ci
 from bmfm_targets.training.modules import (
     SequenceClassificationTrainingModule,
     get_training_module_class_for_data_module,
@@ -370,65 +372,6 @@ def save_logits_results(root_dir, label_dict, results):
         )
 
 
-def calculate_95_ci(data, n, ci_method="bootstrap_quantiles"):
-    """
-    Generates 95% CI for evaluation metrics.
-    Three types are available thorugh the ci_method argument.
-    - bootstrap_quantiles: takes the 2.5% and 97.5% quantiles of the bootstrap sample.
-    - bootstrap_t_interval: based on the bootstrap sample distribution around the sample's mean.
-        If len(data)=1 returns None values for the CI's bounds.
-    - binomial: CI based on the binomial distribution for proportion metrics. Does not require
-        repeated samplings from the data.
-    - wilson: The Wilson score interval, it is assymetric, doesn't overshoot the [0,1] range and
-        does not result with a zero-width length intervals.
-
-    Args:
-    ----
-        data (_type_): a list or scalar of evaluation metrics, e.g. accuracy rate.
-        ci_method (str, optional): _description_. Defaults to "bootstrap_quantiles".
-
-    Raises:
-    ------
-        ValueError: if binomial CI was chosen but input values extending [0,1]
-
-    Returns:
-    -------
-        _type_: mean value, lower and upper CI bounds.
-    """
-    if isinstance(data, int):
-        data = [data]
-    mean = np.mean(data).round(2)
-    if ci_method == "bootstrap_quantiles":
-        lower_bound = np.percentile(data, 2.5)
-        upper_bound = np.percentile(data, 97.5)
-    elif ci_method == "bootstrap_t_interval":
-        std_error = stats.sem(data)
-        ci = stats.t.interval(
-            0.95,
-            n - 1,
-            loc=mean,
-            scale=std_error,
-        )
-        lower_bound = ci[0]
-        upper_bound = ci[1]
-    elif ci_method == "binomial":
-        if np.max(data) > 1 or np.min(data) < 0:
-            raise ValueError("Binomial based CI's are meant to be used for proportions")
-        ci_length = 1.96 * np.sqrt((mean * (1 - mean)) / n)
-        lower_bound = mean - ci_length
-        upper_bound = mean + ci_length
-    elif ci_method == "wilson":
-        z = 1.96
-        denominator = 1 + ((z**2) / n)
-        center = (mean + ((z**2) / (2 * n))) / denominator
-        margin = (
-            z * np.sqrt((mean * (1 - mean) / n) + (z**2)) / (2 * n)
-        ) / denominator
-        lower_bound = max(0, center - margin)
-        upper_bound = min(1, center + margin)
-    return mean, lower_bound, upper_bound
-
-
 def prepare_test_metrics_for_logging(
     results: dict[str, list[torch.Tensor]], n: int, ci_method: str
 ):
@@ -440,7 +383,6 @@ def prepare_test_metrics_for_logging(
             label = metric_name.split("_confusion_matrix")[0]
             metrics_to_log.append(("confusion_matrix", label, metric_value_list[-1]))
             continue
-
         if len(metric_value_list) > 1:
             metrics_to_log.append(("histogram", metric_name, metric_value_list))
             if "confusion_matrix" in metric_name:
@@ -454,7 +396,7 @@ def prepare_test_metrics_for_logging(
         df_metrics_rows.append(
             {
                 "Metric": metric_name,
-                "Mean": mean_value,
+                "Mean": np.round(mean_value, 2),
                 "CI": f"[{np.round(lower_ci, 3)}, {np.round(upper_ci, 3)}]",
             }
         )
