@@ -52,6 +52,7 @@ class MultiFieldTokenizer:
         name_or_path=None,
         field_to_tokenizer_map: dict[str, str | Path] = None,
         load_relative=True,
+        default_field=None,
         **kwargs,
     ):
         if field_to_tokenizer_map:
@@ -70,6 +71,7 @@ class MultiFieldTokenizer:
         self.field_to_tokenizer_map = field_to_tokenizer_map
         self.tokenizers = {}
         self.kwargs = kwargs
+        self.default_field = default_field
         self.load_all_subtokenizers()
 
     def save_pretrained(
@@ -309,8 +311,11 @@ class MultiFieldTokenizer:
 
     @property
     def _default_tokenizer(self):
-        first_field_name = sorted(self.tokenizers.keys())[0]
-        return self.get_field_tokenizer(first_field_name)
+        if self.default_field is not None:
+            default_field_name = self.default_field
+        else:
+            default_field_name = sorted(self.tokenizers.keys())[0]
+        return self.get_field_tokenizer(default_field_name)
 
     @property
     def mask_token(self):

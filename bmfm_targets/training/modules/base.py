@@ -3,6 +3,7 @@ import pathlib
 from collections import defaultdict, deque
 from itertools import chain
 from pathlib import Path
+from typing import Literal
 
 import clearml
 import pytorch_lightning as pl
@@ -16,6 +17,7 @@ from torchmetrics.wrappers import MultitaskWrapper
 from bmfm_targets.config import LabelColumnInfo, TrainerConfig
 from bmfm_targets.config.model_config import SCModelConfigBase
 from bmfm_targets.models import get_model_from_config, instantiate_classification_model
+from bmfm_targets.models.model_utils import SequenceClassifierOutputWithEmbeddings
 from bmfm_targets.models.predictive.layers import get_embeddings_from_outputs
 from bmfm_targets.tokenization import MultiFieldTokenizer
 from bmfm_targets.training import metrics
@@ -133,22 +135,38 @@ class BaseTrainingModule(pl.LightningModule):
 
         self.save_hyperparameters(ignore=["tokenizer"])
 
-    def update_metrics(self, labels: torch.Tensor, outputs, split: str):
-        logits = {}
-        gt_labels = {}
+    def update_metrics(
+        self,
+        labels: torch.Tensor,
+        outputs: SequenceClassifierOutputWithEmbeddings,
+        split: Literal["test", "train", "validation"],
+    ):
+        """
+        Process model outputs and calculate metrics for the given split.
 
+        Extracts and formats inputs for each task's metrics, then applies the
+        appropriate metric collection based on the data split.
+
+        Args:
+        ----
+            labels: Dictionary of ground truth labels for each task
+            outputs: Model output object containing logits
+            split: Data split name ("test", "train", "validation")
+
+        Returns:
+        -------
+            Dictionary of metric values from the appropriate metrics collection
+        """
+        model_outputs = {}
+        gt_labels = {}
         for loss_task in self.loss_tasks:
             output_key = loss_task.output_key
-            logits[output_key] = loss_task.get_logits(outputs.logits)
-            if loss_task.output_size == 1:
-                logits[output_key] = logits[output_key].view(-1)
-                label_dtype = logits[output_key].dtype
-            else:
-                label_dtype = torch.int64
-
-            gt_labels[output_key] = labels[output_key].to(label_dtype).view(-1)
-
-        return self.split_metrics(split)(logits, gt_labels)
+            task_model_output, task_labels = loss_task.extract_metric_inputs(
+                outputs.logits, labels
+            )
+            model_outputs[output_key] = task_model_output
+            gt_labels[output_key] = task_labels
+        return self.split_metrics(split)(model_outputs, gt_labels)
 
     @classmethod
     def default_metrics(cls):
@@ -199,7 +217,9 @@ class BaseTrainingModule(pl.LightningModule):
 
         raise ValueError(f"No batch predictions for split: {split}")
 
-    def split_metrics(self, split) -> MultitaskWrapper:
+    def split_metrics(
+        self, split: Literal["test", "train", "validation"]
+    ) -> MultitaskWrapper:
         if split == "test":
             return self.test_metrics
         if split == "train":
@@ -314,7 +334,7 @@ class BaseTrainingModule(pl.LightningModule):
             batch["attention_mask"],
             pooling_method=self.trainer_config.pooling_method,
         )
-        predictions_dict["embeddings"] = embeddings.cpu().numpy()
+        predictions_dict["embeddings"] = embeddings.to(torch.float32).cpu().numpy()
         predictions_dict["cell_names"] = batch["cell_names"]
         for loss_task in filter(
             lambda x: isinstance(x, LabelLossTask), self.loss_tasks
@@ -386,9 +406,17 @@ class BaseTrainingModule(pl.LightningModule):
         self, computed_metrics, split, batch_size: int | None = None, suffix=""
     ):
         for label, metric_collection in computed_metrics.items():
-            for metric_name, metric in metric_collection.items():
+            for metric_name, metric_or in metric_collection.items():
                 if "confusion_matrix" in metric_name:
                     continue
+                if (
+                    "auc" in metric_name and metric_or.numel() > 1
+                ):  # # If in case for the multi-label classification with no reduction
+                    metric_or[torch.isnan(metric_or)] = 0.5
+                    metric_or[metric_or == 0] = 0.5
+                    metric = metric_or.mean()
+                else:
+                    metric = metric_or
                 self.log(
                     f"{split}/{label}_{metric_name}{suffix}",
                     metric,
@@ -465,6 +493,16 @@ class BaseTrainingModule(pl.LightningModule):
         if field_name is not None:
             preds_df = self.prediction_df[field_name]
             self.create_and_log_predictions_density_plot(split, preds_df)
+        for label_task in filter(
+            lambda x: isinstance(x, LabelLossTask), self.loss_tasks
+        ):
+            preds_df = self.prediction_df.get(label_task.output_key, None)
+            if preds_df is not None:
+                self.create_and_log_accuracy_by_targets_w_ci(
+                    split,
+                    preds_df,
+                    label_column_name=label_task.output_key,
+                )
 
     def dump_batch_predictions(self, split):
         active_keys = {loss_task.output_key: loss_task for loss_task in self.loss_tasks}
@@ -478,8 +516,28 @@ class BaseTrainingModule(pl.LightningModule):
             ofname = f"{split}_{output_key}_iteration_{self.global_step}.csv"
             preds_df.to_csv(Path(self.logger.log_dir) / ofname)
 
+    def create_and_log_accuracy_by_targets_w_ci(
+        self, split, preds_df, label_column_name
+    ):
+        title = f"Accuracy with binomial CI per {label_column_name}"
+        fig = plots.make_accuracy_by_target_plot(preds_df, label_column_name)
+        cl = clearml.Logger.current_logger()
+        if cl:
+            cl.report_matplotlib_figure(
+                title=f"{title} - {split}",
+                series=split,
+                figure=fig,
+                iteration="",
+            )
+        plt.close(fig)
+
     def create_and_log_predictions_density_plot(self, split, preds_df):
-        fig = plots.make_predictions_gt_density_plot(preds_df)
+        predicted_label = "predicted_expressions"
+        gt_label = "label_expressions"
+        nonzero_preds = preds_df.query(f"{predicted_label} > 0 & {gt_label} > 0")
+        fig = plots.make_predictions_gt_density_plot(
+            nonzero_preds, predicted_label=predicted_label, gt_label=gt_label
+        )
         cl = clearml.Logger.current_logger()
         if cl:
             cl.report_matplotlib_figure(

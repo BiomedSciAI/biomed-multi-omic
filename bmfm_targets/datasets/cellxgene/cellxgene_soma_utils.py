@@ -1,15 +1,18 @@
-from logging import getLogger
+import logging
+import re
 from pathlib import Path
+from typing import Literal
 
 import cellxgene_census as cc
 import cellxgene_census.experimental.ml as census_ml
+import pandas as pd
 import tiledbsoma as soma
 
-from bmfm_targets.datasets.data_conversion.litdata_indexing import build_index
-
-logger = getLogger()
-
+from ..data_conversion.litdata_indexing import build_index
+from ..datasets_utils import equal_samples_per_set_downsample
 from .cellxgene_splits import load_split_dataset_ids
+
+logger = logging.getLogger(__name__)
 
 
 def open_soma(uri, census_version="2023-12-15"):
@@ -23,7 +26,7 @@ def get_obs_as_pandas(
     value_filter: str,
     census_version: str,
     n_records: int | None = None,
-):
+) -> pd.DataFrame:
     census_db = open_soma(uri, census_version)
     experiment = census_db["census_data"][experiment]
 
@@ -108,48 +111,145 @@ def get_label_dicts(
     return label_dict
 
 
-def build_index_from_dataset_id(
+def get_value_filter(criteria: str | None = None):
+    """
+    scTab use the following criteria to filter the human CELLxGENE census data:
+    1. The census data is subset to primary data only (is_primary_data == True) to prevent label leakage between the train, validation, and
+    test set.
+    2. Only sequencing data from 10x-based sequencing protocols is used. In terms of the CELLxGENE census, this means subsetting the
+    assay metadata column to the following terms:
+        10x5' v2,
+        10x3' v3,
+        10x3' v2,
+        10x5' v1,
+        10x3' v1,
+        10x3' transcription profiling,
+        10x5' transcription profiling.
+    3. The annotated cell type has to be a subtype of the native cell label based on the underlying cell type ontology.
+    4. For each cell type, there have to be at least 5000 unique cells. Otherwise, the whole cell type is dropped from the dataset.
+    5. Each cell type has to be observed across at least 30 donors
+    6. Each cell type needs to have at least seven parent nodes in the cell type ontology.
+    """
+    value_filter = "is_primary_data == True"
+
+    if criteria == "scTab":
+        query_str = """is_primary_data == True and
+        assay in ["10x 3' v1",  "10x 3' v2", "10x 3' v3",
+        "10x 3' transcription profiling",
+        "10x 5' transcription profiling",
+        "10x 5' v1",
+        "10x 5' v2"]"""
+
+        value_filter = re.sub(r"\s+", " ", query_str).strip()
+
+    return value_filter
+
+
+def create_litdata_index_for_dataset_split(
     uri: str | Path | None = None,
     index_dir: str | Path = "cellxgene_nexus_index",
     census_version: str = "2023-12-15",
-    experiment: str = "homo_sapiens",
+    experiment: Literal["homo_sapiens", "mus_musculus"] = "homo_sapiens",
     label_columns: list[str] = ["cell_type", "tissue"],
-    label_dict_value_filter: str = "is_primary_data == True",
+    dataset_split_file: str | None = None,
     chunk_size=5000,
+    value_filter: str | None = None,
+    sampling_strategy: Literal["random", "equal_downsample"] | None = None,
+    sampling_fraction: float = 0.1,
+    seed: int = 42,
+    **kwargs,
 ):
     """
-    Building index based on dataset_id splits from celltypes_split.csv.
-    Function creates index in index_dir from the SOMA dataset at uri and save label_dict
-    for columns in label_columns list. label_dict_value_filter is used to filter records
-    when label_dict is built.
+    Create litdata indices from CellxGene Census data using dataset-level split.
 
-    Args:
-    ----
-    uri (str  |  Path, optional): Path to soma database. If `None`, will access the hosted
-                version on AWS, which may be slow but can run from . Defaults to the downloaded copy
-                on CCC at "/dccstor/bmfm-targets/data/omics/transcriptome/scRNA/pretrain/cellxgene/soma-2023-12-15".
+    Processes single-cell RNA data from a SOMA dataset, creating separate indices for
+    train and dev splits. Supports filtering, label extraction, and optional
+    sampling strategies to reduce data volume while preserving representation.
+
+    Parameters
+    ----------
+    uri : Optional[Union[str, Path]]
+        SOMA dataset location. None uses remote AWS version.
+    index_dir : Union[str, Path]
+        Target directory for generated litdata indices.
+    census_version : str
+        CellxGene Census version identifier, defaults to 2023-12-15 which is the version
+        stored on ccc.
+    experiment : str
+        Species experiment: "homo_sapiens" or "mus_musculus".
+    label_columns : List[str]
+        Column names to extract for label dictionaries. Note that if these columns are not
+        packaged inside the index upon creation they will not be available for future training.
+    dataset_split_file : Optional[Union[str, Path]]
+        CSV defining train/dev dataset splits. Defaults to ./celltypes_split.csv.
+    chunk_size : int
+        Number of records to process per batch.
+    value_filter : Optional[str]
+        Additional query expression to filter observations.
+    sampling_strategy : Optional[str]
+        Data sampling method: None (all data), "random" (uniform sampling),
+        "equal_downsample". If "equal_downsample", the kwarg "groupby_columns" can be
+        supplied. This determines which groupby columns are used to set the groups for
+        equal sample downsampling. If it is not supplied, the label_columns arg is used.
+        Option "geometric_sketch" is not yet implemented.
+    sampling_fraction : float
+        Proportion of data to retain when downsampling.
+    seed: int
+        Random seed for reproducibility
+
+    Returns
+    -------
+    None
+        Writes index files to disk in {index_dir}/{split}/ directories.
+
+    Raises
+    ------
+    NotImplementedError
+        When selecting unimplemented sampling strategies.
     """
     index_dir = Path(index_dir)
-    split_file = Path(__file__).parent / "celltypes_split.csv"
+    split_file = (
+        Path(dataset_split_file)
+        if dataset_split_file
+        else Path(__file__).parent / "celltypes_split.csv"
+    )
+
     for split in ["train", "dev"]:
         split_index_dir = str(index_dir / split)
-        split_dataset_ids = load_split_dataset_ids(split_file, split)
-        value_filter = "is_primary_data==True"
-        if split_dataset_ids:
-            value_filter += f" and dataset_id in {split_dataset_ids}"
-            filtered_obs = get_obs_as_pandas(
-                uri, experiment, value_filter, census_version
-            )
-            id_df = filtered_obs["soma_joinid"]
+        dataset_ids = load_split_dataset_ids(split_file, split)
+        if not dataset_ids:
+            continue
+
+        filter_expr = (
+            get_value_filter(value_filter) + f" and dataset_id in {dataset_ids}"
+        )
+        sample_df = get_obs_as_pandas(uri, experiment, filter_expr, census_version)
+        id_df = sample_df["soma_joinid"]
+
+        if sampling_strategy is None:
             index = id_df.values.tolist()
-            label_dict = get_label_dicts(
-                uri,
-                experiment,
-                label_dict_value_filter,
-                census_version,
-                label_columns,
+        elif sampling_strategy == "random":
+            index = id_df.sample(
+                frac=sampling_fraction, random_state=seed
+            ).values.tolist()
+        elif sampling_strategy == "equal_downsample":
+            groupby_columns = kwargs.get("groupby_columns", label_columns)
+            downsampled = equal_samples_per_set_downsample(
+                sample_df, groupby_columns, frac=sampling_fraction, random_state=seed
             )
-            build_index(split_index_dir, index, label_dict, chunk_size=chunk_size)
+            index = downsampled["soma_joinid"].values.tolist()
+
+        elif sampling_strategy in {"geometric_sketch"}:
+            raise NotImplementedError(
+                f"'{sampling_strategy}' sampling is not implemented."
+            )
+        else:
+            raise ValueError(f"Invalid sampling strategy: {sampling_strategy}")
+        label_filter = "is_primary_data == True"
+        label_dict = get_label_dicts(
+            uri, experiment, label_filter, census_version, label_columns
+        )
+        build_index(split_index_dir, index, label_dict, chunk_size=chunk_size)
 
 
 def get_split_value_filter(split, custom_split_file=None):

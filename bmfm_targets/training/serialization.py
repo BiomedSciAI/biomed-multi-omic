@@ -7,7 +7,7 @@ import torch.distributed
 
 
 def prepare_model_dict_from_checkpoint(
-    checkpoint: torch.serialization.FILE_LIKE, base_model_prefix: str | None = None
+    checkpoint, base_model_prefix: str | None = None
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_dict = torch.load(checkpoint, map_location=device, weights_only=False)

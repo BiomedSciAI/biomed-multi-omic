@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.stats as stats
 import torch
 import torch.nn.functional as F
 from clearml.logger import Logger
@@ -178,13 +179,14 @@ def classification_loss(
     problem_type: str | None = None,
     ignore_zero: bool = False,
     label_smoothing: float = 0.0,
+    class_weight: list | None = None,
     focal_gamma: float = None,
 ):
     if labels is None:
         return None
     if problem_type is None:
         problem_type = deduce_problem_type(labels, output_size)
-    if problem_type == "regression":
+    if problem_type == "regression" and loss_name == "mse":
         loss = mse_loss(logits.squeeze(), labels, ignore_zero=ignore_zero)
     elif problem_type == "single_label_classification":
         if loss_name == "focal":
@@ -197,11 +199,18 @@ def classification_loss(
                 labels.view(-1),
                 label_smoothing=label_smoothing,
             )
-    elif problem_type == "multi_label_classification":
-        loss_fct = BCEWithLogitsLoss()
+    elif (
+        problem_type == "multi_label_classification"
+        and loss_name == "BCEWithLogitsLoss"
+    ):
+        if class_weight and len(class_weight) == 1:
+            class_weight = torch.tensor(class_weight * output_size).to(labels.device)
+        loss_fct = BCEWithLogitsLoss(pos_weight=class_weight)
         loss = loss_fct(logits, labels)
     else:
-        raise ValueError(f"Unsupported problem type: {problem_type}")
+        raise ValueError(
+            f"Unsupported problem type: {problem_type} for the loss_name {loss_name}."
+        )
     return loss
 
 
@@ -305,3 +314,65 @@ def get_token_labels(token_values: list[float]):
     )
     labels = [f"token {int(i) if i.is_integer() else i}" for i in labels]
     return indices, labels
+
+
+def calculate_95_ci(data, n, ci_method="bootstrap_quantiles"):
+    """
+    Generates 95% CI for evaluation metrics.
+    Three types are available thorugh the ci_method argument.
+    - bootstrap_quantiles: takes the 2.5% and 97.5% quantiles of the bootstrap sample.
+    - bootstrap_t_interval: based on the bootstrap sample distribution around the sample's mean.
+        If len(data)=1 returns None values for the CI's bounds.
+    - binomial: CI based on the binomial distribution for proportion metrics. Does not require
+        repeated samplings from the data.
+    - wilson: The Wilson score interval, it is assymetric, doesn't overshoot the [0,1] range and
+        does not result with a zero-width length intervals.
+        Does not require repeated samplings from the data.
+
+    Args:
+    ----
+        data (_type_): a list or scalar of evaluation metrics, e.g. accuracy rate.
+        n (int): Can either be number of bootstraps (if sent from a bootstrap run)
+                 or number of observations in the test set (if task.num_bootstrap_runs is None or 0).
+        ci_method (str, optional): _description_. Defaults to "bootstrap_quantiles".
+
+    Raises:
+    ------
+        ValueError: if binomial CI was chosen but input values extending [0,1]
+
+    Returns:
+    -------
+        _type_: mean value, lower and upper CI bounds.
+    """
+    if isinstance(data, int):
+        data = [data]
+    mean = np.mean(data)
+    if ci_method == "bootstrap_quantiles":
+        lower_bound = np.percentile(data, 2.5)
+        upper_bound = np.percentile(data, 97.5)
+    elif ci_method == "bootstrap_t_interval":
+        std_error = np.std(data)
+        ci = stats.t.interval(
+            0.95,
+            n - 1,
+            loc=mean,
+            scale=std_error,
+        )
+        lower_bound = ci[0]
+        upper_bound = ci[1]
+    elif ci_method == "binomial":
+        if np.max(data) > 1 or np.min(data) < 0:
+            raise ValueError("Binomial based CI's are meant to be used for proportions")
+        ci_length = 1.96 * np.sqrt((mean * (1 - mean)) / n)
+        lower_bound = mean - ci_length
+        upper_bound = mean + ci_length
+    elif ci_method == "wilson":
+        z = 1.96
+        denominator = 1 + ((z**2) / n)
+        center = (mean + ((z**2) / (2 * n))) / denominator
+        margin = (
+            z * np.sqrt((mean * (1 - mean) / n) + (z**2)) / (2 * n)
+        ) / denominator
+        lower_bound = max(0, center - margin)
+        upper_bound = min(1, center + margin)
+    return mean, lower_bound, upper_bound

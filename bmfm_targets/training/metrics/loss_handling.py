@@ -39,6 +39,41 @@ class LossTask:
     def output_suffix_for_loss(self) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
+    def extract_metric_inputs(
+        self, logits: dict[str, torch.Tensor], labels: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Extract and format model outputs and labels for metric calculation.
+
+        Processes raw model logits and ground truth labels into the appropriate format
+        for metric evaluation, handling different loss types appropriately.
+
+        Args:
+        ----
+            logits: Dictionary of model logits
+            labels: Dictionary of ground truth labels
+
+        Returns:
+        -------
+            tuple: (model_outputs, gt_labels) where:
+                - model_outputs: Processed model predictions/logits in appropriate format
+                - gt_labels: Processed ground truth labels in appropriate format
+        """
+        these_labels = labels[self.output_key]
+        if self.loss_name in ("mse", "token_mse", "is_zero_bce"):
+            model_outputs = self.get_predictions(logits)
+            label_dtype = model_outputs.dtype
+            gt_labels = these_labels.to(label_dtype).view(model_outputs.shape)
+        # Multi-label binary class...
+        elif self.loss_name == "BCEWithLogitsLoss":
+            model_outputs = torch.sigmoid(self.get_logits(logits))
+            # Don't flatten for multi-label binary classification to preserve class structure
+            gt_labels = these_labels.to(torch.int64)
+        else:  # Multiclass classification
+            model_outputs = self.get_logits(logits)
+            gt_labels = these_labels.to(torch.int64).view(-1)
+        return model_outputs, gt_labels
+
     @property
     def output_key(self) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
@@ -310,6 +345,7 @@ class LabelLossTask(LossTask):
         weight: float = 1.0,
         ignore_zero: bool = False,
         label_smoothing: float = 0.0,
+        class_weight: list | None = None,
         focal_gamma: float = 2.0,
         link_function: Literal["exp"] | None = None,
     ):
@@ -328,6 +364,7 @@ class LabelLossTask(LossTask):
         self.label_column = label_column
         self.ignore_zero = ignore_zero
         self.label_smoothing = label_smoothing
+        self.class_weight = class_weight
         self.focal_gamma = focal_gamma
         self.link_function = link_function
 
@@ -371,7 +408,7 @@ class LabelLossTask(LossTask):
               loss
 
         """
-        if self.loss_name in ("cross_entropy", "focal"):
+        if self.loss_name in ("cross_entropy", "focal", "BCEWithLogitsLoss"):
             return "_classification"
         elif self.loss_name == "mse":
             return "_regression"
@@ -390,6 +427,7 @@ class LabelLossTask(LossTask):
             self.output_size,
             ignore_zero=self.ignore_zero,
             label_smoothing=self.label_smoothing,
+            class_weight=self.class_weight,
             focal_gamma=self.focal_gamma,
         )
 
@@ -406,6 +444,7 @@ class LabelLossTask(LossTask):
             loss_name=loss_name,
             weight=loss_request.get("weight", 1.0),
             ignore_zero=loss_request.get("ignore_zero", False),
+            class_weight=loss_request.get("class_weight", None),
             focal_gamma=loss_request.get("focal_gamma", None),
             link_function=loss_request.get("link_function"),
         )
@@ -610,7 +649,13 @@ def combine_partial_predictions(
         )
     # cross_entropy is the "default" -- if there are others present let's report
     # cross_entropy as the "prediction" even though all are used for the loss
-    for loss_name in ["cross_entropy", "focal", "token_value", "token_mse"]:
+    for loss_name in [
+        "cross_entropy",
+        "focal",
+        "token_value",
+        "token_mse",
+        "BCEWithLogitsLoss",
+    ]:
         if loss_name in partial_predictions.keys():
             return partial_predictions[loss_name]
 

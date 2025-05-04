@@ -6,6 +6,8 @@ This directory contains yamls for datasets that are used for benchmarking, and s
 
 Ensure that you have installed the package before running the commands. It is assumed that the benchmarks will be run on the cluster.
 
+Ensure that the datasets (as described by scEVAL) are downloaded to subfolders of the folder at environment variable `BMFM_TARGETS_SCEVAL_DATA`.
+
 ## Usage
 
 To run the benchmark, use:
@@ -18,9 +20,9 @@ bash bmfm_targets/evaluation/benchmark_configs/benchmark_run.sh
 ## Instructions
 
 When a new checkpoint is obtained, modify the `bmfm_targets/evaluation/benchmark_configs/config.yaml` fields:
-- `checkpoint_path` path to ckpt file eg `/dccstor/bmfm-targets/models/omics/transcriptome/scRNA/pretrain/bmfm.targets.slate.bert.110m.scRNA.RDA.v1/last-v3.ckpt`
+- `checkpoint_path` path to ckpt file
 - `checkpoint_name`: name that will be used on clearml and on the file system for artifacts created, eg `rda_v1`
-- `output_directory`: where all the artifacts will be created. Can be reused for many checkpoints or shared by users. New subdirectories will be created for each new `checkpoint_name` Warning: If running with the same checkpoint name the artifacts will be overwritten. eg `/dccstor/bmfm-targets1/users/dmichael/benchmarking/`
+- `output_directory`: where all the artifacts will be created. Can be reused for many checkpoints or shared by users. New subdirectories will be created for each new `checkpoint_name` Warning: If running with the same checkpoint name the artifacts will be overwritten.
 
 In `benchmark_run.sh` choose a way to launch your job by modifying the `PREFIX_CMD` amd `SUFFIX_CMD` commands. When you are ready simply run `bash benchmark_run.sh` and the benchmarking tasks will be launched.
 

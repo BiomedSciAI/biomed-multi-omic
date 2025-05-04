@@ -81,11 +81,14 @@ def get_metric_object(mt: dict, num_classes: int) -> torchmetrics.Metric:
 
 
 def _get_categorical_metric(mt: dict, num_classes: int) -> torchmetrics.Metric:
-    kwargs = {"num_classes": num_classes}
+    kwargs = {"num_classes": num_classes}  # default task is multiclass...
     kwargs.update(
         SPECIAL_DEFAULT_CATEGORICAL_KWARGS.get(mt["name"], DEFAULT_CATEGORICAL_KWARGS)
     )
     kwargs.update({k: v for k, v in mt.items() if k != "name"})
+    if "task" in kwargs and kwargs["task"] == "multilabel":
+        kwargs["num_labels"] = num_classes
+        del kwargs["num_classes"]
     return KNOWN_CATEGORICAL_METRICS[mt["name"]](**kwargs)
 
 

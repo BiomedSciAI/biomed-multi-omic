@@ -1,4 +1,4 @@
 defaults:
  - sceval_default
 
-data_dir: /dccstor/bmfm-targets/data/omics/transcriptome/scRNA/finetune/batch_effect/dc/
+data_dir: ${oc.env:BMFM_TARGETS_SCEVAL_DATA}/dc/

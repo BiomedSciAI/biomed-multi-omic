@@ -30,9 +30,9 @@ def convert_files(file_path, tokenizer, serializer, data_source="dnaseq_base"):
         str: Tokenized DNA sequence.
     """
     if data_source == "hic":
-        data = Parquet2LitDataset_HiC(file_path, tokenizer, serializer)
+        data = Parquet2LitDatasetHiC(file_path, tokenizer, serializer)
     elif data_source == "chromatin":
-        data = Parquet2LitDataset_ChromatinProfile(file_path, tokenizer, serializer)
+        data = Parquet2LitDatasetChromatinProfile(file_path, tokenizer, serializer)
     elif data_source == "dnaseq_base":
         data = Parquet2LitDataset(file_path, tokenizer, serializer)
     else:
@@ -116,7 +116,7 @@ class Parquet2LitDataset:
         self.data
 
 
-class Parquet2LitDataset_HiC(Parquet2LitDataset):
+class Parquet2LitDatasetHiC(Parquet2LitDataset):
     """Dataset class to read a parquet file and yield a pair of tokenized DNA sequences with HiC contact score."""
 
     def __iter__(self):
@@ -137,15 +137,15 @@ class Parquet2LitDataset_HiC(Parquet2LitDataset):
                 )
 
 
-class Parquet2LitDataset_ChromatinProfile(Parquet2LitDataset):
+class Parquet2LitDatasetChromatinProfile(Parquet2LitDataset):
     """Dataset class to read a parquet file and yield a pair of tokenized DNA sequences with 919 class labels coming from three groups: dnase, tf and histone."""
 
-    header = (
-        ["dna_chunks"]
-        + ["dnase_" + str(i) for i in range(125)]
-        + ["tf_" + str(i) for i in range(125, 815)]
-        + ["histone_" + str(i) for i in range(815, 919)]
-    )
+    header = [
+        "dna_chunks",
+        "combined_chromatin_dnase",
+        "combined_chromatin_tf",
+        "combined_chromatin_histone",
+    ]
 
     def __iter__(self):
         for batch in self.data.iter_batches(
@@ -155,7 +155,7 @@ class Parquet2LitDataset_ChromatinProfile(Parquet2LitDataset):
         ):
             df_dna_chromatin = batch.to_pandas()
             df_dna_chromatin = df_dna_chromatin.astype(str)
-            assert df_dna_chromatin.dtypes[125] == "O"
+            assert df_dna_chromatin.shape[1] == 4
             for i in range(len(df_dna_chromatin)):
                 dna_chunk = df_dna_chromatin.iloc[i, 0]
                 tokens = self.tokenizer.tokenize(dna_chunk)

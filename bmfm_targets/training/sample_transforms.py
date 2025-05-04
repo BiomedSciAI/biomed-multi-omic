@@ -141,10 +141,13 @@ def rda_downsample(
             additional field "label_expressions" and additional tokens "S" and "T"
 
     """
+    genes = mfi["genes"]
+    expressions = mfi["expressions"]
+
     if max_length is not None:
-        for key, val in mfi.data.items():
-            mfi.data[key] = val[: max_length - 2]
-    raw_expressions = np.array([float(value) for value in mfi.data["expressions"]])
+        genes = genes[: max_length - 2]
+        expressions = expressions[: max_length - 2]
+    raw_expressions = np.array([float(value) for value in expressions])
     raw_expressions_sum = sum(raw_expressions)
     gamma = (
         0 if raw_expressions_sum < downsample_threshold else np.random.binomial(1, 0.5)
@@ -163,7 +166,7 @@ def rda_downsample(
     input_expressions = np.log1p(
         (input_expressions / input_expressions_sum) * normalized_sum
     )
-    genes = ["[S]", "[T]"] + mfi.data["genes"]
+    genes = ["[S]", "[T]"] + genes
     ST_list = [np.log1p(input_expressions_sum), np.log1p(raw_expressions_sum)]
     input_expressions = ST_list + input_expressions.tolist()
     raw_expressions = ST_list + raw_expressions.tolist()
@@ -324,17 +327,20 @@ def rda_align(
         MultiFieldInstance: _description_
 
     """
-    if max_length is not None:
-        for key, val in mfi.data.items():
-            mfi.data[key] = val[: max_length - 2]
+    genes = mfi["genes"]
+    expressions = mfi["expressions"]
 
-    raw_expressions = np.array([float(value) for value in mfi.data["expressions"]])
+    if max_length is not None:
+        genes = genes[: max_length - 2]
+        expressions = expressions[: max_length - 2]
+
+    raw_expressions = np.array([float(value) for value in expressions])
     raw_expressions_sum = sum(raw_expressions)
     normed_expressions = np.log1p(
         (raw_expressions / raw_expressions_sum) * normalized_sum
     )
 
-    genes = ["[S]", "[T]"] + mfi.data["genes"]
+    genes = ["[S]", "[T]"] + genes
     ST_list = [np.log1p(raw_expressions_sum), np.log1p(target_read_resolution)]
     rda_aligned_expressions = ST_list + normed_expressions.tolist()
 
@@ -355,53 +361,148 @@ def rda_align(
 
 def pad_zero_expressed_genes(
     mfi: MultiFieldInstance,
-    pad_zero_expression_strategy: str,
+    pad_zero_expression_strategy: dict,
     max_length: int,
     *args,
     **kwargs,
 ):
-    if pad_zero_expression_strategy == "batch_wise":
-        assert kwargs["expressed_genes_in_batch"] is not None
-        updated_data = {}
-        expressed_indices = []
-        batch_expressed_indices = []
-        non_expressed_indices = []
-        for i, (gene, expression) in enumerate(
-            zip(mfi.data["genes"], mfi.data["expressions"])
-        ):
-            if expression > 0.0:
-                expressed_indices.append(i)
-            elif gene in kwargs["expressed_genes_in_batch"]:
-                batch_expressed_indices.append(i)
-            else:
-                non_expressed_indices.append(i)
-        ordered_indices = (
-            expressed_indices + batch_expressed_indices + non_expressed_indices
+    """
+    Reorders and truncates genes based on their expression levels according to the specified padding strategy.
+
+    Parameters
+    ----------
+        mfi (MultiFieldInstance): The input instance containing gene data.
+        pad_zero_expression_strategy (dict): The strategy for handling zero-expression genes.
+            required key "strategy" can have values:
+            - 'batch_wise': Prioritizes genes expressed in the batch.
+            - 'random': Randomly selects zero-expression genes if needed.
+            optional keys:
+            - interleave_zero_ratio (float): Interleave a fixed ratio of zeros
+              (0 means first include all nonzero values, 1 means put all zeros first)
+        max_length (int): Maximum number of genes to retain.
+        *args: Unused positional arguments.
+        **kwargs: Additional keyword arguments.
+            - expressed_genes_in_batch (set): Required for 'batch_wise' strategy.
+
+
+    Returns
+    -------
+        MultiFieldInstance: A new instance with reordered and truncated gene data.
+
+    """
+    final_kwargs = {
+        **kwargs,
+        **{k: v for k, v in pad_zero_expression_strategy.items() if k != "strategy"},
+    }
+    if pad_zero_expression_strategy["strategy"] == "batch_wise":
+        return _batchwise_pad_zero_expressed_genes(mfi, max_length, **final_kwargs)
+
+    elif pad_zero_expression_strategy["strategy"] == "random":
+        return _random_pad_zero_expressed_genes(mfi, max_length, **final_kwargs)
+    raise ValueError(
+        f"Unrecognized zero padding strategy = {pad_zero_expression_strategy}"
+    )
+
+
+def _random_pad_zero_expressed_genes(mfi: MultiFieldInstance, max_length: int):
+    data_to_keep, zero_indices, keep_indices = {}, [], []
+
+    for i, expression in enumerate(mfi.data["expressions"]):
+        (keep_indices if expression > 0.0 else zero_indices).append(i)
+
+    if len(keep_indices) < max_length:
+        needed = max_length - len(keep_indices)
+        keep_indices.extend(random.sample(zero_indices, min(len(zero_indices), needed)))
+
+    data_to_keep = {
+        field: list(itemgetter(*keep_indices)(values))
+        for field, values in mfi.data.items()
+    }
+    return MultiFieldInstance(data=data_to_keep, metadata=mfi.metadata)
+
+
+def _batchwise_pad_zero_expressed_genes(
+    mfi: MultiFieldInstance,
+    max_length: int,
+    expressed_genes_in_batch: set,
+    interleave_zero_ratio: float | None = None,
+):
+    sample_nz, batch_nz, non_expressed_indices = [], [], []
+
+    for i, (gene, expression) in enumerate(
+        zip(mfi.data["genes"], mfi.data["expressions"])
+    ):
+        if expression > 0.0:
+            sample_nz.append(i)
+        elif gene in expressed_genes_in_batch:
+            batch_nz.append(i)
+        else:
+            non_expressed_indices.append(i)
+
+    if interleave_zero_ratio is not None:
+        combined_expressed = _interleave_with_ratio(
+            sample_nz, batch_nz, interleave_zero_ratio
         )
-        for field, values in mfi.data.items():
-            updated_data[field] = list(
-                itemgetter(*ordered_indices)(values)[:max_length]
-            )
-        updated_mfi = MultiFieldInstance(data=updated_data, metadata=mfi.metadata)
+    else:
+        combined_expressed = sample_nz + batch_nz
 
-    elif pad_zero_expression_strategy == "random":
-        data_to_keep = {}
-        zero_indices = []
-        keep_indices = []
-        for i, expression in enumerate(mfi.data["expressions"]):
-            if expression == 0.0:
-                zero_indices.append(i)
-            else:
-                keep_indices.append(i)
-        if len(keep_indices) < max_length:
-            keep_indices.extend(
-                random.sample(zero_indices, max_length - len(keep_indices))
-            )
-        for field, values in mfi.data.items():
-            data_to_keep[field] = list(itemgetter(*keep_indices)(values))
-        updated_mfi = MultiFieldInstance(data=data_to_keep, metadata=mfi.metadata)
+    ordered_indices = (combined_expressed + non_expressed_indices)[:max_length]
+    updated_data = {
+        field: list(itemgetter(*ordered_indices)(values))
+        for field, values in mfi.data.items()
+    }
+    return MultiFieldInstance(data=updated_data, metadata=mfi.metadata)
 
-    return updated_mfi
+
+def _interleave_with_ratio(a: list, b: list, p: float) -> list:
+    """
+    Interleave elements from two lists according to a specified ratio.
+
+    Parameters
+    ----------
+    a : list
+        First input list.
+    b : list
+        Second input list.
+    p : float
+        Ratio parameter between 0 and 1, representing the proportion of elements
+        to take from list 'a' in each interleaving cycle.
+
+    Returns
+    -------
+    list
+        A new list containing interleaved elements from 'a' and 'b' according to
+        the ratio 'p', followed by any remaining elements from both lists.
+
+    Raises
+    ------
+    ValueError
+        If 'p' is not in the range [0, 1].
+
+    """
+    if not (0 <= p <= 1):
+        raise ValueError(f"p must be in [0,1], got {p}")
+
+    if p == 0:
+        return b + a
+    if p == 1:
+        return a + b
+    if not a or not b:
+        return a + b
+
+    k = max(1, round(1 / p)) if p > 0 else 1
+    a_step = max(1, round(p * k))
+    b_step = k - a_step
+    min_len = min(len(a) // a_step, len(b) // b_step)
+
+    if min_len == 0:
+        return a + b
+
+    sample_part = np.array(a[: min_len * a_step]).reshape(min_len, a_step)
+    batch_part = np.array(b[: min_len * b_step]).reshape(min_len, b_step)
+    interleaved = np.hstack([sample_part, batch_part]).flatten().tolist()
+
+    return interleaved + a[min_len * a_step :] + b[min_len * b_step :]
 
 
 def downcast_numeric_fields(

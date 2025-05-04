@@ -48,7 +48,7 @@ def get_training_module_class_for_data_module(data_module: DataModule):
     ):
         ## TODO here we need to return another training module; will modify in the next PR
         return MLMTrainingModule
-    elif data_module.collation_strategy == "sequence_classification":
+    elif data_module.collation_strategy in ["sequence_classification", "multilabel"]:
         return SequenceClassificationTrainingModule
     elif data_module.collation_strategy == "sequence_labeling":
         return SequenceLabelingTrainingModule

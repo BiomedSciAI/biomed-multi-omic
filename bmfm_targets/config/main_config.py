@@ -14,6 +14,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from bmfm_targets.config import (
     FieldInfo,
     LabelColumnInfo,
+    TestTaskConfig,
     TokenizerConfig,
     TrainerConfig,
     TrainingTaskConfig,
@@ -131,7 +132,7 @@ class SCBertMainConfig:
         ckpt_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
         if self.fields is None:
             self.fields = ckpt_dict["hyper_parameters"]["model_config"].fields
-        if self.label_columns is None:
+        if isinstance(self.task, TestTaskConfig) and self.label_columns is None:
             self.label_columns = getattr(
                 ckpt_dict["hyper_parameters"]["model_config"], "label_columns", None
             )

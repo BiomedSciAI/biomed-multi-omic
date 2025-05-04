@@ -15,5 +15,5 @@ for DATASET in "${datasets[@]}"; do
 done
 
 for DATASET in "${datasets[@]}"; do
-    $PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET data_module.collation_strategy=language_modeling task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+    $PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET data_module.collation_strategy=multitask task=predict ~model  trainer={} ~fields ~tokenizer track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
 done

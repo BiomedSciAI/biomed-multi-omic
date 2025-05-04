@@ -1,0 +1,15 @@
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: "genes"
+  pretrained_embedding: null
+  is_masked: false
+  vocab_update_strategy: "static"
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: "expressions"
+  is_masked: false
+  tokenization_strategy: continuous_value_encoder
+  continuous_value_encoder_kwargs:
+    kind: "mlp_with_special_token_embedding"
+    zero_as_special_token: true
+  decode_modes:
+    - "regression"
+    - "is_zero"

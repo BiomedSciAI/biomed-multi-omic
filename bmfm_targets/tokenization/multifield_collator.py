@@ -47,6 +47,7 @@ class MultiFieldCollator:
             "sequence_classification",
             "language_modeling",
             "multitask",
+            "multilabel",
         ] = "language_modeling",
         label_dict: dict[str, dict[str, int]] | None = None,
         max_length: int | None = None,
@@ -54,7 +55,7 @@ class MultiFieldCollator:
         return_attention_mask: bool = True,
         return_special_tokens_mask: bool = True,
         padding: PaddingStrategy | bool = True,
-        pad_zero_expression_strategy: str | None = None,
+        pad_zero_expression_strategy: dict | None = None,
         truncation: TruncationStrategy | bool = True,
         mlm: bool = True,
         masker: Masker | None = None,
@@ -62,6 +63,7 @@ class MultiFieldCollator:
         sequence_dropout_factor: float | int | None = None,
         log_normalize_transform: bool = False,
         rda_transform: Literal["downsample"] | Literal["equal"] | int | None = None,
+        multilabel_str_sep: str = "|",
         map_orthologs: str | None = None,
     ):
         """
@@ -79,7 +81,7 @@ class MultiFieldCollator:
             return_special_tokens_mask (bool, optional): Whether to return special tokens mask. Defaults to True.
             padding (PaddingStrategy, optional): Padding strategy. Defaults to PaddingStrategy.LONGEST. Available options are PaddingStrategy.LONGEST, PaddingStrategy.MAX_LENGTH, PaddingStrategy.DO_NOT_PAD.
             truncation (TruncationStrategy, optional): Truncation strategy. Defaults to TruncationStrategy.ONLY_FIRST. Available options are TruncationStrategy.ONLY_FIRST, TruncationStrategy.ONLY_SECOND, True, TruncationStrategy.LONGEST_SECOND, TruncationStrategy.DO_NOT_TRUNCATE.
-
+            multilabel_str_sep (str="|"): The string separating lables of a multilabel class label.
 
         Raises:
         ------
@@ -119,6 +121,7 @@ class MultiFieldCollator:
         self.log_normalize_transform = log_normalize_transform
         self.collation_strategy = collation_strategy
         self.label_dict = label_dict
+        self.multilabel_str_sep = multilabel_str_sep
         self.map_orthologs = map_orthologs
         self.__post__init__()
 
@@ -287,7 +290,10 @@ class MultiFieldCollator:
             )
         if len(transforms) > 0:
             expressed_genes_in_batch = set()
-            if self.pad_zero_expression_strategy == "batch_wise":
+            if (
+                self.pad_zero_expression_strategy is not None
+                and self.pad_zero_expression_strategy["strategy"] == "batch_wise"
+            ):
                 expressed_genes_in_batch = {
                     gene
                     for mfi in examples
@@ -297,9 +303,7 @@ class MultiFieldCollator:
                     if expression != 0.0
                 }
             combined_func = reduce(
-                lambda f, g: lambda x, *args, **kwargs: g(
-                    f(x, *args, **kwargs), *args, **kwargs
-                ),
+                lambda f, g: lambda x, *a, **k: g(f(x, *a, **k), *a, **k),
                 transforms,
             )
             return [
@@ -335,10 +339,24 @@ class MultiFieldCollator:
             if len(single_label_dict) <= 1:
                 return mfi.metadata[label]
             label_val = str(mfi.metadata[label])
-            # nan is mapped to standard `ignore_index` of -100
-            if label_val == "nan":
-                return -100
-            return single_label_dict[label_val]
+            if self.collation_strategy == "multilabel":
+                # label_val is pipe delimeted...
+                multilabels = []
+                for label in label_val.split(self.multilabel_str_sep):
+                    if label in single_label_dict.keys():
+                        multilabels.append(single_label_dict[label])
+                multilabels = set(multilabels)
+                # Now convert the multilabels to one-hot-coding....
+                one_hot_coding = [
+                    1.0 if i in multilabels else 0.0
+                    for i in range(len(single_label_dict))
+                ]
+                return one_hot_coding
+            else:
+                # nan is mapped to standard `ignore_index` of -100
+                if label_val == "nan":
+                    return -100
+                return single_label_dict[label_val]
 
         for label in self.label_columns:
             label_column_name = label.label_column_name
@@ -385,7 +403,8 @@ class MultiFieldCollator:
             batch["cell_names"] = [mfi.metadata.get("cell_name") for mfi in examples]
         # TODO: Here we assume that the first multi-field instance of the pair is the one that contains the labels
         if (
-            self.collation_strategy in ["multitask", "sequence_classification"]
+            self.collation_strategy
+            in ["multitask", "sequence_classification", "multilabel"]
             and self.label_dict is not None
             and self.label_columns is not None
             and len(self.label_columns) > 0
@@ -461,7 +480,7 @@ class MultiFieldCollator:
             else:
                 return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
 
-        elif self.collation_strategy == "sequence_classification":
+        elif self.collation_strategy in ["sequence_classification", "multilabel"]:
             return_dict = {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
@@ -481,6 +500,7 @@ class MultiFieldCollator:
                 "attention_mask": attention_mask,
                 "labels": field_label_ids,
             }
+
         if "cell_names" in batch:
             return_dict["cell_names"] = batch["cell_names"]
         return return_dict

@@ -6,6 +6,7 @@ networks.
 from .cellxgene_dataset import CellXGeneDataset, CellXGeneDataModule
 from .cellxgene_soma_dataset import CellXGeneSOMADataset, CellXGeneSOMADataModule
 from .cellxgene_nexus_dataset import CellXGeneNexusDataset, CellXGeneNexusDataModule
+from .cellxgene_soma_utils import create_litdata_index_for_dataset_split
 
 __all__ = [
     "CellXGeneDataset",
@@ -14,4 +15,5 @@ __all__ = [
     "CellXGeneSOMADataModule",
     "CellXGeneNexusDataset",
     "CellXGeneNexusDataModule",
+    "create_litdata_index_for_dataset_split",
 ]

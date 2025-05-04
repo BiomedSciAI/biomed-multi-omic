@@ -23,15 +23,13 @@ def write_parquet(data: list[str], output_file: str) -> None:
         data (list[str]): List of lines.
         output_file (str): Path to the output file.
     """
-    header = (
-        ["dna_chunks"]
-        + ["dnase_" + str(i) for i in range(125)]
-        + ["tf_" + str(i) for i in range(125, 815)]
-        + ["histone_" + str(i) for i in range(815, 919)]
-    )
-    print(header)
+    header = [
+        "dna_chunks",
+        "combined_chromatin_dnase",
+        "combined_chromatin_tf",
+        "combined_chromatin_histone",
+    ]
     data_frame = pd.DataFrame(data, columns=header)
-    # ["dna_sequence"] + ['label_' + str(x) for x in range(1,len(data[0]))])
     table = pa.Table.from_pandas(data_frame)
     pq.write_table(table, output_file)
 
