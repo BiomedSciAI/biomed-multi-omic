@@ -1,5 +1,5 @@
-# Script for running bmfm-targets-scbert
+# Script for running bmfm-targets-run
 
 ```bash
-bmfm-targets-scbert -cn prediction_train_and_test -cd run
+bmfm-targets-run -cn prediction_train_and_test -cd run
 ```

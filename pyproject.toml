@@ -61,7 +61,7 @@ benchmarking = [
 repository = "https://github.com/BiomedSciAI/biomed-multi-omic/"
 
 [project.scripts]
-bmfm-targets-scbert = "bmfm_targets.tasks.scbert.scbert_main:main"
+bmfm-targets-run = "bmfm_targets.tasks.scbert.scbert_main:main"
 
 [tool.setuptools.packages]
 find = {}

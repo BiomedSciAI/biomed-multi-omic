@@ -28,7 +28,7 @@ In `benchmark_run.sh` choose a way to launch your job by modifying the `PREFIX_C
 
 ### Key Configuration Details
 
-- The benchmarks run sequence classification (train and test) and embedding generation, using the main entry point for the scRNA foundation model, `bmfm-targets-scbert`.
+- The benchmarks run sequence classification (train and test) and embedding generation, using the main entry point for the scRNA foundation model, `bmfm-targets-run`.
 - For the predict task, we are assuming the model was trained with MLM and therefore require `data_module.collation_strategy=language_modeling`. We also remove the model settings `~model` so that everything is loaded from the ckpt.
 - Tasks will be created in ClearML `bmfm-targets/evaluation/{checkpoint_name}/${DATASET}ft` and ` bmfm-targets/evaluation/{checkpoint_name}/${DATASET}zero_shot`
 - If a job fails, users should check the ClearML dashboard for logs and debugging information.

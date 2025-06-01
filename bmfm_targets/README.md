@@ -12,14 +12,14 @@ Please report bugs, issues and feature extensions there.
 After installing the package, open the mlm_train_config.yaml file in the run directory, edit the paths to the data to direct to your data and run
 
 ```bash
-bmfm-targets-scbert -cn mlm_train_config -cd run
+bmfm-targets-run -cn mlm_train_config -cd run
 ```
 
 For finetuning you will probably want to select a checkpoint and provide it to the `model.checkpoint` field of the
 config and then set `mlm` to false in the data module. These parameters could be set in the command line in teh following manner:
 
 ```bash
-bmfm-targets-scbert -cn prediction_train_config data_module.mlm=false -cd run
+bmfm-targets-run -cn prediction_train_config data_module.mlm=false -cd run
 ```
 
 ## Configuration
