@@ -301,7 +301,7 @@ def create_reverse_complement_snp_probability_matrix(
     target_chr="chr22",
 ):
     """
-    Load a snp probability matrix (sparse csr format) and mirror it to the reverse complement version.
+    Load a snp probability matrix (sparse csr format) and mirror it to the reverse complement version. Note that the matrix/order is reversed - position N, N-1, N-2, ... So the 1st row of the matrix corresponds to the last nucleotide position of a chromosome. When this matrix is used with e.g. TAD-aware sample, the TAD regions should also be reversed.
 
     Args:
     ----
@@ -472,6 +472,8 @@ def cut_sequences_into_chunks_and_write(
     segment_len_max_before_multiplier=10,
     augmentation_reverse_complement=False,
     number_of_sampling=1,
+    save_chunk_index=False,
+    target_chr="chr22",
     seed=42,
 ):
     """
@@ -486,6 +488,8 @@ def cut_sequences_into_chunks_and_write(
         segment_len_max_before_multiplier (int): maximum length before multiplier
         augmentation_reverse_complement (bool): if reverse compliment is applied to generate chunks
         number_of_sampling (int): how many times the sequences are sampled (e.g. if we want to sample a chromosome tem times, then set it to 10)
+        save_chunk_index (bool): if the chunk index is saved (e.g. with fixed length of 1kb chunks, the indices would be 0, 1, 2, ... correspoinding to 0-1kb, 1kb-2kb, 2kb-3kb, ... chunks)
+        #TODO save_chunk_index only supports fixed length chunks
         seed (int): random seed for numpy sampling
 
     Returns:
@@ -512,12 +516,27 @@ def cut_sequences_into_chunks_and_write(
                     )
                     for i in range(num_segments):
                         chunk = seq[(i * segment_len) : ((i + 1) * segment_len)]
-                        f.write(chunk + "\n")
+                        if set(chunk) == {"N"}:
+                            continue
+                        if save_chunk_index:
+                            f.write(chunk + "," + target_chr + "_" + str(i) + "\n")
+                        else:
+                            f.write(chunk + "\n")
                         if augmentation_reverse_complement:
                             chunk_reverse_complement = "".join(
                                 [dna_to_complement[x] for x in chunk][::-1]
                             )
-                            f.write(chunk_reverse_complement + "\n")
+                            if save_chunk_index:
+                                f.write(
+                                    chunk_reverse_complement
+                                    + ",rc"
+                                    + target_chr
+                                    + "_"
+                                    + str(i)
+                                    + "\n"
+                                )
+                            else:
+                                f.write(chunk_reverse_complement + "\n")
                 # 2. segments with random lengths
                 elif (
                     segment_len_min_before_multiplier
@@ -536,14 +555,16 @@ def cut_sequences_into_chunks_and_write(
                             * segment_multiplier
                         )
                         chunk = seq[left:right]
+                        # update left
+                        left = right
+                        if set(chunk) == {"N"}:
+                            continue
                         f.write(chunk + "\n")
                         if augmentation_reverse_complement:
                             chunk_reverse_complement = "".join(
                                 [dna_to_complement[x] for x in chunk][::-1]
                             )
                             f.write(chunk_reverse_complement + "\n")
-                        # update left
-                        left = right
                 else:
                     raise ValueError(
                         "The minimum length should not be larger than the maximum length"
@@ -638,7 +659,7 @@ def main(args):
             snp_probability_matrix,
             replacement=False,
         )
-        if tad_path:
+        if (tad_path != None) and args.remove_N_island:
             tad_sub_seqs = cut_sequence_by_tad(encoded_seq, chromosome, tad_path)
             # remove N-islands and flatten the nested list
             encoded_sub_seqs = [
@@ -646,10 +667,12 @@ def main(args):
                 for xx in tad_sub_seqs
                 for x in remove_N_island(xx, cutoff_N_length=1000, flank_length=100)
             ]
-        else:
+        elif args.remove_N_island:
             encoded_sub_seqs = remove_N_island(
                 encoded_seq, cutoff_N_length=1000, flank_length=100
             )
+        else:
+            encoded_sub_seqs = [encoded_seq]
         # encoded genome
         os.makedirs(args.output_variation_biallele_path, exist_ok=True)
         cut_sequences_into_chunks_and_write(
@@ -661,11 +684,13 @@ def main(args):
             segment_len_min_before_multiplier=args.segment_len_min_before_multiplier,
             segment_len_max_before_multiplier=args.segment_len_max_before_multiplier,
             number_of_sampling=args.number_of_sampling,
+            save_chunk_index=args.save_chunk_index,
+            target_chr=chromosome,
         )
     if args.process_ref_genome:
         os.makedirs(args.output_reference_genome_path, exist_ok=True)
         chr_to_seq, _ = extract_chr_seq_and_len(fasta_path, ">")
-        if tad_path:
+        if (tad_path != None) and args.remove_N_island:
             tad_sub_seqs = cut_sequence_by_tad(
                 chr_to_seq[chromosome], chromosome, tad_path
             )
@@ -674,10 +699,12 @@ def main(args):
                 for xx in tad_sub_seqs
                 for x in remove_N_island(xx, cutoff_N_length=1000, flank_length=100)
             ]
-        else:
+        elif args.remove_N_island:
             ref_sub_seqs = remove_N_island(
                 chr_to_seq[chromosome], cutoff_N_length=1000, flank_length=100
             )
+        else:
+            ref_sub_seqs = [chr_to_seq[chromosome]]
         cut_sequences_into_chunks_and_write(
             ref_sub_seqs,
             output_path=os.path.join(
@@ -688,6 +715,8 @@ def main(args):
             segment_len_max_before_multiplier=args.segment_len_max_before_multiplier,
             augmentation_reverse_complement=args.augmentation_reverse_complement,
             number_of_sampling=args.number_of_sampling,
+            save_chunk_index=args.save_chunk_index,
+            target_chr=chromosome,
         )
 
 
@@ -746,6 +775,20 @@ def get_args():
     parser.add_argument(
         "--process_ref_genome",
         help="create samples for the reference genome",
+        action=argparse.BooleanOptionalAction,
+        required=False,
+        default=False,
+    )
+    parser.add_argument(
+        "--remove_N_island",
+        help="remove N islands (otherwise only remove all-N chunks)",
+        action=argparse.BooleanOptionalAction,
+        required=False,
+        default=True,
+    )
+    parser.add_argument(
+        "--save_chunk_index",
+        help="save chunk index for e.g. determining if a token has SNPs",
         action=argparse.BooleanOptionalAction,
         required=False,
         default=False,

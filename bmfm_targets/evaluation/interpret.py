@@ -284,7 +284,6 @@ def get_single_label_attributions_for_sample(
         output = model(
             input_ids=inputs,
             attention_mask=attention_mask,
-            return_dict=True,
         )
         if isinstance(output.logits, dict):
             return output.logits[label_column_name]

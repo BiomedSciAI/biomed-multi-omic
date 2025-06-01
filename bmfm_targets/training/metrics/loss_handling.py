@@ -41,7 +41,7 @@ class LossTask:
 
     def extract_metric_inputs(
         self, logits: dict[str, torch.Tensor], labels: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[str, torch.Tensor, torch.Tensor]:
         """
         Extract and format model outputs and labels for metric calculation.
 
@@ -72,10 +72,14 @@ class LossTask:
         else:  # Multiclass classification
             model_outputs = self.get_logits(logits)
             gt_labels = these_labels.to(torch.int64).view(-1)
-        return model_outputs, gt_labels
+        return self.metric_key, model_outputs, gt_labels
 
     @property
     def output_key(self) -> str:
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @property
+    def metric_key(self) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
     @property
@@ -93,7 +97,9 @@ class FieldLossTask(LossTask):
         focal_gamma: float = 0.0,
         ignore_zero: bool = False,
         link_function: str | None = None,
+        decoder_key: str | None = None,
         token_values: list[float] | None = None,
+        loss_group: str | None = None,
     ):
         """
         Initialize a FieldLossTask.
@@ -119,14 +125,27 @@ class FieldLossTask(LossTask):
         self.ignore_zero = ignore_zero
         self.link_function = link_function
         self.token_values = token_values
+        self.decoder_key = decoder_key
+        self.loss_group = loss_group
 
     @property
     def output_key(self):
         return self.field.field_name
 
     @property
+    def metric_key(self):
+        if self.loss_group:
+            return self.field.field_name + "_" + self.loss_group
+        else:
+            return self.field.field_name
+
+    @property
     def logit_key(self):
-        return self.field.field_name + self.output_suffix_for_loss()
+        return (
+            self.decoder_key
+            if self.decoder_key is not None
+            else self.field.field_name + self.output_suffix_for_loss()
+        )
 
     @classmethod
     def from_loss_request(
@@ -149,10 +168,12 @@ class FieldLossTask(LossTask):
             field=field,
             loss_name=loss_request.get("name", "cross_entropy"),
             weight=loss_request.get("weight", 1.0),
+            decoder_key=loss_request.get("decoder_key", None),
             label_smoothing=loss_request.get("label_smoothing", 0.01),
             focal_gamma=loss_request.get("focal_gamma", 2.0),
             ignore_zero=loss_request.get("ignore_zero", False),
             link_function=loss_request.get("link_function"),
+            loss_group=loss_request.get("loss_group", None),
             token_values=token_values,
         )
 
@@ -194,48 +215,46 @@ class FieldLossTask(LossTask):
         )
 
     def get_predictions(self, logits: dict[str, torch.Tensor]):
-        field_name = self.field.field_name
-
         if self.loss_name in ["cross_entropy", "focal", "token_value"]:
-            predictions = torch.argmax(
-                logits[self.field.field_name + "_token_scores"], dim=-1
-            )
+            predictions = torch.argmax(logits[self.logit_key], dim=-1)
 
         elif self.loss_name in ["token_mse"]:
-            predictions = torch.round(logits[field_name + "_regression"])
+            predictions = torch.round(logits[self.logit_key])
             predictions = torch.clip(predictions, 0, self.field.vocab_size - 1)
 
         elif self.loss_name in ["mse"]:
-            predictions = logits[field_name + "_regression"]
+            predictions = logits[self.logit_key]
             if self.link_function == "exp":
                 predictions = torch.exp(predictions)
+
         elif self.loss_name in ["is_zero_bce"]:
             # prediction for is_zero is True (aka 1) if the value is 0 and False (aka 0)
             #  if it is non-zero
-            predictions = torch.where(logits[field_name + "_is_zero"] > 0.5, 1, 0)
+            predictions = torch.where(logits[self.logit_key] > 0.5, 1, 0)
+
         else:
             raise ValueError("Requested predictions for field without a valid loss.")
 
         return predictions.view(predictions.shape[0], -1)
 
     def get_logits(self, logits: dict[str, torch.Tensor]):
-        field_name = self.field.field_name
-
         if self.loss_name in ["cross_entropy", "focal", "token_value"]:
-            logit_requested = logits[self.field.field_name + "_token_scores"]
+            logit_requested = logits[self.logit_key]
 
         elif self.loss_name in ["token_mse"]:
-            logit_requested = torch.round(logits[field_name + "_regression"])
+            logit_requested = torch.round(logits[self.logit_key])
             logit_requested = torch.clip(logit_requested, 0, self.field.vocab_size - 1)
 
         elif self.loss_name in ["mse"]:
-            logit_requested = logits[field_name + "_regression"]
+            logit_requested = logits[self.logit_key]
             if self.link_function == "exp":
                 logit_requested = torch.exp(logit_requested)
+
         elif self.loss_name in ["is_zero_bce"]:
             # prediction for is_zero is True (aka 1) if the value is 0 and False (aka 0)
             #  if it is non-zero
-            logit_requested = logits[field_name + "_is_zero"]
+            logit_requested = logits[self.logit_key]
+
         else:
             raise ValueError("Requested predictions for field without a valid loss.")
         return logit_requested.view(-1, self.output_size)
@@ -263,6 +282,7 @@ class FieldLossTask(LossTask):
             return "_regression"
         elif self.loss_name in ("is_zero_bce"):
             return "_is_zero"
+
         else:
             raise ValueError("Unsupported loss name: " + self.loss_name)
 
@@ -326,7 +346,7 @@ class FieldLossTask(LossTask):
                 self.token_values,
             )
 
-        elif self.loss_name == "is_zero_bce":
+        elif self.loss_name in ["is_zero_bce"]:
             return metrics.is_zero_bce_loss(
                 request_logits.reshape(-1),
                 labels.reshape(-1),
@@ -374,6 +394,10 @@ class LabelLossTask(LossTask):
     @property
     def output_key(self):
         return self.label_column.label_column_name
+
+    @property
+    def metric_key(self):
+        return self.output_key
 
     @property
     def logit_key(self):
@@ -490,9 +514,9 @@ def make_loss_task(tokenizer, fields, label_columns, loss_request):
     if "field_name" in loss_request:
         field_name = loss_request["field_name"]
         matched_field = lookup_field(fields, field_name)
-        token_vaues = tokenizer.get_token_values(field_name) if tokenizer else None
+        token_values = tokenizer.get_token_values(field_name) if tokenizer else None
         loss_task = FieldLossTask.from_loss_request(
-            loss_request, matched_field, token_values=token_vaues
+            loss_request, matched_field, token_values=token_values
         )
         _verify_token_values_compatible_with_loss(loss_task, tokenizer)
         return loss_task
@@ -602,8 +626,10 @@ def calculate_losses(
         loss_val = loss_task.weight * loss_val
         total_weight += loss_task.weight
         total_loss += loss_val
-
-        loss_display_name = f"{output_key}_{loss_task.loss_name}_loss"
+        if "mvc" in logit_key:
+            loss_display_name = f"{output_key}_{loss_task.loss_name}_mvc_loss"
+        else:
+            loss_display_name = f"{output_key}_{loss_task.loss_name}_loss"
         all_losses[loss_display_name] = loss_val
 
     all_losses["loss"] = (
@@ -623,16 +649,15 @@ def calculate_predictions(
 
     partial_predictions = defaultdict(dict)
 
-    for loss_task in loss_tasks:
-        output_key = loss_task.output_key
-        partial_predictions[output_key][
-            loss_task.loss_name
-        ] = loss_task.get_predictions(logits)
+    for lt in loss_tasks:
+        metric_key = lt.metric_key
+        pred_key = lt.loss_name  # (lt.loss_name, lt.logit_key)
+        partial_predictions[metric_key][pred_key] = lt.get_predictions(logits)
 
     final_predictions = {}
-    for output_key in partial_predictions:
-        final_predictions[output_key] = combine_partial_predictions(
-            partial_predictions[output_key]
+    for metric_key in partial_predictions:
+        final_predictions[metric_key] = combine_partial_predictions(
+            partial_predictions[metric_key]
         )
 
     return final_predictions

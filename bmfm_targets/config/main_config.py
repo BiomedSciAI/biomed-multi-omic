@@ -143,7 +143,6 @@ class SCBertMainConfig:
             fields=fields,
             label_columns=label_columns,
             pad_token_id=data_module.tokenizer.pad_token_id,
-            max_position_embeddings=data_module.max_length,
         )
 
     @staticmethod

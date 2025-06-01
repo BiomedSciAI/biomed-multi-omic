@@ -60,7 +60,6 @@ class DataModule(pl.LightningDataModule):
             "sequence_classification",
             "sequence_labeling",
             "multitask",
-            "multilabel",
         ] = "language_modeling",
         mlm: bool = False,
         change_ratio: float = 0.15,
@@ -252,7 +251,6 @@ class DataModule(pl.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
         self.transform_datasets = transform_datasets
-        self.requires_distributed = False
         self.sequence_dropout_factor = sequence_dropout_factor
         self.balancing_label_column = balancing_label_column
         self.limit_genes = limit_genes
@@ -609,6 +607,8 @@ class DataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
             sampler=sampler,
+            persistent_workers=self.num_workers > 0,
+            pin_memory=True,
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -629,6 +629,8 @@ class DataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=collator,
+            persistent_workers=self.num_workers > 0,
+            pin_memory=True,
         )
 
     def test_dataloader(self) -> DataLoader:
@@ -859,7 +861,6 @@ class DNASeqDataModule(pl.LightningDataModule):
             "language_modeling",
             "sequence_classification",
             "sequence_labeling",
-            "multilabel",
         ] = "sequence_classification",
         limit_dataset_samples: int | Mapping[str, int] | None = None,
         sequence_order: str | None = None,
@@ -913,13 +914,12 @@ class DNASeqDataModule(pl.LightningDataModule):
         self.limit_dataset_samples = limit_dataset_samples
         self.sequence_order = sequence_order
         self.collation_strategy = collation_strategy
-        if collation_strategy in ["sequence_classification", "multilabel"]:
+        if collation_strategy == "sequence_classification":
             self.mlm = False
         self.train_dataset = None
         self.dev_dataset = None
         self.test_dataset = None
         self.predict_dataset = None
-        self.requires_distributed = False
         self.shuffle = shuffle
         self.sequence_dropout_factor = sequence_dropout_factor
 

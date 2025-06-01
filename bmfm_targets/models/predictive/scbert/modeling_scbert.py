@@ -9,7 +9,6 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
-    MaskedLMOutput,
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
@@ -340,8 +339,7 @@ class SCBertEncoder(nn.Module):
         use_cache: bool | None = None,
         output_attentions: bool | None = False,
         output_hidden_states: bool | None = False,
-        return_dict: bool | None = True,
-    ) -> tuple[torch.Tensor] | BaseModelOutputWithPastAndCrossAttentions:
+    ) -> BaseModelOutputWithPastAndCrossAttentions:
         all_hidden_states: tuple | None = () if output_hidden_states else None
         all_self_attentions: tuple | None = () if output_attentions else None
         all_cross_attentions: tuple | None = (
@@ -406,18 +404,6 @@ class SCBertEncoder(nn.Module):
             assert all_hidden_states is not None
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        if not return_dict:
-            return tuple(
-                v
-                for v in [
-                    hidden_states,
-                    next_decoder_cache,
-                    all_hidden_states,
-                    all_self_attentions,
-                    all_cross_attentions,
-                ]
-                if v is not None
-            )
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=next_decoder_cache,
@@ -440,6 +426,8 @@ class SCBertPreTrainedModel(PreTrainedModel):
     def _init_weights(self, module):
         """Initialize the weights. For the embedding layers - the initialization is in layers.py."""
         if isinstance(module, nn.Linear):
+            # Slightly different from the TF version which uses truncated_normal for initialization
+            # cf https://github.com/pytorch/pytorch/pull/5617
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
                 module.bias.data.zero_()
@@ -476,8 +464,6 @@ class SCBertModel(SCBertPreTrainedModel):
         self.encoder = SCBertEncoder(config)
 
         self.pooler = SCPooler(config) if add_pooling_layer else None
-
-        # Initialize weights and apply final processing
         self.post_init()
 
     # def get_input_embeddings(self):
@@ -508,8 +494,7 @@ class SCBertModel(SCBertPreTrainedModel):
         use_cache: bool | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | BaseModelOutputWithPoolingAndCrossAttentions:
+    ) -> BaseModelOutputWithPoolingAndCrossAttentions:
         output_attentions = (
             output_attentions
             if output_attentions is not None
@@ -520,10 +505,6 @@ class SCBertModel(SCBertPreTrainedModel):
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         if self.config.is_decoder:
             use_cache = use_cache if use_cache is not None else self.config.use_cache
         else:
@@ -593,6 +574,7 @@ class SCBertModel(SCBertPreTrainedModel):
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
         )
+
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
@@ -603,19 +585,15 @@ class SCBertModel(SCBertPreTrainedModel):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
-        sequence_output = encoder_outputs[0]
-        pooled_output = (
+        sequence_output = encoder_outputs.last_hidden_state
+        pooler_output = (
             self.pooler(sequence_output) if self.pooler is not None else None
         )
 
-        if not return_dict:
-            return (sequence_output, pooled_output) + encoder_outputs[1:]
-
         return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
-            pooler_output=pooled_output,
+            pooler_output=pooler_output,
             past_key_values=encoder_outputs.past_key_values,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
@@ -690,8 +668,7 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | MaskedLMOutput:
+    ) -> MaskedLMOutputWithEmbeddings:
         """
         Forward pass on the model.
 
@@ -724,10 +701,6 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
                 config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are ignored
 
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         # You can do a for loop over the fields but it's not efficient
         outputs = self.scbert(
             input_ids,
@@ -738,47 +711,38 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
             encoder_attention_mask=encoder_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
-        sequence_output = outputs[0]
-
-        field_logits = self.cls(sequence_output)
-        if "pooler_output" in outputs:
-            embeddings = outputs["pooler_output"]
+        cls_embeddings = (
+            outputs.pooler_output
+            if outputs.pooler_output is not None
+            else outputs.last_hidden_state[:, 0, :]
+        )
+        mvc_query_embeddings = {}
+        mvc_field_names = {
+            decoder_name.split("_")[0]
+            for decoder_name in self.cls.predictions.decoder.field_decoders.keys()
+            if "mvc" in decoder_name
+        }
+        input_fields = [field for field in self.config.fields if field.is_input]
+        for i, field in enumerate(input_fields):
+            if field.field_name in mvc_field_names:
+                embeds = self.scbert.embeddings.calculate_field_embedding(
+                    input_ids, i, field
+                )
+                mvc_query_embeddings[field.field_name] = embeds
+        if len(mvc_query_embeddings) == 0:
+            field_logits = self.cls(outputs.last_hidden_state)
         else:
-            embeddings = outputs["last_hidden_state"][:, 0, :]
-        if not return_dict:
-            return (field_logits,) + outputs[2:]
+            field_logits = self.cls(
+                outputs.last_hidden_state, cls_embeddings, mvc_query_embeddings
+            )
+
         return MaskedLMOutputWithEmbeddings(
             logits=field_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            embeddings=embeddings,
+            embeddings=cls_embeddings,
         )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, attention_mask=None, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
-
-        #  add a dummy token
-        if self.config.pad_token_id is None:
-            raise ValueError("The PAD token should be defined for generation")
-
-        attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
-            dim=-1,
-        )
-        dummy_token = torch.full(
-            (effective_batch_size, 1),
-            self.config.pad_token_id,
-            dtype=torch.long,
-            device=input_ids.device,
-        )
-        input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
 class SCBertForSequenceClassification(SCBertPreTrainedModel):
@@ -829,8 +793,7 @@ class SCBertForSequenceClassification(SCBertPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | SequenceClassifierOutputWithEmbeddings:
+    ) -> SequenceClassifierOutputWithEmbeddings:
         """
         Forward pass on the model.
 
@@ -857,13 +820,8 @@ class SCBertForSequenceClassification(SCBertPreTrainedModel):
                 Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under returned tensors for more detail.
             output_hidden_states (:obj:`bool`, `optional`):
                 Whether or not to return the hidden states of all layers. See ``hidden_states`` under returned tensors for more detail.
-            return_dict (:obj:`bool`, `optional`):
 
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         outputs = self.scbert(
             input_ids,
             attention_mask=attention_mask,
@@ -871,23 +829,15 @@ class SCBertForSequenceClassification(SCBertPreTrainedModel):
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
-        pooled_output = outputs[1]
-
-        pooled_output = self.dropout(pooled_output)
-        logits = {self.label_column.label_column_name: self.classifier(pooled_output)}
-
-        if not return_dict:
-            output = (logits,) + outputs[2:]
-            return output
-
+        pooler_output = self.dropout(outputs.pooler_output)
+        logits = {self.label_column.label_column_name: self.classifier(pooler_output)}
         return SequenceClassifierOutputWithEmbeddings(
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            embeddings=outputs[1],
+            embeddings=outputs.pooler_output,
         )
 
 
@@ -963,8 +913,7 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | MaskedLMOutput:
+    ) -> TokenClassifierOutput:
         """
         Forward pass on the model.
 
@@ -997,10 +946,6 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
                 config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are ignored
 
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         # You can do a for loop over the fields but it's not efficient
         outputs = self.scbert(
             input_ids,
@@ -1011,45 +956,15 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
             encoder_attention_mask=encoder_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
-        sequence_output = outputs[0]
-
-        field_logits = self.cls(sequence_output)
-
-        if not return_dict:
-            return (field_logits,) + outputs[2:]
+        field_logits = self.cls(outputs.last_hidden_state)
 
         return TokenClassifierOutput(
             logits=field_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, attention_mask=None, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
-
-        #  add a dummy token
-        if self.config.pad_token_id is None:
-            raise ValueError("The PAD token should be defined for generation")
-
-        attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
-            dim=-1,
-        )
-        dummy_token = torch.full(
-            (effective_batch_size, 1),
-            self.config.pad_token_id,
-            dtype=torch.long,
-            device=input_ids.device,
-        )
-        input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
 class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
@@ -1081,6 +996,7 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
                 "bi-directional self-attention."
             )
 
+        self.dropout = nn.Dropout(config.classifier_dropout)
         self.scbert = SCBertModel(config)
         self.cls = SCMultiTaskHead(config)
         # Initialize weights and apply final processing
@@ -1120,8 +1036,7 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | MaskedLMOutput:
+    ) -> SequenceClassifierOutputWithEmbeddings:
         """
         Forward pass on the model.
 
@@ -1154,10 +1069,6 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
                 config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are ignored
 
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         # You can do a for loop over the fields but it's not efficient
         outputs = self.scbert(
             input_ids,
@@ -1168,43 +1079,40 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
             encoder_attention_mask=encoder_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
-        sequence_output, pooled_output = outputs[0:2]
+        pooler_output = self.dropout(outputs.pooler_output)
 
-        logits = self.cls(sequence_output, pooled_output)
+        cls_embeddings = (
+            outputs.pooler_output
+            if outputs.pooler_output is not None
+            else outputs.last_hidden_state[:, 0, :]
+        )
 
-        if not return_dict:
-            return (logits,) + outputs[2:]
+        mvc_query_embeddings = {}
+        mvc_field_names = {
+            decoder_name.split("_")[0]
+            for decoder_name in self.cls.predictions.predictions.decoder.field_decoders.keys()
+            if "mvc" in decoder_name
+        }
+        input_fields = [field for field in self.config.fields if field.is_input]
+        for i, field in enumerate(input_fields):
+            if field.field_name in mvc_field_names:
+                embeds = self.scbert.embeddings.calculate_field_embedding(
+                    input_ids, i, field
+                )
+                mvc_query_embeddings[field.field_name] = embeds
+
+        if len(mvc_query_embeddings) == 0:
+            logits = self.cls(outputs.last_hidden_state, cls_embeddings)
+        else:
+            logits = self.cls(
+                outputs.last_hidden_state, cls_embeddings, mvc_query_embeddings
+            )
 
         return SequenceClassifierOutputWithEmbeddings(
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            embeddings=outputs[1],
+            embeddings=outputs.pooler_output,
         )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, attention_mask=None, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
-
-        #  add a dummy token
-        if self.config.pad_token_id is None:
-            raise ValueError("The PAD token should be defined for generation")
-
-        attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
-            dim=-1,
-        )
-        dummy_token = torch.full(
-            (effective_batch_size, 1),
-            self.config.pad_token_id,
-            dtype=torch.long,
-            device=input_ids.device,
-        )
-        input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}

@@ -232,7 +232,7 @@ def apply_rotary_pos_emb(
     cos: torch.Tensor,
     sin: torch.Tensor,
     position_ids: torch.Tensor | None = None,
-    unsqueeze_dim: int = 2,
+    unsqueeze_dim: int = 1,
 ):
     """Applies Rotary Position Embedding to the query and key tensors."""
     cos = cos.unsqueeze(unsqueeze_dim)
@@ -785,7 +785,7 @@ class SCModernBertModel(SCModernBertPreTrainedModel):
             if inputs_embeds is not None:
                 batch_size, seq_len = inputs_embeds.shape[:2]
             else:
-                batch_size, seq_len = input_ids.shape[:2]
+                batch_size, num_fields, seq_len = input_ids.shape
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
         if attention_mask is None:
@@ -971,6 +971,10 @@ class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.cls.predictions.decoder = new_embeddings
 
+    def tie_weights(self):
+        logger.warning("Tie weights not supported for this model")
+        return
+
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
@@ -1126,7 +1130,8 @@ class SCModernBertForSequenceClassification(SCModernBertPreTrainedModel):
         self.head = SCModernBertPredictionHead(config)
         self.label_column = self.config.label_columns[0]
         self.drop = torch.nn.Dropout(config.classifier_dropout)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.label_column = self.config.label_columns[0]
+        self.classifier = nn.Linear(config.hidden_size, self.label_column.output_size)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1188,7 +1193,7 @@ class SCModernBertForSequenceClassification(SCModernBertPreTrainedModel):
 
         pooled_output = self.head(last_hidden_state)
         pooled_output = self.drop(pooled_output)
-        logits = self.classifier(pooled_output)
+        logits = {self.label_column.label_column_name: self.classifier(pooled_output)}
 
         if not return_dict:
             return (logits,) + outputs[2:]
@@ -1252,6 +1257,10 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
+
+    def tie_weights(self):
+        logger.warning("Tie weights not supported for this model")
+        return
 
     def forward(
         self,

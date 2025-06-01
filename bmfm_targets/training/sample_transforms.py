@@ -159,6 +159,8 @@ def rda_downsample(
     else:
         input_expressions = raw_expressions.copy()
     input_expressions_sum = input_expressions.sum()
+    if raw_expressions_sum == 0:
+        raw_expressions_sum = raw_expressions_sum + 1
     if input_expressions_sum == 0:
         input_expressions = raw_expressions.copy()
         input_expressions_sum = raw_expressions_sum

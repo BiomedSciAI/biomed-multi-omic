@@ -36,7 +36,7 @@ class CellXGeneNexusDataset(StreamingDataset):
         regression_label_columns: list[str] | None = None,
         expose_zeros: Literal["all"] | None = None,
         limit_genes: list[str] | None = None,
-        **kargs,
+        **kwargs,
     ):
         """
         CellxGene nexus dataset.
@@ -72,7 +72,7 @@ class CellXGeneNexusDataset(StreamingDataset):
         with open(os.path.join(index_dir, "index.json")) as file:
             self.label_dict = json.load(file)["config"]["tiledb"]["label_dict"]
 
-        super().__init__(index_dir, item_loader=item_loader, **kargs)
+        super().__init__(index_dir, item_loader=item_loader, **kwargs)
 
 
 class CellXGeneNexusDataModule(StreamingDataModule):
@@ -93,7 +93,7 @@ class TileDBItemLoader(BaseItemLoader):
         expose_zeros: Literal["all"] | None,
         limit_genes: list[str] | None,
         *args,
-        **kargs,
+        **kwargs,
     ):
         self.census_version = census_version
         self.experiment = experiment

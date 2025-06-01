@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -34,3 +34,5 @@ jobs:
       run: uv pip freeze
     - name: Test package import
       run: pushd /tmp; python -c "import bmfm_targets"; popd;
+    - name: Run package tests
+      run: python -m pytest -v --durations=40 bmfm_targets/tests/

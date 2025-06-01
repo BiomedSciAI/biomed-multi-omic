@@ -67,6 +67,7 @@ class BatchIntegrationCallback(pl.Callback):
     def __init__(
         self,
         batch_column_name=None,
+        counts_column_name=None,
         benchmarking_methods=[
             "Unintegrated",
             "Scanorama",
@@ -76,6 +77,7 @@ class BatchIntegrationCallback(pl.Callback):
     ):
         super().__init__()
         self.batch_column_name = batch_column_name
+        self.counts_column_name = counts_column_name
         self.benchmarking_methods = benchmarking_methods
 
     def on_predict_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
@@ -106,6 +108,7 @@ class BatchIntegrationCallback(pl.Callback):
         adata_emb = self.add_embed_to_obsm(adata_orig, predictions)
         if not self.batch_column_name == "batch":
             adata_emb.obs["batch"] = adata_emb.obs[self.batch_column_name]
+        adata_emb.obs["batch"] = adata_emb.obs["batch"].astype("category")
         return adata_emb
 
     def report_batch_integartion_to_clearml(self, adata_emb):
@@ -144,7 +147,7 @@ class BatchIntegrationCallback(pl.Callback):
     def generate_fig_batch_integration(self, adata_emb):
         target_col = self.target_column_name
         batch_col = self.batch_column_name
-
+        counts_col = self.counts_column_name
         sampling_adata_emb = random_subsampling(
             adata=adata_emb,
             n_samples=min((10000, adata_emb.obs.shape[0])),
@@ -155,14 +158,19 @@ class BatchIntegrationCallback(pl.Callback):
         sampling_adata_emb.obs[batch_col] = sampling_adata_emb.obs[batch_col].astype(
             "category"
         )
-        fig, axs = plt.subplots(3, 1, figsize=(15, 15))
-        colors = [target_col, batch_col, "total_counts"]
+        colors = [target_col, batch_col]
         titles = [
             f"Targets embeddings: {target_col} ",
             f"Batch embeddings: {batch_col}",
-            "Embeddings colored by total counts per cell",
         ]
-
+        if counts_col in sampling_adata_emb.obs.columns:
+            colors.append(counts_col)
+            titles.append("Embeddings colored by total counts per cell")
+        else:
+            logger.warning(
+                f"{counts_col} not found in obs. Available columns: {sampling_adata_emb.obs.columns}"
+            )
+        fig, axs = plt.subplots(len(colors), 1, figsize=(15, 15))
         for i, ax in enumerate(axs):
             sc.pl.umap(
                 sampling_adata_emb,
@@ -251,10 +259,13 @@ class BatchIntegrationCallback(pl.Callback):
         from scib_metrics.benchmark import BatchCorrection, Benchmarker, BioConservation
 
         biocons = BioConservation(isolated_labels=False)
-
+        logger.info("Beginning Unintegrated...")
         adata_emb.obsm["Unintegrated"] = self.get_pca_of_x(adata_emb)
+        logger.info("Beginning Harmony...")
         adata_emb.obsm["Harmony"] = self.harmony_emb(adata_emb)
+        logger.info("Beginning Scanorama...")
         adata_emb.obsm["Scanorama"] = self.scanorama_emb(adata_emb)
+        logger.info("Beginning LIGER...")
         adata_emb.obsm["LIGER"] = self.liger_emb(adata_emb)
 
         bm = Benchmarker(
@@ -283,13 +294,77 @@ class BatchIntegrationCallback(pl.Callback):
             adata.obsm["X_pca"], adata.obs, batch_key=self.batch_column_name
         )
 
-    def get_pca_of_x(self, adata):
-        adata.X = adata.X.astype("float64")
-        sc.pp.highly_variable_genes(
-            adata, n_top_genes=2000, batch_key=self.batch_column_name
+    def get_pca_of_x(self, adata_orig: sc.AnnData, flavor="cell_ranger"):
+        """
+        Calculate PCA of X.
+
+        This function produces a valid PCA of the initial data whether it is already log
+        normed, raw counts or lognormed and binned. It makes use of HVG to reduce the prePCA
+        space to 2000 genes. This too is sensitive to whether the data is lognormed or not.
+        It detects the kind of data via a detection heuristic and treats it accordingly.
+        It flags the data as raw and applies the lognorm before PCA if at least 4 of these
+        6 criteria are met:
+         - integer
+         - max > 50
+         - >40% ones
+         - mean_val < 2.5
+         - median val <= 1
+         - >60% one two or three
+
+        It does all of the rescaling and transforming on a copy of the anndata, injecting just
+        the PCA into the original anndata to preserve the data integrity.
+        """
+        adata = adata_orig.copy()
+        x = adata.X.data
+        is_int = np.issubdtype(x.dtype, np.integer)
+
+        x_sample = x[:100_000] if x.size > 100_000 else x
+
+        max_val = x_sample.max()
+        mean_val = x_sample.mean()
+        median_val = np.median(x_sample)
+        pct_ones = np.mean(x_sample == 1)
+        pct_small_ints = np.mean(np.isin(x_sample, [1, 2, 3]))
+
+        # Scoring heuristic
+        raw_score = sum(
+            [
+                is_int,
+                max_val > 50,
+                pct_ones > 0.4,
+                mean_val < 2.5,
+                median_val <= 1,
+                pct_small_ints > 0.6,
+            ]
         )
-        sc.tl.pca(adata, n_comps=30, mask_var="highly_variable")
-        return adata.obsm["X_pca"]
+
+        looks_raw = raw_score >= 4  # majority vote
+
+        if looks_raw:
+            logger.info("Detected raw counts — applying normalization and log1p.")
+            sc.pp.normalize_total(adata, target_sum=1e4)
+            sc.pp.log1p(adata)
+        else:
+            logger.info(
+                "Detected log1p-transformed or binned input — skipping normalization."
+            )
+        adata.obs[self.batch_column_name] = adata.obs[self.batch_column_name].astype(
+            "category"
+        )
+        try:
+            sc.pp.highly_variable_genes(
+                adata, flavor=flavor, batch_key=self.batch_column_name, n_top_genes=2000
+            )
+        except:
+            logger.warning(
+                "Batch level HVG calc failed, reverting to batch insensitive"
+            )
+            sc.pp.highly_variable_genes(adata, flavor=flavor, n_top_genes=2000)
+
+        sc.pp.scale(adata, max_value=10)
+        sc.tl.pca(adata, svd_solver="arpack", n_comps=30, mask_var="highly_variable")
+        adata_orig.obsm["X_pca"] = adata.obsm["X_pca"]
+        return adata_orig.obsm["X_pca"]
 
     def scanorama_emb(self, adata):
         import scanorama
@@ -313,7 +388,9 @@ class BatchIntegrationCallback(pl.Callback):
     def liger_emb(self, adata):
         import pyliger
 
-        if not "LIGER" in self.benchmarking_methods:
+        k = min(adata.obs["batch"].value_counts().min() - 1, 10)
+
+        if not "LIGER" in self.benchmarking_methods or k < 1:
             return np.zeros((adata.n_obs, 1))
         batch_cats = adata.obs.batch.cat.categories
         bdata = adata.copy()
@@ -329,7 +406,7 @@ class BatchIntegrationCallback(pl.Callback):
         liger_data.var_genes = bdata.var_names
         pyliger.normalize(liger_data)
         pyliger.scale_not_center(liger_data)
-        pyliger.optimize_ALS(liger_data, k=10)
+        pyliger.optimize_ALS(liger_data, k=k)
         pyliger.quantile_norm(liger_data)
 
         bdata.obsm["LIGER"] = np.zeros(

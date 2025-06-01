@@ -192,7 +192,7 @@ class MultiTaskClassifier(nn.Module):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
+        **kwargs,
     ) -> SequenceClassifierOutputWithEmbeddings:
         outputs = self.base_model(
             input_ids,
@@ -201,7 +201,6 @@ class MultiTaskClassifier(nn.Module):
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
         if "pooler_output" in outputs:

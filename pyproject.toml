@@ -35,7 +35,7 @@ dependencies = [
   "cellxgene_census[experimental]>1.13.0", #experimental required to use built-in iterable dataset
   "tiledbsoma",
   "pysam",
-  "litdata @ git+https://github.com/aksgibm/litdata.git@residual_sampling_30",
+  "litdata",
   "captum",
   "pydantic",
   "scipy",
@@ -44,6 +44,8 @@ dependencies = [
   "anndata>=0.10.9",
   "focal-loss-torch @ git+https://github.com/mathiaszinnen/focal_loss_torch.git",
   "torchdata<0.10",
+  "peft"
+
 ]
 
 [project.optional-dependencies]

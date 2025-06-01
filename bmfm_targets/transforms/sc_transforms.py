@@ -753,6 +753,7 @@ class QcMetricsTransform(BaseSCTransform):
     def __init__(
         self,
         pct_counts_mt: int | None = None,
+        total_counts_iqr_scale: float | None = None,
     ):
         """
         Initialize the FilterGenesTransform class.
@@ -760,8 +761,11 @@ class QcMetricsTransform(BaseSCTransform):
         Args:
         ----
             min_counts: Minimum count threshold for filtering genes.
+            total_counts_iqr_scale: IQR scale for removing very high and low count samples
+               good default value is 1.5
         """
         self.pct_counts_mt = pct_counts_mt
+        self.total_counts_iqr_scale = total_counts_iqr_scale
 
     def __call__(self, adata: AnnData) -> Mapping[str, AnnData]:
         """
@@ -791,7 +795,19 @@ class QcMetricsTransform(BaseSCTransform):
             )
             if self.pct_counts_mt is not None:
                 adata = adata[adata.obs.pct_counts_mt < self.pct_counts_mt, :]
+            if self.total_counts_iqr_scale is not None:
+                iqr_scale = self.total_counts_iqr_scale
+                counts = adata.obs["total_counts"]
 
+                q1 = np.percentile(counts, 25)
+                q3 = np.percentile(counts, 75)
+                iqr = q3 - q1
+
+                lower = q1 - iqr_scale * iqr
+                upper = q3 + iqr_scale * iqr
+
+                mask = (counts >= lower) & (counts <= upper)
+                adata = adata[mask].copy()
         except Exception as e:
             raise ValueError(
                 "Error occurred during applying qc_metrics transformation:", str(e)
@@ -1339,6 +1355,38 @@ class BinTransform(BaseSCTransform):
         self.num_bins = num_bins
         self.binning_method = binning_method
 
+    def _digitize(self, x: np.ndarray, bins: np.ndarray, side="both") -> np.ndarray:
+        """
+        Digitize the data into bins. This method spreads data uniformly when bins
+        have same values.
+
+        Args:
+        ----
+        x (:class:`np.ndarray`):
+            The data to digitize.
+        bins (:class:`np.ndarray`):
+            The bins to use for digitization, in increasing order.
+        side (:class:`str`, optional):
+            The side to use for digitization. If "one", the left side is used. If
+            "both", the left and right side are used. Default to "one".
+
+        Returns:
+        -------
+        :class:`np.ndarray`:
+            The digitized data.
+        """
+        left_digits = np.digitize(x, bins)
+        if side == "one":
+            return left_digits
+
+        right_digits = np.digitize(x, bins, right=True)
+
+        rands = np.random.rand(len(x))  # uniform random numbers
+
+        digits = rands * (right_digits - left_digits) + left_digits
+        digits = np.ceil(digits).astype(np.int64)
+        return digits
+
     def __call__(self, adata: AnnData) -> Mapping[str, AnnData]:
         """
         Apply the binning transformation to the input AnnData object.
@@ -1393,6 +1441,21 @@ class BinTransform(BaseSCTransform):
                 binned_values = np.clip(
                     np.digitize(row, bin_edges), 1, len(bin_edges) - 1
                 )
+                binned_data.extend(binned_values)
+
+        elif self.binning_method == "value_binning":
+            if self.num_bins is None:
+                raise ValueError(
+                    "The number of bins must be specified when using the value binning method."
+                )
+            binned_data = []
+
+            for i in range(adata.shape[0]):
+                non_zero_row = sparse_matrix.data[
+                    sparse_matrix.indptr[i] : sparse_matrix.indptr[i + 1]
+                ]
+                bins = np.quantile(non_zero_row, np.linspace(0, 1, self.num_bins))
+                binned_values = self._digitize(non_zero_row, bins)
                 binned_data.extend(binned_values)
         else:
             raise ValueError(f"Unknown binning method: {self.binning_method}")

@@ -43,12 +43,16 @@ class BasePerturbationDataset(Dataset, abc.ABC):
 
         Args:
         ----
-            label_column_name (str): The column name in the AnnData object that contains the perturbation information.
             processed_data_source (AnnData | str): either an AnnData object that has been processed or the path to such an h5ad file.
             split (str): Split to use. Must be one of train, dev, test or None to get all data.
             split_column_name (str): The column name where split is stored. If None, all of the data will be used as test.
+            perturbation_column_name (str): The column name in the AnnData object that contains the perturbation information.
+            stratifying_label (str): The column name in the AnnData object that contains the stratifying label.
+            backed (Literal["r", "r+"] | None): Whether to read the data in backed mode. If None, the data will be read in memory.
             limit_samples (int | None): The number of samples to limit the dataset to.
             limit_samples_shuffle (bool): Whether to shuffle the samples before limiting the dataset.
+            limit_genes (list[str] | None): The list of genes to limit the dataset to.
+            filter_query (str | None): The query to filter the data. If None, no filtering will be applied.
 
         Raises:
         ------

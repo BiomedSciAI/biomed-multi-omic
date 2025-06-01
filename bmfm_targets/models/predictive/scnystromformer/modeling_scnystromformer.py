@@ -9,7 +9,6 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
-    MaskedLMOutput,
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
@@ -22,6 +21,7 @@ from transformers.utils import logging
 
 from bmfm_targets.config import SCNystromformerConfig
 from bmfm_targets.models.model_utils import (
+    MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
 )
 from bmfm_targets.models.predictive.layers import (
@@ -331,7 +331,6 @@ class SCNystromformerEncoder(nn.Module):
         head_mask: torch.Tensor | None = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
-        return_dict: bool = True,
     ):
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -365,12 +364,6 @@ class SCNystromformerEncoder(nn.Module):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, all_hidden_states, all_self_attentions]
-                if v is not None
-            )
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             hidden_states=all_hidden_states,
@@ -447,8 +440,7 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
         inputs_embeds: torch.FloatTensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | BaseModelOutputWithPoolingAndCrossAttentions:
+    ) -> BaseModelOutputWithPoolingAndCrossAttentions:
         output_attentions = (
             output_attentions
             if output_attentions is not None
@@ -459,10 +451,6 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError(
                 "You cannot specify both input_ids and inputs_embeds at the same time"
@@ -482,18 +470,6 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones(((batch_size, seq_length)), device=device)
 
-        if token_type_ids is None:
-            if hasattr(self.embeddings, "token_type_ids"):
-                buffered_token_type_ids = self.embeddings.token_type_ids[:, :seq_length]
-                buffered_token_type_ids_expanded = buffered_token_type_ids.expand(
-                    batch_size, seq_length
-                )
-                token_type_ids = buffered_token_type_ids_expanded
-            else:
-                token_type_ids = torch.zeros(
-                    input_shape, dtype=torch.long, device=device
-                )
-
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
         extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(
@@ -509,29 +485,23 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
 
         embedding_output = self.embeddings(
             input_ids=input_ids,
-            #           position_ids=position_ids,
-            #           token_type_ids=token_type_ids,
-            #           inputs_embeds=inputs_embeds,
         )
+
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
             head_mask=head_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
-        sequence_output = encoder_outputs[0]
-        pooled_output = (
+        sequence_output = encoder_outputs.last_hidden_state
+        pooler_output = (
             self.pooler(sequence_output) if self.pooler is not None else None
         )
 
-        if not return_dict:
-            return (sequence_output, pooled_output) + encoder_outputs[1:]
-
         return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
-            pooler_output=pooled_output,
+            pooler_output=pooler_output,
             past_key_values=encoder_outputs.past_key_values,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
@@ -540,15 +510,37 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
 
 
 class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
-    _tied_weights_keys = ["cls.predictions.decoder"]
+    """
+    Nystromformer model with masked language modeling head.
 
-    def __init__(self, config):
+    Attributes
+    ----------
+        config (:obj:`PretrainedConfig`): Model configuration class with all the parameters of the model.
+
+    """
+
+    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+
+    def __init__(self, config: SCNystromformerConfig):
+        """
+        Initializes the model.
+
+        Args:
+        ----
+            config (:obj:`PretrainedConfig`): Model configuration class with all the parameters of the model.
+
+        """
         super().__init__(config)
 
+        if config.is_decoder:
+            logger.warning(
+                "If you want to use `NystromformerForMaskedLM` make sure `config.is_decoder=False` for "
+                "bi-directional self-attention."
+            )
         self.scnystromformer = SCNystromformerModel(config, add_pooling_layer=False)
         self.cls = SCOnlyMLMHead(config)
+        # Initialize weights and apply final processing
         self.post_init()
-
         if self.config.checkpoint:
             logger.info("Loading model from checkpoint " + str(self.config.checkpoint))
             model_dict = prepare_model_dict_from_checkpoint(self.config.checkpoint)
@@ -564,6 +556,9 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
         return self.cls.predictions.decoder
 
     def set_output_embeddings(self, new_embeddings):
+        logger.warning(
+            "Tie weights not supported for this model. This is used for tying weights. If you need to use tie weights fix it"
+        )
         self.cls.predictions.decoder = new_embeddings
 
     def tie_weights(self):
@@ -572,49 +567,76 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
 
     def forward(
         self,
-        input_ids: torch.LongTensor | None = None,
-        attention_mask: torch.FloatTensor | None = None,
-        token_type_ids: torch.LongTensor | None = None,
-        position_ids: torch.LongTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
-        inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        head_mask: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | MaskedLMOutput:
-        r"""
-        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Labels for computing the masked language modeling loss. Indices should be in `[-100, 0, ...,
-            config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are ignored (masked), the
-            loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
+    ) -> MaskedLMOutputWithEmbeddings:
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        Forward pass on the model.
 
+        Args:
+        ----
+            input_ids (:obj:`torch.LongTensor` of shape :obj:`(batch_size, num_fields, sequence_length)`):
+                Indices of input sequence tokens in the vocabulary.
+            attention_mask (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length)`, `optional`):
+                Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
+                - 1 for tokens that are NOT MASKED,
+                - 0 for tokens that are MASKED.
+            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
+                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
+                - 1 indicates the head is **not masked**,
+                - 0 indicates the head is **masked**.
+            inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
+                Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
+                This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
+                than the model's internal embedding lookup matrix.
+            labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, num_fields, sequence_length)`, `optional`):
+                Labels for computing the masked language modeling loss. Indices should be in ``[-100, 0, ...,
+                config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are ignored
+
+        """
+        # You can do a for loop over the fields but it's not efficient
         outputs = self.scnystromformer(
             input_ids,
             attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
-
-        sequence_output = outputs[0]
-        field_logits = self.cls(sequence_output)
-
-        if not return_dict:
-            return (field_logits,) + outputs[2:]
-
-        return MaskedLMOutput(
+        cls_embeddings = (
+            outputs.pooler_output
+            if outputs.pooler_output is not None
+            else outputs.last_hidden_state[:, 0, :]
+        )
+        mvc_query_embeddings = {}
+        mvc_field_names = {
+            decoder_name.split("_")[0]
+            for decoder_name in self.cls.predictions.decoder.field_decoders.keys()
+            if "mvc" in decoder_name
+        }
+        input_fields = [field for field in self.config.fields if field.is_input]
+        for i, field in enumerate(input_fields):
+            if field.field_name in mvc_field_names:
+                embeds = self.scbert.embeddings.calculate_field_embedding(
+                    input_ids, i, field
+                )
+                mvc_query_embeddings[field.field_name] = embeds
+        if len(mvc_query_embeddings) == 0:
+            field_logits = self.cls(outputs.last_hidden_state)
+        else:
+            field_logits = self.cls(
+                outputs.last_hidden_state, cls_embeddings, mvc_query_embeddings
+            )
+        return MaskedLMOutputWithEmbeddings(
             logits=field_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            embeddings=cls_embeddings,
         )
 
 
@@ -679,7 +701,6 @@ class SCNystromformerForSequenceClassification(SCNystromformerPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
     ) -> tuple[torch.Tensor] | SequenceClassifierOutputWithEmbeddings:
         """
         Forward pass on the model.
@@ -707,13 +728,8 @@ class SCNystromformerForSequenceClassification(SCNystromformerPreTrainedModel):
                 Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under returned tensors for more detail.
             output_hidden_states (:obj:`bool`, `optional`):
                 Whether or not to return the hidden states of all layers. See ``hidden_states`` under returned tensors for more detail.
-            return_dict (:obj:`bool`, `optional`):
 
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         outputs = self.scnystromformer(
             input_ids,
             attention_mask=attention_mask,
@@ -721,26 +737,22 @@ class SCNystromformerForSequenceClassification(SCNystromformerPreTrainedModel):
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
-        if "pooler_output" in outputs:
-            pooled_output = outputs["pooler_output"]
-        else:
-            pooled_output = outputs.last_hidden_state[:, 0, :]
+        pooler_output = (
+            outputs.pooler_output
+            if self.use_pooling_layer
+            else outputs.last_hidden_state[:, 0, :]
+        )
 
-        pooled_output = self.dropout(pooled_output)
-        logits = {self.label_column.label_column_name: self.classifier(pooled_output)}
-
-        if not return_dict:
-            output = (logits,) + outputs[2:]
-            return output
+        pooler_output = self.dropout(pooler_output)
+        logits = {self.label_column.label_column_name: self.classifier(pooler_output)}
 
         return SequenceClassifierOutputWithEmbeddings(
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            embeddings=pooled_output,
+            embeddings=pooler_output,
         )
 
 
@@ -781,7 +793,9 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
 
         if self.config.checkpoint:
             logger.info("Loading model from checkpoint " + str(self.config.checkpoint))
-            model_dict = prepare_model_dict_from_checkpoint(self.config.checkpoint)
+            model_dict = prepare_model_dict_from_checkpoint(
+                self.config.checkpoint, self.base_model_prefix
+            )
             key_report = self.load_state_dict(model_dict, strict=False)
             logger.info(f"Loading complete. {len(model_dict)} layers in ckpt.")
             logger.info(f"Unexpected keys: {key_report.unexpected_keys}")
@@ -794,6 +808,9 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
         return self.cls.predictions.decoder
 
     def set_output_embeddings(self, new_embeddings):
+        logger.warning(
+            "Tie weights not supported for this model. This is used for tying weights. If you need to use tie weights fix it"
+        )
         self.cls.predictions.decoder = new_embeddings
 
     def tie_weights(self):
@@ -809,8 +826,7 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | MaskedLMOutput:
+    ) -> TokenClassifierOutput:
         """
         Forward pass on the model.
 
@@ -835,10 +851,6 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
                 config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are ignored
 
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         # You can do a for loop over the fields but it's not efficient
         outputs = self.scnystromformer(
             input_ids,
@@ -847,45 +859,15 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
-        sequence_output = outputs[0]
-
-        field_logits = self.cls(sequence_output)
-
-        if not return_dict:
-            return (field_logits,) + outputs[2:]
+        field_logits = self.cls(outputs.last_hidden_state)
 
         return TokenClassifierOutput(
             logits=field_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, attention_mask=None, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
-
-        #  add a dummy token
-        if self.config.pad_token_id is None:
-            raise ValueError("The PAD token should be defined for generation")
-
-        attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
-            dim=-1,
-        )
-        dummy_token = torch.full(
-            (effective_batch_size, 1),
-            self.config.pad_token_id,
-            dtype=torch.long,
-            device=input_ids.device,
-        )
-        input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
 class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
@@ -917,6 +899,7 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
                 "bi-directional self-attention."
             )
 
+        self.dropout = nn.Dropout(config.classifier_dropout)
         self.scnystromformer = SCNystromformerModel(config)
         self.cls = SCMultiTaskHead(config)
         # Initialize weights and apply final processing
@@ -954,8 +937,7 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple[torch.Tensor] | MaskedLMOutput:
+    ) -> SequenceClassifierOutputWithEmbeddings:
         """
         Forward pass on the model.
 
@@ -980,10 +962,6 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
                 config.vocab_size]`` (see ``input_ids`` docstring) Tokens with indices set to ``-100`` are ignored
 
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
         # You can do a for loop over the fields but it's not efficient
         outputs = self.scnystromformer(
             input_ids,
@@ -992,42 +970,38 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+        )
+        cls_embeddings = (
+            outputs.pooler_output
+            if outputs.pooler_output is not None
+            else outputs.last_hidden_state[:, 0, :]
         )
 
-        sequence_output, pooled_output = outputs[0:2]
+        pooler_output = self.dropout(outputs.pooler_output)
 
-        logits = self.cls(sequence_output, pooled_output)
-
-        if not return_dict:
-            return (logits,) + outputs[2:]
+        mvc_query_embeddings = {}
+        mvc_field_names = {
+            decoder_name.split("_")[0]
+            for decoder_name in self.cls.predictions.predictions.decoder.field_decoders.keys()
+            if "mvc" in decoder_name
+        }
+        input_fields = [field for field in self.config.fields if field.is_input]
+        for i, field in enumerate(input_fields):
+            if field.field_name in mvc_field_names:
+                embeds = self.scbert.embeddings.calculate_field_embedding(
+                    input_ids, i, field
+                )
+                mvc_query_embeddings[field.field_name] = embeds
+        if len(mvc_query_embeddings) == 0:
+            logits = self.cls(outputs.last_hidden_state, cls_embeddings)
+        else:
+            logits = self.cls(
+                outputs.last_hidden_state, cls_embeddings, mvc_query_embeddings
+            )
 
         return SequenceClassifierOutputWithEmbeddings(
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            embeddings=outputs.pooler_output,
         )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, attention_mask=None, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        effective_batch_size = input_shape[0]
-
-        #  add a dummy token
-        if self.config.pad_token_id is None:
-            raise ValueError("The PAD token should be defined for generation")
-
-        attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
-            dim=-1,
-        )
-        dummy_token = torch.full(
-            (effective_batch_size, 1),
-            self.config.pad_token_id,
-            dtype=torch.long,
-            device=input_ids.device,
-        )
-        input_ids = torch.cat([input_ids, dummy_token], dim=1)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}

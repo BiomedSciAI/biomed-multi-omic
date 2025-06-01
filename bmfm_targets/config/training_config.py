@@ -1,8 +1,9 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytorch_lightning.callbacks
+from peft import LoraConfig as PeftLoraConfig
 
 
 def default_callbacks():
@@ -106,6 +107,30 @@ class InterpretTaskConfig(BaseTaskConfig):
 
 
 @dataclass
+class LoraConfigWrapper:
+    r: int = 8
+    lora_alpha: int = 16
+    target_modules: list[str] | None = field(
+        default_factory=lambda: ["query", "key", "value", "dense"]
+    )
+    lora_dropout: float = 0.1
+    bias: Literal["none", "all", "lora_only"] = "none"
+    task_type: str = "SEQ_CLS"
+    use_dora: bool = False
+
+    def to_peft_config(self) -> PeftLoraConfig:
+        return PeftLoraConfig(
+            r=self.r,
+            lora_alpha=self.lora_alpha,
+            target_modules=self.target_modules,
+            lora_dropout=self.lora_dropout,
+            bias=self.bias,
+            task_type=self.task_type,
+            use_dora=self.use_dora,
+        )
+
+
+@dataclass
 class TrainerConfig:
     """
     Configuration for training.
@@ -145,6 +170,7 @@ class TrainerConfig:
               null/None - does not track at all. No extra memory usage, nothing on disk.
             Rich metrics require batch_predictions but it may be too much memory for a given run.
             Default is not to track at all.
+
     """
 
     batch_size: int = 64
@@ -158,3 +184,17 @@ class TrainerConfig:
     metrics: list[dict] | None = None
     pooling_method: str = "pooling_layer"
     batch_prediction_behavior: str | int | None = None
+    lora_config: Any = None
+
+    def get_lora_config(self) -> LoraConfigWrapper:
+        if isinstance(self.lora_config, str):
+            if self.lora_config == "default":
+                return LoraConfigWrapper()
+            else:
+                raise ValueError(
+                    f"Unknown string value for lora_config: {self.lora_config}"
+                )
+        elif isinstance(self.lora_config, LoraConfigWrapper):
+            return self.lora_config
+        else:
+            return None

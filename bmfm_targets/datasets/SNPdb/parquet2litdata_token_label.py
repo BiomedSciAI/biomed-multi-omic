@@ -6,14 +6,24 @@ import re
 from functools import partial
 from pathlib import Path
 
+import numpy as np
 import pyarrow.parquet as pq
 from litdata import optimize
 from transformers import AutoTokenizer
 
 from bmfm_targets.datasets.data_conversion import get_user_serializer
 
+snp_probability_matrix_path = (
+    "/dccstor/bmfm-targets/data/omics/genome/snpdb/raw/matrix_snp_probability/"
+)
+chr_to_snp_flag = {}
+for i in range(1, 23):
+    chr_to_snp_flag["chr" + str(i)] = np.load(
+        os.path.join(snp_probability_matrix_path, "snp_flag_chr" + str(i) + ".npy")
+    )
 
-def convert_files(file_path, tokenizer, serializer, data_source="dnaseq_base"):
+
+def convert_files(file_path, tokenizer, serializer):
     """
     Convert a single file to a litdata dataset.
 
@@ -29,16 +39,7 @@ def convert_files(file_path, tokenizer, serializer, data_source="dnaseq_base"):
     ------
         str: Tokenized DNA sequence.
     """
-    if data_source == "hic":
-        data = Parquet2LitDatasetHiC(file_path, tokenizer, serializer)
-    elif data_source == "insulation":
-        data = Parquet2LitDatasetInsulation(file_path, tokenizer, serializer)
-    elif data_source == "chromatin":
-        data = Parquet2LitDatasetChromatinProfile(file_path, tokenizer, serializer)
-    elif data_source == "dnaseq_base":
-        data = Parquet2LitDataset(file_path, tokenizer, serializer)
-    else:
-        raise ValueError(f"data source {data_source} not implemented.")
+    data = Parquet2LitDataset(file_path, tokenizer, serializer)
     yield from data
 
 
@@ -97,15 +98,40 @@ class Parquet2LitDataset:
 
     def __iter__(self):
         for batch in self.data.iter_batches(
-            batch_size=1000, use_threads=False, columns=["dna_sequence"]
+            batch_size=1000,
+            use_threads=False,
+            columns=["dna_chunk", "chunk_index"],
         ):
-            for text in batch.to_pandas()["dna_sequence"].tolist():
-                text = text.strip()
-                if set(text) == {"N"}:
-                    continue
-                yield self.serializer.serialize(
-                    self.tokenizer.tokenize(text)
-                    # self.tokenizer.tokenize(self.clean(text))
+            df_dna = batch.to_pandas()
+            for i in range(len(df_dna)):
+                dna_chunk, chunk_index = df_dna.iloc[i, :]
+                tokens = self.tokenizer.tokenize(dna_chunk)
+                ## it could be chr11_60 or rcchr11_60
+                target_chr, index = chunk_index.split("_")
+                left = int(index) * len(dna_chunk)
+                right = left + len(dna_chunk)
+                # token_labels = ['0'] # 1st [CLS] token is not snp
+                token_labels = []
+                if target_chr[:2] == "rc":
+                    snp_flag = chr_to_snp_flag[target_chr[2:]]
+                    for token in tokens:
+                        if sum(snp_flag[(right - len(token)) : right]) > 0:
+                            token_labels.append("1")
+                        else:
+                            token_labels.append("0")
+                        right -= len(token)
+                else:
+                    snp_flag = chr_to_snp_flag[target_chr]
+                    for token in tokens:
+                        if sum(snp_flag[left : (left + len(token))]) > 0:
+                            token_labels.append("1")
+                        else:
+                            token_labels.append("0")
+                        left += len(token)
+                # token_labels.append('0') # last [SEP] token is not snp
+                yield (
+                    self.serializer.serialize(tokens),
+                    self.serializer.serialize(token_labels),
                 )
 
     def __getstate__(self):
@@ -118,82 +144,12 @@ class Parquet2LitDataset:
         self.data
 
 
-class Parquet2LitDatasetHiC(Parquet2LitDataset):
-    """Dataset class to read a parquet file and yield a pair of tokenized DNA sequences with HiC contact score."""
-
-    def __iter__(self):
-        for batch in self.data.iter_batches(
-            batch_size=1000,
-            use_threads=False,
-            columns=["dna_chunk1", "dna_chunk2", "hic_contact1"],
-        ):
-            df_dna_hic = batch.to_pandas()
-            for i in range(len(df_dna_hic)):
-                dna_chunk1, dna_chunk2, hic_contact1 = df_dna_hic.iloc[i, :]
-                tokens1 = self.tokenizer.tokenize(dna_chunk1)
-                tokens2 = self.tokenizer.tokenize(dna_chunk2)
-                yield (
-                    self.serializer.serialize(tokens1),
-                    self.serializer.serialize(tokens2),
-                    self.serializer.serialize([str(hic_contact1)]),
-                )
-
-
-class Parquet2LitDatasetInsulation(Parquet2LitDataset):
-    """Dataset class to read a parquet file and yield a pair of tokenized DNA sequences with HiC contact score."""
-
-    def __iter__(self):
-        for batch in self.data.iter_batches(
-            batch_size=1000,
-            use_threads=False,
-            columns=["dna_chunk", "insulation"],
-        ):
-            df_dna_hic = batch.to_pandas()
-            for i in range(len(df_dna_hic)):
-                dna_chunk, insulation = df_dna_hic.iloc[i, :]
-                tokens = self.tokenizer.tokenize(dna_chunk)
-                yield (
-                    self.serializer.serialize(tokens),
-                    self.serializer.serialize([str(insulation)]),
-                )
-
-
-class Parquet2LitDatasetChromatinProfile(Parquet2LitDataset):
-    """Dataset class to read a parquet file and yield a pair of tokenized DNA sequences with 919 class labels coming from three groups: dnase, tf and histone."""
-
-    header = [
-        "dna_chunks",
-        "combined_chromatin_dnase",
-        "combined_chromatin_tf",
-        "combined_chromatin_histone",
-    ]
-
-    def __iter__(self):
-        for batch in self.data.iter_batches(
-            batch_size=1000,
-            use_threads=False,
-            columns=self.header,
-        ):
-            df_dna_chromatin = batch.to_pandas()
-            df_dna_chromatin = df_dna_chromatin.astype(str)
-            assert df_dna_chromatin.shape[1] == 4
-            for i in range(len(df_dna_chromatin)):
-                dna_chunk = df_dna_chromatin.iloc[i, 0]
-                tokens = self.tokenizer.tokenize(dna_chunk)
-                to_return_fncs = [self.serializer.serialize(tokens)] + [
-                    self.serializer.serialize([str(df_dna_chromatin.iloc[i, col_ind])])
-                    for col_ind in range(1, df_dna_chromatin.shape[1])
-                ]
-                yield tuple(to_return_fncs)
-
-
 def convert_parquet_to_litdata(
     input_dir,
     output_dir,
     tokenizer,
     num_workers=4,
     chunk_bytes="128MB",
-    data_source="dnaseq_base",
     use_split=True,
 ):
     """
@@ -218,7 +174,6 @@ def convert_parquet_to_litdata(
                 convert_files,
                 tokenizer=tokenizer,
                 serializer=list_serializer,
-                data_source=data_source,
             ),
             inputs=input_names,
             output_dir=output_dir.as_posix(),
@@ -234,7 +189,6 @@ def convert_parquet_to_litdata(
                 convert_files,
                 tokenizer=tokenizer,
                 serializer=list_serializer,
-                data_source=data_source,
             ),
             inputs=input_names,
             output_dir=(output_dir / split).as_posix(),
@@ -293,27 +247,6 @@ def get_args():
         default="128MB",
     )
     parser.add_argument(
-        "--hic",
-        help="if the dataset is HiC dataset",
-        action=argparse.BooleanOptionalAction,
-        required=False,
-        default=False,
-    )
-    parser.add_argument(
-        "--insulation",
-        help="if the dataset is insulation dataset from HiC",
-        action=argparse.BooleanOptionalAction,
-        required=False,
-        default=False,
-    )
-    parser.add_argument(
-        "--chromatin",
-        help="if the dataset is Chromatin dataset",
-        action=argparse.BooleanOptionalAction,
-        required=False,
-        default=False,
-    )
-    parser.add_argument(
         "--splits",
         help="if the input dir has internal splits",
         action=argparse.BooleanOptionalAction,
@@ -335,21 +268,11 @@ if __name__ == "__main__":
         strip_accents=None,
     )
 
-    if args.hic:
-        data_source = "hic"
-    elif args.insulation:
-        data_source = "insulation"
-    elif args.chromatin:
-        data_source = "chromatin"
-    else:
-        data_source = "dnaseq_base"
-
     convert_parquet_to_litdata(
         input_dir=args.input,
         output_dir=args.output,
         tokenizer=tokenizer,
         num_workers=args.num_workers,
         chunk_bytes=args.chunk_bytes,
-        data_source=data_source,
         use_split=args.splits,
     )

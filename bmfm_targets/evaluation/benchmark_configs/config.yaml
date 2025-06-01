@@ -14,11 +14,26 @@ trainer:
   losses:
     - name: cross_entropy
       label_column_name: ${label_columns[0].label_column_name}
+  # for rda models this should be set to `first_token`, for multitask 'pooling_layer'
+  pooling_method: pooling_layer
+  batch_prediction_behavior: track
 
 track_clearml:
   project_name: "bmfm-targets/evaluate/${checkpoint_name}"
   task_name: "${dataset_name}_cta_ft"
   continue_last_task: False
+
+# to adapt all of the dataset input to the ckpt modify this section
+# in general it should match the pretraining config except for masking settings
+data_module:
+  max_length: 4096
+  batch_size: 4
+  # rda_transform: auto_align
+  log_normalize_transform: true
+  # limit genes is modified per dataset to handle mouse
+  pad_zero_expression_strategy: batch_wise
+  collation_strategy: multitask
+
 
 max_finetuning_epochs: 2
 

@@ -15,6 +15,7 @@ from .training_config import (
     PredictTaskConfig,
     TestTaskConfig,
     InterpretTaskConfig,
+    LoraConfigWrapper,
 )
 from .model_config import (
     SCBertConfig,
@@ -42,4 +43,5 @@ __all__ = [
     "TrainingTaskConfig",
     "TokenizerConfig",
     "PreTrainedEmbeddingConfig",
+    "LoraConfigWrapper",
 ]

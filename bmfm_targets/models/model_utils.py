@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 
 import torch
-from transformers.modeling_outputs import SequenceClassifierOutput
+from transformers.modeling_outputs import (
+    SequenceClassifierOutput,
+)
 from transformers.models.auto import (
     AutoConfig,
     AutoModelForMaskedLM,

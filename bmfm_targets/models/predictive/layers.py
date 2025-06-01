@@ -6,7 +6,7 @@ from functools import partial
 
 import torch
 import torch.utils.checkpoint
-from torch import nn
+from torch import Tensor, nn
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 
@@ -21,6 +21,7 @@ class SCEmbeddingsLayer(nn.Module):
     Attributes
     ----------
         config:  class instance with the configuration to build a new model.
+
     """
 
     def __init__(self, config: SCModelConfigBase):
@@ -30,6 +31,7 @@ class SCEmbeddingsLayer(nn.Module):
         Args:
         ----
             config (SCBertConfig): A SCBertConfig class instance with the configuration to build a new model.
+
         """
         super().__init__()
         self.config = config
@@ -90,8 +92,8 @@ class SCEmbeddingsLayer(nn.Module):
 
     def make_continuous_value_encoder_layer(self, config, field: FieldInfo):
         default_kind = "mlp_with_special_token_embedding"
-        if field.continuous_value_encoder_kwargs is not None:
-            kwargs = {**field.continuous_value_encoder_kwargs}
+        if field.encoder_kwargs is not None:
+            kwargs = {**field.encoder_kwargs}
             kind = kwargs.pop("kind", default_kind)
         else:
             kind = default_kind
@@ -160,6 +162,7 @@ class SCEmbeddingsLayer(nn.Module):
         Returns:
         -------
             torch.Tensor: A torch tensor with shape [max_position_embeddings, hidden_size] containing the sinusoidal embeddings.
+
         """
         position_ids = torch.arange(max_position_embeddings).unsqueeze(1)
         div_term = torch.exp(
@@ -175,7 +178,7 @@ class SCEmbeddingsLayer(nn.Module):
         input_ids: torch.Tensor,
         position_ids: torch.LongTensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
         """
         Forward pass of the embeddings layer.
 
@@ -189,6 +192,7 @@ class SCEmbeddingsLayer(nn.Module):
         Returns:
         -------
             torch.Tensor: A torch tensor with shape [batch_size, _, hidden_size] containing the embeddings.
+
         """
         if inputs_embeds is not None:
             return inputs_embeds
@@ -329,6 +333,8 @@ def make_field_decoder(
 ) -> nn.Module:
     if decode_mode in ("regression", "is_zero"):
         return FieldDecoder(config)
+    elif decode_mode in ("mvc_regression", "mvc_is_zero"):
+        return MVCFieldDecoder(config)
     elif decode_mode == "token_scores":
         if vocab_size == 1:
             raise ValueError(
@@ -354,6 +360,67 @@ class FieldDecoder(nn.Linear):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return super().forward(hidden_states)
+
+
+class MVCFieldDecoder(nn.Module):
+    def __init__(
+        self,
+        config: SCModelConfigBase,
+        architecture: str = "inner product",
+    ):
+        super().__init__()
+
+        self.architecture = architecture
+        self.query_activation_fn = nn.Sigmoid()
+        self.hidden_activation_fn = nn.PReLU()
+
+        if architecture == "inner product":
+            self.gene_to_query = nn.Linear(config.hidden_size, config.hidden_size)
+            self.projection_matrix = nn.Linear(
+                config.hidden_size, config.hidden_size, bias=False
+            )
+
+        elif architecture == "concat query":
+            self.gene_to_query = nn.Linear(config.hidden_size, config.hidden_size)
+            self.fc1 = nn.Linear(
+                config.hidden_size + config.hidden_size, config.hidden_size
+            )
+            self.fc2 = nn.Linear(config.hidden_size, 1)
+
+        elif architecture == "sum query":
+            self.gene_to_query = nn.Linear(config.hidden_size, config.hidden_size)
+            self.fc1 = nn.Linear(
+                config.hidden_size + config.hidden_size, config.hidden_size
+            )
+            self.fc2 = nn.Linear(self.config.hidden_size, 1)  # Final output size 1
+
+        else:
+            raise ValueError(f"Unknown architecture: {architecture}")
+
+    def forward(self, cell_embedding: Tensor, mvc_query_embeddings: Tensor) -> Tensor:
+        query_vectors = self.query_activation_fn(
+            self.gene_to_query(mvc_query_embeddings)
+        )
+
+        if "inner product" in self.architecture:
+            cell_embedding = cell_embedding.unsqueeze(2)
+            return torch.bmm(self.projection_matrix(query_vectors), cell_embedding)
+        elif self.architecture == "concat query":
+            cell_embedding_expanded = cell_embedding.unsqueeze(1).expand(
+                -1, mvc_query_embeddings.size(1), -1
+            )
+            combined = torch.cat([cell_embedding_expanded, query_vectors], dim=2)
+            hidden = self.hidden_activation_fn(self.fc1(combined))
+            return self.fc2(hidden)
+
+        elif self.architecture == "sum query":
+            cell_embedding_expanded = cell_embedding.unsqueeze(1)
+            combined = cell_embedding_expanded + query_vectors
+            hidden = self.hidden_activation_fn(self.fc1(combined))
+            return self.fc2(hidden)
+
+        else:
+            raise ValueError(f"Unknown architecture: {self.architecture}")
 
 
 class LabelDecoder(nn.Module):
@@ -387,15 +454,33 @@ class SCBaseFieldDecoder(nn.Module):
             for decode_mode in field.decode_modes:
                 output_dim = field.vocab_size if decode_mode == "token_scores" else 1
                 field_decoder_name = f"{field.field_name}_{decode_mode}"
+                decoder_kwargs = (
+                    field.decoder_kwargs if field.decoder_kwargs is not None else {}
+                )
                 field_decoder = make_field_decoder(
-                    config, field.field_name, decode_mode, output_dim
+                    config,
+                    field.field_name,
+                    decode_mode,
+                    vocab_size=output_dim,
+                    **decoder_kwargs,
                 )
                 self.field_decoders[field_decoder_name] = field_decoder
 
-    def forward(self, hidden_states: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        pooled_output: torch.Tensor | None = None,
+        mvc_query_embeddings: dict[str, torch.Tensor] | None = None,
+    ) -> dict[str, torch.Tensor]:
         field_logits = {}
         for field_decoder_name, field_decoder in self.field_decoders.items():
-            field_logits[field_decoder_name] = field_decoder(hidden_states)
+            if "mvc" in field_decoder_name:
+                field_name = field_decoder_name.split("_")[0]
+                field_logits[field_decoder_name] = field_decoder(
+                    pooled_output, mvc_query_embeddings[field_name]
+                )
+            else:
+                field_logits[field_decoder_name] = field_decoder(hidden_states)
         return field_logits
 
 
@@ -449,9 +534,14 @@ class SCLMPredictionHead(nn.Module):
         self.transform = SCPredictionHeadTransform(config)
         self.decoder = SCLMFieldDecoder(config)
 
-    def forward(self, hidden_states: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        pooled_output: torch.Tensor | None = None,
+        mvc_query_embeddings: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         hidden_states = self.transform(hidden_states)
-        return self.decoder(hidden_states)
+        return self.decoder(hidden_states, pooled_output, mvc_query_embeddings)
 
 
 class SCSequenceLabelPredictionHead(nn.Module):
@@ -470,8 +560,15 @@ class SCOnlyMLMHead(nn.Module):
         super().__init__()
         self.predictions = SCLMPredictionHead(config)
 
-    def forward(self, sequence_output: torch.Tensor) -> torch.Tensor:
-        prediction_scores = self.predictions(sequence_output)
+    def forward(
+        self,
+        sequence_output: torch.Tensor,
+        pooled_output: torch.Tensor | None = None,
+        mvc_query_embeddings: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        prediction_scores = self.predictions(
+            sequence_output, pooled_output, mvc_query_embeddings
+        )
         return prediction_scores
 
 
@@ -520,8 +617,13 @@ class SCMultiTaskHead(nn.Module):
         self.predictions = SCOnlyMLMHead(config)
         self.label_predictions = SCMultiTaskClassificationHead(config)
 
-    def forward(self, sequence_output, pooled_output):
-        predictions = self.predictions(sequence_output)
+    def forward(
+        self,
+        sequence_output: torch.Tensor,
+        pooled_output: torch.Tensor,
+        mvc_query_embeddings: torch.Tensor | None = None,
+    ):
+        predictions = self.predictions(sequence_output, mvc_query_embeddings)
         predictions.update(self.label_predictions(pooled_output))
         return predictions
 
@@ -548,7 +650,7 @@ class ContinuousValueEncoderWithSpecialTokenEmbeddings(nn.Module):
         self,
         config: SCModelConfigBase,
         field: FieldInfo,
-        zero_as_special_token: bool = False,
+        zero_as_special_token: bool = True,
     ):
         super().__init__()
         self.config = config
@@ -615,33 +717,110 @@ class ScaleAdaptEncoder(nn.Module):
         self,
         config: PretrainedConfig,
         field,
-        n_sin_basis: int,
+        n_sin_basis: int = 48,
         sigmoid_centers: list[float] | None = None,
         sigmoid_orientations: list[float] | None = None,
-        basis_scale: float = 1.0,
-        shift: float = 1.0,
+        basis_scale: float = 1.5,
+        shift: float = 0.0,
         trainable: bool = True,
+        zero_as_special_token: bool = True,
+        generator: torch.Generator | None = None,
     ):
-        super().__init__()
+        """
+        Encodes continuous non-negative values into token-embedding compatible vectors for integration with transformer models.
 
+        This encoder supports both special tokens (like padding, masking) and continuous values. Continuous values are
+        encoded using a combination of sinusoidal basis functions and/or sigmoid functions, then projected to the model's
+        hidden dimension. Special tokens (negative values) are handled through a separate embedding table.
+
+        The encoder can optionally treat zero as a special case, which is useful when zero represents total absence
+        rather than a continuous value near other low values.
+
+        Parameters
+        ----------
+        config : PretrainedConfig
+            Configuration object containing model parameters, including hidden_size and pad_token_id.
+        field
+            Field object representing the data type being encoded, containing information about special tokens.
+        n_sin_basis : int, default=48
+            Number of sine basis functions to use for encoding. If 0, only sigmoid functions will be used.
+            Higher values provide more resolution for distinguishing similar input values.
+        sigmoid_centers : list[float] | None, default=None
+            Centers for sigmoid functions. If None, sigmoid encoding will not be used.
+            Each center value represents a point where the sigmoid function equals 0.5, creating a feature
+            that activates around that value in your data. For example:
+            - To focus on distinguishing low values: use centers like [0.5, 1.0, 2.0]
+            - To focus on a specific range: place multiple centers within that range
+            - For evenly distributed sensitivity: space centers evenly across your expected data range
+        sigmoid_orientations : list[float] | None, default=None
+            Orientation parameters (slopes) for sigmoid functions. Must match the length of sigmoid_centers.
+            These values control the steepness and direction of each sigmoid:
+            - Positive values: Create rising sigmoids (0→1) as x increases past the center
+            - Negative values: Create falling sigmoids (1→0) as x increases past the center
+            - Higher absolute values: Create steeper transitions (more binary-like feature)
+            - Lower absolute values: Create gradual transitions (more smooth, continuous feature)
+            - Typical values range from ±0.5 (gradual) to ±10 (steep)
+        basis_scale : float, default=1.5
+            Scaling factor for the sine basis frequencies. Controls how quickly the encoding oscillates with input values.
+            - Lower values (e.g., 0.01): Better for encoding wide ranges of values with less precision
+            - Higher values (e.g., 0.1): Better for encoding narrow ranges with more precision
+            - Choose based on the expected distribution and range of your input values
+            - When used with `trainable=True` this sets the sigma of the N(0, sigma) as
+            sigma = 2pi * basis_scale, so for sigma ~10 use basis_scale=1.5
+        shift : float, default=0.0
+            Value to subtract from input values before encoding. Useful when your data has a non-zero minimum value.
+            - Set to the minimum expected value in your data to center the encoding around 0
+            - Leave at 0.0 if your data is already appropriately scaled or if minimum values are meaningful
+        trainable : bool, default=False
+            If True, makes the sine basis parameters trainable. Only affects the frequency parameters of the sine basis,
+            not the sigmoid parameters or the projection layer.
+            - Set True when you want the model to learn optimal frequency scales for your data distribution
+            - Set False when you want fixed frequency representations
+        zero_as_special_token : bool, default=True
+            If True, treats zero values as special tokens rather than continuous values.
+            - Set True when zero represents absence or a special state distinct from small values
+            - Set False when zero is part of the continuous spectrum of values
+        generator: torch.Generator, default = None.
+            Warning - Reserved for internal testing. Pass a generator to ensure reproducibility,
+            however, not recommended for use outside of testing, because seeding is managed globally.
+        """
+        super().__init__()
+        self.zero_as_special_token = zero_as_special_token
+        if zero_as_special_token is True:
+            num_special_tokens = field.num_special_tokens + 1
+        else:
+            num_special_tokens = field.num_special_tokens
         self.special_token_embeddings = nn.Embedding(
-            num_embeddings=field.num_special_tokens,
+            num_embeddings=num_special_tokens,
             embedding_dim=config.hidden_size,
-            padding_idx=2,
+            padding_idx=config.pad_token_id,
         )
 
         self.has_sigmoids = self.has_sin_basis = False
         n_sigmoid_centers = len(sigmoid_centers) if sigmoid_centers else 0
 
         if n_sin_basis > 0:
-            basis = [math.pi * 2.0 * basis_scale]
-            for _ in range(n_sin_basis - 1):
-                basis.append(basis[-1] * 2.0)
             if trainable:
+                if generator is None:
+                    generator = torch.default_generator
+                basis = torch.normal(
+                    mean=0,
+                    std=math.pi * 2.0 * basis_scale,
+                    size=(n_sin_basis,),
+                    generator=generator,
+                )
                 self.register_parameter(
                     "basis", param=torch.nn.Parameter(torch.tensor(basis))
                 )
             else:
+                basis = [math.pi * 2.0 * basis_scale]
+                for _ in range(n_sin_basis - 1):
+                    next_freq = basis[-1] * 2.0
+                    if math.isinf(next_freq):
+                        raise ValueError(
+                            "basis overflow, choose a small number for n_sin_basis or switch to trainable=True"
+                        )
+                    basis.append(next_freq)
                 self.register_buffer("basis", torch.tensor(basis))
 
             self.has_sin_basis = True
@@ -662,9 +841,18 @@ class ScaleAdaptEncoder(nn.Module):
     def forward(self, x):
         batch_size, seq_length = x.size(0), x.size(1)
         x = x.reshape(-1)
-        special_token_mask = x < 0
+        if self.zero_as_special_token:
+            special_token_mask = x <= 0
+        else:
+            special_token_mask = x < 0
         special_token_indices = torch.nonzero(special_token_mask).squeeze(1)
         mapped_special_token_values = -(x[special_token_indices].long() + 1)
+        if self.zero_as_special_token:
+            # assign last index to zeros
+            mapped_special_token_values[x[special_token_indices] == 0] = (
+                self.special_token_embeddings.num_embeddings - 1
+            )
+
         special_token_embeds = self.special_token_embeddings(
             mapped_special_token_values
         ).squeeze(1)
@@ -679,8 +867,11 @@ class ScaleAdaptEncoder(nn.Module):
     def encode_cont_values(self, x):
         x = x - self.shift
         x_s = x[..., None]
-        x = x_s * self.basis
-        features = [torch.sin(x), torch.cos(x)] if self.has_sin_basis else []
+        if self.has_sin_basis:
+            x = x_s * self.basis
+            features = [torch.sin(x), torch.cos(x)]
+        else:
+            features = []
         if self.has_sigmoids:
             features.append(
                 torch.sigmoid(x_s * self.sigmoid_orientations - self.sigmoid_centers)

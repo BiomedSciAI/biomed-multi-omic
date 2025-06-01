@@ -47,7 +47,6 @@ class MultiFieldCollator:
             "sequence_classification",
             "language_modeling",
             "multitask",
-            "multilabel",
         ] = "language_modeling",
         label_dict: dict[str, dict[str, int]] | None = None,
         max_length: int | None = None,
@@ -63,7 +62,6 @@ class MultiFieldCollator:
         sequence_dropout_factor: float | int | None = None,
         log_normalize_transform: bool = False,
         rda_transform: Literal["downsample"] | Literal["equal"] | int | None = None,
-        multilabel_str_sep: str = "|",
         map_orthologs: str | None = None,
     ):
         """
@@ -81,7 +79,6 @@ class MultiFieldCollator:
             return_special_tokens_mask (bool, optional): Whether to return special tokens mask. Defaults to True.
             padding (PaddingStrategy, optional): Padding strategy. Defaults to PaddingStrategy.LONGEST. Available options are PaddingStrategy.LONGEST, PaddingStrategy.MAX_LENGTH, PaddingStrategy.DO_NOT_PAD.
             truncation (TruncationStrategy, optional): Truncation strategy. Defaults to TruncationStrategy.ONLY_FIRST. Available options are TruncationStrategy.ONLY_FIRST, TruncationStrategy.ONLY_SECOND, True, TruncationStrategy.LONGEST_SECOND, TruncationStrategy.DO_NOT_TRUNCATE.
-            multilabel_str_sep (str="|"): The string separating lables of a multilabel class label.
 
         Raises:
         ------
@@ -121,7 +118,6 @@ class MultiFieldCollator:
         self.log_normalize_transform = log_normalize_transform
         self.collation_strategy = collation_strategy
         self.label_dict = label_dict
-        self.multilabel_str_sep = multilabel_str_sep
         self.map_orthologs = map_orthologs
         self.__post__init__()
 
@@ -242,6 +238,7 @@ class MultiFieldCollator:
                 to_species="hsapiens",
                 id_type="gene_name",
             )
+            mapping.update({"[S]": "[S]", "[T]": "[T]"})
             transforms.append(
                 partial(
                     sample_transforms.field_remap,
@@ -256,6 +253,7 @@ class MultiFieldCollator:
                 to_species="mmusculus",
                 id_type="gene_name",
             )
+            mapping.update({"[S]": "[S]", "[T]": "[T]"})
             transforms.append(
                 partial(
                     sample_transforms.field_remap,
@@ -329,46 +327,77 @@ class MultiFieldCollator:
                     batch[field.field_name]["input_ids"],
                 )
 
-    def _read_label_ids(
+    def read_label_ids(
         self, examples: list[MultiFieldInstance]
-    ) -> torch.Tensor | dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
+        """
+        Load labels for MultiFieldInstances.
+
+        Handles regression, classification, and multilabel settings.
+
+        Uses -100 for missing, silent, or unknown labels.
+        """
         labels = {}
+        if not examples:
+            return labels
 
-        def _lookup_id(mfi, label, single_label_dict):
-            # only one label means regression and labels should not be converted
-            if len(single_label_dict) <= 1:
-                return mfi.metadata[label]
-            label_val = str(mfi.metadata[label])
-            if self.collation_strategy == "multilabel":
-                # label_val is pipe delimeted...
-                multilabels = []
-                for label in label_val.split(self.multilabel_str_sep):
-                    if label in single_label_dict.keys():
-                        multilabels.append(single_label_dict[label])
-                multilabels = set(multilabels)
-                # Now convert the multilabels to one-hot-coding....
-                one_hot_coding = [
-                    1.0 if i in multilabels else 0.0
-                    for i in range(len(single_label_dict))
-                ]
-                return one_hot_coding
-            else:
-                # nan is mapped to standard `ignore_index` of -100
-                if label_val == "nan":
-                    return -100
-                return single_label_dict[label_val]
-
-        for label in self.label_columns:
-            label_column_name = label.label_column_name
-            single_label_dict = self.label_dict[label_column_name]
-            if examples[0].metadata and label_column_name in examples[0].metadata:
-                id_list = [
-                    _lookup_id(mfi, label_column_name, single_label_dict)
-                    for mfi in examples
-                ]
-                labels[label_column_name] = torch.tensor(id_list)
+        for label_info in self.label_columns:
+            col = label_info.label_column_name
+            label_dict = self.label_dict.get(col, {})
+            if not label_dict:
+                logger.warning(f"Label dict missing for label_column_name {col}")
+            id_list = [
+                self._label_id_from_example(
+                    example,
+                    label_info,
+                    label_dict,
+                )
+                for example in examples
+            ]
+            labels[col] = torch.tensor(id_list)
 
         return labels
+
+    @staticmethod
+    def _label_id_from_example(
+        example: MultiFieldInstance,
+        label_info: LabelColumnInfo,
+        single_label_dict: dict[str, int],
+    ) -> int | float | list[float]:
+        """
+        Return label ID (or one-hot list) for a single example and label column.
+
+        - Handles regression, single-label, and multilabel classification.
+        - Returns -100 for missing, silent, or unknown labels.
+        """
+        col = label_info.label_column_name
+        val = example.metadata.get(col, "nan")
+        val_str = str(val)
+
+        # Merge standard and custom silent values
+        silent_values = {"nan"}
+        if label_info.silent_label_values:
+            silent_values.update(label_info.silent_label_values)
+
+        if val_str in silent_values:
+            return -100
+
+        if label_info.is_regression_label:
+            return val
+
+        if label_info.is_multilabel:
+            indices = {
+                single_label_dict[label]
+                for label in val_str.split(label_info.multilabel_str_sep)
+                if label in single_label_dict
+            }
+            return [1.0 if i in indices else 0.0 for i in range(len(single_label_dict))]
+
+        if val_str in single_label_dict:
+            return single_label_dict[val_str]
+
+        logger.warning(f"Unknown label '{val_str}' for column '{col}', using -100.")
+        return -100
 
     def __call__(
         self,
@@ -403,13 +432,12 @@ class MultiFieldCollator:
             batch["cell_names"] = [mfi.metadata.get("cell_name") for mfi in examples]
         # TODO: Here we assume that the first multi-field instance of the pair is the one that contains the labels
         if (
-            self.collation_strategy
-            in ["multitask", "sequence_classification", "multilabel"]
+            self.collation_strategy in ["multitask", "sequence_classification"]
             and self.label_dict is not None
             and self.label_columns is not None
             and len(self.label_columns) > 0
         ):
-            batch["label_ids"] = self._read_label_ids(examples)
+            batch["label_ids"] = self.read_label_ids(examples)
 
         self._encode_continuous_value_special_tokens(batch, self.fields)
         if self.rda_transform:
@@ -480,7 +508,7 @@ class MultiFieldCollator:
             else:
                 return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
 
-        elif self.collation_strategy in ["sequence_classification", "multilabel"]:
+        elif self.collation_strategy == "sequence_classification":
             return_dict = {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,

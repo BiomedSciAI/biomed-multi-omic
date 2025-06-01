@@ -7,3 +7,4 @@ output_embeddings: true
 callbacks:
   - _target_: bmfm_targets.training.callbacks.BatchIntegrationCallback
     batch_column_name: batch
+    counts_column_name: total_counts

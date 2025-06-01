@@ -128,26 +128,52 @@ class FieldInfo:
         decode_modes (list[str]): Output modes to use when masking options are
             "token_scores" or "regression"
 
-        continuous_value_encoder_kwargs: dict: parameters for continuous value encoder
-        There are three types of the encoder 1) mlp_with_special_tokens, 2) ScaleAdapt and 3) mlp
-        mlp is a default encoder and does not require continuous_value_encoder_kwarg.
-        An example of parameters for ScaleAdapt,
-            continuous_value_encoder_kwargs
-                kind: scale_adapt,
-                n_sin_basis: 11,
-                shift: 0.0,
-                basis_scale: 0.1,
-                sigmoid_centers: [0.0],
-                sigmoid_orientations: [1.0],
-                trainable: False,
-        n_sin_basis is a number of (sin, cos) pairs in ScaleAdapt (default is 0)
-        shift is a shift such as x-shift is an input (default is 0)
-        basis_scale is a normalization scale for sin basis, such as
-        sin(x * basis_scale * ki), cos(x * basis_scale * ki), not applied to sigmoids (default is 1.0)
-        sigmoids are placed to sigmoid centers and their orientations are defined by sigmoid_orientations -1.0 or 1.0  (default is None, None)
-        trainable is make sin basis as a trainable layer (default is True)
-        For mlp_with_special_tokens there is an option `zero_as_special_token` to treat
-        zero as a special token.
+        encoder_kwargs: dict
+            Parameters for the continuous value encoder. There are three types of encoders available:
+
+            1) "scale_adapt" (default): A frequency-based encoder using sinusoidal and/or sigmoid functions.
+            Parameters include:
+            - kind: "scale_adapt" - Specifies this encoder type
+            - n_sin_basis: int, default=24
+                Number of sinusoidal (sin, cos) basis function pairs to use.
+                Higher values provide more resolution for distinguishing similar input values.
+            - basis_scale: float, default=0.1
+                Scaling factor for sine basis frequencies. Eg
+                sin(x * basis_scale * ki), cos(x * basis_scale * ki),
+                not applied to sigmoids (default is 1.0)
+                - Lower values (e.g., 0.05): Better for encoding wide ranges of values
+                - Higher values (e.g., 0.5): Better for encoding narrow ranges with high precision
+            - shift: float, default=0.0
+                Value subtracted from inputs before encoding.
+                Set to the minimum expected value in your data to center the encoding around 0.
+            - sigmoid_centers: list[float], default=None
+                Center points for sigmoid functions where the sigmoid equals 0.5.
+                Example: [0.5, 2.0, 5.0] creates features sensitive to these specific values.
+            - sigmoid_orientations: list[float], default=None
+                Controls the direction and steepness of each sigmoid function.
+                Must match the length of sigmoid_centers.
+            - trainable: bool, default=True
+                If True, makes the sine basis parameters learnable during training.
+
+            2) "mlp": A simple MLP encoder that does not require additional parameters.
+
+            3) "mlp_with_special_tokens": An MLP encoder with special token handling.
+            Parameters include:
+            - kind: "mlp_with_special_tokens" - Specifies this encoder type
+            - zero_as_special_token: bool
+                If True, treats zero values as special tokens rather than continuous values.
+
+            An example of parameters for ScaleAdapt:
+            continuous_value_encoder_kwargs:
+                kind: scale_adapt
+                n_sin_basis: 11
+                shift: 0.0
+                basis_scale: 0.1
+                sigmoid_centers: [0.0]
+                sigmoid_orientations: [1.0]
+                trainable: False
+
+
     """
 
     field_name: str
@@ -159,7 +185,8 @@ class FieldInfo:
     decode_modes: list[str] = field(default_factory=lambda: ["token_scores"])
     tokenization_strategy: str = "tokenize"
     num_special_tokens: int = 0
-    continuous_value_encoder_kwargs: dict | None = None
+    encoder_kwargs: dict | None = None
+    decoder_kwargs: dict | None = None
 
     def update_vocab_size(self, multifield_tokenizer):
         self.vocab_size = multifield_tokenizer.field_vocab_size(self.field_name)
@@ -216,6 +243,9 @@ class LabelColumnInfo:
             Defaults to None.
         n_unique_values (Optional[int], optional): Number of unique labels. Required for classification
             tasks, can remain None for regression tasks.
+        silent_label_values (Optional[list]): label values to be silently overlooked during training
+            these label values will be set to -100 when passed to the model and will therefore not
+            affect training. Useful for datasets that contain "Unknown" as a label value or similar.
 
     Attributes:
     ----------
@@ -231,9 +261,12 @@ class LabelColumnInfo:
     task_group: str | None = None
     is_stratification_label: bool = False
     is_regression_label: bool = False
+    is_multilabel: bool = False
     classifier_depth: int = 1
     gradient_reversal_coefficient: float | None = None
     n_unique_values: int | None = None
+    silent_label_values: list[str] | None = None
+    multilabel_str_sep: str = "|"
 
     def __setstate__(self, state):
         # Handle legacy field name "output_size"

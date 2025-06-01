@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os
 from pathlib import Path
 
@@ -12,6 +13,86 @@ from bmfm_targets.datasets.SNPdb.tabix_converter import (
     sample_variant,
 )
 
+SNPDB_RESOURCES_PATH = "/dccstor/bmfm-targets/data/omics/genome/snpdb/raw/resources/"
+fasta_path = SNPDB_RESOURCES_PATH + "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
+variation_matrix_path = (
+    "/dccstor/bmfm-targets/data/omics/genome/snpdb/raw/matrix_snp_probability/"
+)
+
+dna_to_complement = {
+    "A": "T",
+    "C": "G",
+    "G": "C",
+    "T": "A",
+    "N": "N",
+}
+
+
+def fixed_distance_sample_hic_contact_chunks(
+    sequence: str,
+    hic_path: str | Path,
+    output_path: str | Path,
+    target_chr="chr22",
+    hic_resolution=1000,
+    stride=1,
+    complete_chunk=False,
+    exclude_N_islands=True,
+    binarize_label=True,
+):
+    """
+    Read a Hi-C file and DNA sequence, sequentially sample pairs of DNA chunks, and their contact scores from Hi-C.
+
+    Args:
+    ----
+        sequence (str): DNA sequence (variation-encoded or reference) of the target chromosome
+        hic_path (str): input Hi-C file
+        output_path (str): output file
+        target_chr (str): the target chromosome to be processed
+        hic_resolution (int): the basic unit of Hi-C contact
+        stride (int): stride * resolution is the distances between chunks; stride = 1 means a pair of connected chunks
+        complete_chunk (bool): if true, the pair of chunks and sequences between them will be combined as one complete chunks. For example, when stride = 3 and input [chunk1][chunk2][chunk3][chunk4], it returns [[chunk1], [chunk4], hic_contact] if complete_chunk = False, it returns [[chunk1][chunk2][chunk3][chunk4], hic_contact] if complete_chunk = True
+        exclude_N_islands (bool): if all-N chunks will be excluded or not
+
+    Returns:
+    -------
+        Number of samples and the total number of contacts
+        (the sample of DNA chunks and pairwise contact scores will be written in the output file).
+    """
+    hic = hicstraw.HiCFile(hic_path)
+    mzd = hic.getMatrixZoomData(
+        target_chr[3:], target_chr[3:], "oe", "KR", "BP", hic_resolution
+    )
+    sequence_len = len(sequence)
+    number_of_samples = 0
+    number_of_contacts = 0
+    with open(output_path, "w") as f:
+        for left in range(0, sequence_len - hic_resolution * stride, hic_resolution):
+            ## for the last chunk, hicstraw return 0 if out of range; the return sequence could be shorter
+            right = left + hic_resolution * stride
+            if complete_chunk:
+                dna_chunks = [sequence[left : (right + hic_resolution)]]
+            else:
+                dna_chunks = [
+                    sequence[x : (x + hic_resolution)]
+                    for x in range(
+                        left, right + hic_resolution, hic_resolution * stride
+                    )
+                ]
+            nucleotide_set = [list(set(x)) for x in dna_chunks]
+            nucleotide_set = {x for xx in nucleotide_set for x in xx}
+            if exclude_N_islands and (nucleotide_set == {"N"}):
+                continue
+            else:
+                label = np.array(mzd.getRecordsAsMatrix(left, left, right, right)[0, 0])
+                number_of_samples += 1
+                number_of_contacts += label > 0
+                if binarize_label:
+                    label = [(label != 0).astype("int").astype("str")]
+                else:
+                    label = [label.round(2).astype("str")]
+                f.write(",".join(dna_chunks + label) + "\n")
+    return number_of_samples, number_of_contacts
+
 
 def sequential_sample_hic_contact_chunks(
     sequence: str,
@@ -20,6 +101,8 @@ def sequential_sample_hic_contact_chunks(
     target_chr="chr22",
     hic_resolution=1000,
     number_of_chunks=10,
+    exclude_N_islands=True,
+    binarize_label=True,
 ):
     """
     Read a Hi-C file and DNA sequence, sequentially create samples of multiple DNA chunks separated by "#", and their pairwise contact scores from Hi-C.
@@ -152,6 +235,46 @@ def random_sample_hic_contact_chunks(
     return number_of_samples, number_of_contacts
 
 
+def concatenate_hic_contact_chunks(
+    input_path: str | Path,
+    output_path: str | Path,
+    augmentation=False,
+):
+    """
+    Concatenate DNA chunks if they are in contact based on HiC.
+    The input samples are pre-generated from HiC. With augmentation, it generates 7 versions:
+    rc = reverse complement; r = reverse only
+    (1) seq1 + seq2
+    (2) seq1_r + seq2
+    (3) seq1 + seq2_r
+    (4) seq1_r + seq2_r
+    (5) seq1_rc + seq2
+    (6) seq1 + seq2_rc
+    (7) seq1_rc + seq1_rc
+    There could be other augmentations to be added including seq1 + seq1, random shifting seq1 and seq2.
+    """
+    os.makedirs(output_path, exist_ok=True)
+    for input_file in sorted(glob.glob(os.path.join(input_path + "*"))):
+        output_file = open(os.path.join(output_path, input_file.split("/")[-1]), "w")
+        with open(input_file) as f:
+            for line in f:
+                seq1, seq2, label = line.strip().split(",")
+                if label == "1":
+                    output_file.write(seq1 + seq2 + "\n")
+                    if augmentation:
+                        seq1_r = seq1[::-1]
+                        seq2_r = seq2[::-1]
+                        seq1_rc = "".join([dna_to_complement[x] for x in seq1_r])
+                        seq2_rc = "".join([dna_to_complement[x] for x in seq2_r])
+                        output_file.write(seq1_r + seq2 + "\n")
+                        output_file.write(seq1 + seq2_r + "\n")
+                        output_file.write(seq1_r + seq2_r + "\n")
+                        output_file.write(seq1_rc + seq2 + "\n")
+                        output_file.write(seq1 + seq2_rc + "\n")
+                        output_file.write(seq1_rc + seq2_rc + "\n")
+        output_file.close()
+
+
 def cut_sequence_by_tad_bin(sequence, target_chr, tad_path, hic_resolution=1000):
     df_tad = pd.read_csv(tad_path, header=None)
     df_tad.columns = ["chromosome", "start", "end"]
@@ -170,6 +293,13 @@ def cut_sequence_by_tad_bin(sequence, target_chr, tad_path, hic_resolution=1000)
 
 def get_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--sample_strategy",
+        help="sample DNA chunks sequentially or randomly",
+        type=str,
+        required=False,
+        default="fixed_distance",
+    )
     parser.add_argument(
         "-chr",
         "--chromosome",
@@ -200,11 +330,25 @@ def get_args():
         default=10,
     )
     parser.add_argument(
-        "--sample_strategy",
-        help="sample DNA chunks sequentially or randomly",
-        type=str,
+        "--stride",
+        help="The stride for fixed distance sampling",
+        type=int,
         required=False,
-        default="sequential",
+        default=1,
+    )
+    parser.add_argument(
+        "--complete_chunk",
+        help="if return a single long chunk where the pairs of chunks are at both end",
+        action=argparse.BooleanOptionalAction,
+        required=False,
+        default=False,
+    )
+    parser.add_argument(
+        "--binarize_label",
+        help="if binarize the label into a classification problem",
+        action=argparse.BooleanOptionalAction,
+        required=False,
+        default=True,
     )
     parser.add_argument(
         "--process_ref_genome",
@@ -212,6 +356,13 @@ def get_args():
         action=argparse.BooleanOptionalAction,
         required=False,
         default=False,
+    )
+    parser.add_argument(
+        "--process_snp_aware_genome",
+        help="create samples for the SNP-aware genome",
+        action=argparse.BooleanOptionalAction,
+        required=False,
+        default=True,
     )
     parser.add_argument(
         "--output_variation_biallele_path",
@@ -238,24 +389,71 @@ def get_args():
     return args
 
 
-def main(args):
-    SNPDB_RESOURCES_PATH = (
-        "/dccstor/bmfm-targets/data/omics/genome/snpdb/raw/resources/"
-    )
-    fasta_path = (
-        SNPDB_RESOURCES_PATH + "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
-    )
-    variation_matrix_path = (
-        "/dccstor/bmfm-targets/data/omics/genome/snpdb/raw/matrix_snp_probability/"
-    )
+def main_fixed_distance(args):
+    chromosome = args.chromosome
+    hic_resolution = args.hic_resolution
+    stride = args.stride
+    hic_path = args.hic_path
+    ## 1. reference genome
+    if args.process_ref_genome:
+        output_path = args.output_reference_genome_path
+        os.makedirs(output_path, exist_ok=True)
+        chr_to_seq, _ = extract_chr_seq_and_len(fasta_path, ">")
+        sequence = chr_to_seq[chromosome]
+        (
+            number_of_samples,
+            number_of_contacts,
+        ) = fixed_distance_sample_hic_contact_chunks(
+            sequence,
+            hic_path,
+            output_path + "sample_" + chromosome + ".txt",
+            target_chr=chromosome,
+            hic_resolution=hic_resolution,
+            stride=stride,
+            complete_chunk=args.complete_chunk,
+            exclude_N_islands=True,
+            binarize_label=args.binarize_label,
+        )
+        print(
+            f"stride={stride} {chromosome} has {number_of_samples} samples and {number_of_contacts} non-zero contacts ({number_of_contacts/number_of_samples*100:.2f}%)"
+        )
+    ## 2. biallele encoded genome
+    if args.process_snp_aware_genome:
+        output_path = args.output_variation_biallele_path
+        os.makedirs(output_path, exist_ok=True)
+        # load the variation sparse matrix
+        snp_probability_matrix = sparse.load_npz(
+            variation_matrix_path + "snp_prob_" + chromosome + ".npz"
+        )
+        # sample and encode variants in the biallele fashion
+        sequence = sample_variant(
+            snp_probability_matrix,
+            replacement=False,
+        )
+        (
+            number_of_samples,
+            number_of_contacts,
+        ) = fixed_distance_sample_hic_contact_chunks(
+            sequence,
+            hic_path,
+            output_path + "sample_" + chromosome + ".txt",
+            target_chr=chromosome,
+            hic_resolution=hic_resolution,
+            stride=stride,
+            complete_chunk=args.complete_chunk,
+            exclude_N_islands=True,
+            binarize_label=args.binarize_label,
+        )
+        print(
+            f"stride={stride} {chromosome} has {number_of_samples} samples and {number_of_contacts} non-zero contacts ({number_of_contacts/number_of_samples*100:.2f}%)"
+        )
+
+
+def main_random(args):
     chromosome = args.chromosome
     hic_resolution = args.hic_resolution
     number_of_chunks = args.number_of_chunks
-    assert args.sample_strategy in ["sequential", "random"]
-    if args.sample_strategy == "sequential":
-        sample_function = sequential_sample_hic_contact_chunks
-    elif args.sample_strategy == "random":
-        sample_function = random_sample_hic_contact_chunks
+    sample_function = random_sample_hic_contact_chunks
     # load the variation sparse matrix
     snp_probability_matrix = sparse.load_npz(
         variation_matrix_path + "snp_prob_" + chromosome + ".npz"
@@ -275,7 +473,6 @@ def main(args):
             tad_path=args.tad_path,
             hic_resolution=hic_resolution,
         )
-
     else:
         sub_seqs = [encoded_seq]
         starts = [0]
@@ -355,4 +552,9 @@ def main(args):
 
 if __name__ == "__main__":
     args = get_args()
-    main(args)
+    assert args.sample_strategy in ["random", "fixed_distance"]
+    ## TODO support sequential sampling
+    if args.sample_strategy == "random":
+        main_random(args)
+    else:
+        main_fixed_distance(args)

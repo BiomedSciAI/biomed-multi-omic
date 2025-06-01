@@ -1,16 +1,9 @@
 import inspect
 import logging
-from collections.abc import Mapping
-from itertools import islice
-from typing import Any
 
-import pytorch_lightning as pl
-import torch
 from litdata import CombinedStreamingDataset, StreamingDataLoader, StreamingDataset
 
 from bmfm_targets.training.data_module import DataModule
-
-from .serialization import deserialize_dataloader_states, serialize_dataloader_states
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +22,6 @@ class StreamingDataModule(DataModule):
         max_length (int, optional): Maximum length of input sequences. Defaults to 512.
         padding (PaddingStrategy, optional): Padding strategy. Defaults to True. Available options: PaddingStrategy.MAX_LENGTH, PaddingStrategy.LONGEST.
         truncation (TruncationStrategy, optional): Truncation strategy. Defaults to TruncationStrategy.ONLY_FIRST. Available options: TruncationStrategy.ONLY_FIRST, TruncationStrategy.ONLY_SECOND, TruncationStrategy.LONGEST_FIRST, TruncationStrategy.LONGEST_SECOND.
-        save_state (bool): flag to save state of the dataloader into checkpoint
-        checkpoint (str: None): File name of checkpoint to laod the state from
     """
 
     state_entry_name = "datamodule_state"
@@ -39,21 +30,14 @@ class StreamingDataModule(DataModule):
     def __init__(
         self,
         *args,
-        save_state: bool = False,
-        checkpoint: str | None = None,
-        limit_dataset_batches: int | Mapping[str, int] | None = None,
         **kwargs,
     ):
         if "limit_dataset_samples" in kwargs:
             raise ValueError(
-                "Streaming data module does not support limit_dataset_samples, use limit_dataset_batches instead."
+                "Streaming data module does not support limit_dataset_samples, use task's limit_{train,val,test}_batches"
             )
 
         super().__init__(*args, **kwargs)
-        self.save_state = save_state
-        self.checkpoint = checkpoint
-        self.requires_distributed = True
-        self.limit_dataset_batches = limit_dataset_batches
 
     def prepare_data(self) -> None:
         return
@@ -125,23 +109,6 @@ class StreamingDataModule(DataModule):
                 [self.train_dataset, self.dev_dataset]
             )
 
-    def get_dataloader_state_from_checkpoint(self):
-        if not self.checkpoint:
-            return None
-        state = torch.load(self.checkpoint, weights_only=False)
-        state = deserialize_dataloader_states(state[self.state_entry_name])
-        return state
-
-    def get_trainer_callbacks(self) -> list:
-        callbacks = super().get_trainer_callbacks()
-        if self.save_state:
-            callback = SaveStateCallback(self)
-            callbacks.append(callback)
-        return callbacks
-
-    def get_train_dataloader_state(self) -> dict:
-        return self._train_dataloader.state_dict()
-
     def train_dataloader(self) -> StreamingDataLoader:
         """
         Returns a DataLoader for training.
@@ -156,9 +123,6 @@ class StreamingDataModule(DataModule):
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
         )
-        state = self.get_dataloader_state_from_checkpoint()
-        if state:
-            self._train_dataloader.load_state_dict(state)
         return self._train_dataloader
 
     def val_dataloader(self) -> StreamingDataLoader:
@@ -174,12 +138,8 @@ class StreamingDataModule(DataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
-            shuffle=True,
         )
-        if self._dataset_batch_limit("dev"):
-            return LimitBatchDataloader(dataloader, self._dataset_batch_limit("dev"))
-        else:
-            return dataloader
+        return dataloader
 
     def test_dataloader(self) -> StreamingDataLoader:
         """
@@ -195,35 +155,3 @@ class StreamingDataModule(DataModule):
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
         )
-
-    def _dataset_batch_limit(self, dataset_split):
-        if isinstance(self.limit_dataset_batches, Mapping):
-            return self.limit_dataset_batches.get(dataset_split, None)
-        return self.limit_dataset_batches
-
-
-class SaveStateCallback(pl.Callback):
-    def __init__(self, datamodule: StreamingDataModule) -> None:
-        super().__init__()
-        self.datamodule = datamodule
-
-    def on_save_checkpoint(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-        checkpoint: dict[str, Any],
-    ) -> None:
-        state = self.datamodule.get_train_dataloader_state()
-        state = serialize_dataloader_states(state, pl_module.device)
-        checkpoint[StreamingDataModule.state_entry_name] = state
-
-
-class LimitBatchDataloader:
-    """Similar to itertools batched iterator but splits an iterator into a chain of iterators."""
-
-    def __init__(self, base_dataloader, limit_batches):
-        self.base_dataloader = base_dataloader
-        self.limit_batches = limit_batches
-
-    def __iter__(self):
-        return iter(islice(self.base_dataloader, self.limit_batches))

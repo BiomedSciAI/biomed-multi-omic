@@ -63,8 +63,6 @@ class BaseRNAExpressionDataset(Dataset):
             processed_data_source: AnnData | str = either an AnnData object that has been processed
                 or the path to such an h5ad file
             split (str): Split to use. Must be one of train, dev, test or None to get all data.
-            transform_datasets (bool, optional): Whether to apply the transforms to the datasets.
-            transforms (list[dict] | None, optional): List of transforms to be applied to the datasets.
             label_dict_path: str | None = None
             split_column_name: str | None = None, column name where split is stored. If None,
                 a new split column with name `split_stratified_{label}` where label is the

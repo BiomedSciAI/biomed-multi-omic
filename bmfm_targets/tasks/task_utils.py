@@ -271,19 +271,11 @@ def train(
         getattr(pl_trainer, "callbacks", None) or []
     ) + pl_data_module.get_trainer_callbacks()
 
-    if pl_data_module.requires_distributed:
-        pl_trainer.fit(
-            model=pl_module,
-            train_dataloaders=pl_data_module,
-            ckpt_path=checkpoint_path,
-        )
-    else:
-        pl_trainer.fit(
-            model=pl_module,
-            train_dataloaders=pl_data_module.train_dataloader(),
-            val_dataloaders=pl_data_module.val_dataloader(),
-            ckpt_path=checkpoint_path,
-        )
+    pl_trainer.fit(
+        model=pl_module,
+        datamodule=pl_data_module,
+        ckpt_path=checkpoint_path,
+    )
 
 
 def test(

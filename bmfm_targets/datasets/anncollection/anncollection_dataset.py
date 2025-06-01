@@ -34,7 +34,7 @@ class AnnCollectionDataset(StreamingDataset):
         label_dict_path: str | None = None,
         label_columns: list[str] | None = None,
         regression_label_columns: list[str] | None = None,
-        **kargs,
+        **kwargs,
     ):
         """
         Args:
@@ -70,7 +70,7 @@ class AnnCollectionDataset(StreamingDataset):
                 regression_label_columns=regression_label_columns,
             )
         )
-        super().__init__(str(index_dir), item_loader=item_loader, **kargs)
+        super().__init__(str(index_dir), item_loader=item_loader, **kwargs)
         self.HAS_LABELS = not _no_labels
         if self.HAS_LABELS:
             self.label_dict_path = label_dict_path
@@ -159,7 +159,7 @@ class AnnDataItemLoader(BaseItemLoader):
         index_dir: str,
         expose_zeros: str | None,
         *args,
-        **kargs,
+        **kwargs,
     ):
         self.dataset_paths = dataset_paths
         self.index_dir = index_dir
@@ -255,14 +255,14 @@ class AnnDataItemLoaderWithLabels(AnnDataItemLoader):
         label_columns: list[str] | None = None,
         regression_label_columns: list[str] | None = None,
         *args,
-        **kargs,
+        **kwargs,
     ):
         super().__init__(
             dataset_paths=dataset_paths,
             index_dir=index_dir,
             expose_zeros=expose_zeros,
             *args,
-            **kargs,
+            **kwargs,
         )
         self.label_dict_path = label_dict_path
         self.label_columns = label_columns if label_columns else []

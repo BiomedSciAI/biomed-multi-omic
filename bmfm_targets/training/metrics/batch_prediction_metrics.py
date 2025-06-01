@@ -184,7 +184,7 @@ def concat_label_loss_batch_tensors(
 
 
 def field_predictions_df_columns(fields, this_field, modeling_strategy):
-    one_dim_decode_modes = ["regression", "is_zero"]
+    one_dim_decode_modes = ["regression", "is_zero", "mvc_regression", "mvc_is_zero"]
     input_field_names = [f.field_name for f in fields if f.is_input]
     field_column_map = {
         "mlm": {"genes": "gene_id", "expressions": "input_expressions"},
@@ -233,6 +233,7 @@ def get_gene_metrics_from_gene_errors(gene_level_err: pd.DataFrame):
 
 def concat_batch_tensors(batch, outputs, predictions, loss_task):
     output_key = loss_task.output_key
+    metric_key = loss_task.metric_key
     from .loss_handling import FieldLossTask, LabelLossTask
 
     if isinstance(loss_task, LabelLossTask):
@@ -240,7 +241,7 @@ def concat_batch_tensors(batch, outputs, predictions, loss_task):
         batch_tensors = (
             concat_label_loss_batch_tensors(
                 input_ids=batch["input_ids"],
-                predictions=predictions[output_key],
+                predictions=predictions[metric_key],
                 labels=batch["labels"][output_key],
                 **logits_to_record,
             )
@@ -256,7 +257,7 @@ def concat_batch_tensors(batch, outputs, predictions, loss_task):
         batch_tensors = (
             concat_field_loss_batch_tensors(
                 input_ids=batch["input_ids"],
-                predictions=predictions[output_key],
+                predictions=predictions[metric_key],
                 labels=batch["labels"][output_key],
                 **logits_to_record,
             )
