@@ -1,4 +1,4 @@
-# biomed multi omics
+# biomed-multi-omic
 
 Biomedical foundational models for omics data.
 This package supports the development of foundation models for scRNA or for DNA data.
@@ -41,7 +41,12 @@ For more options see [run](./run/README.md).
 - WCED+Multitask [ibm-research/biomed.rna.bert.110m.wced.multitask.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.wced.multitask.v1)
 - WCED 10 pct [ibm-research/biomed.rna.bert.110m.wced.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.wced.v1)
 
-For details on how the models were trained, please refer to [the preprint](https://arxiv.org/abs/2506.14861).
+For details on how the models were trained, please refer to [the BMFM-RNA preprint](https://arxiv.org/abs/2506.14861).
+
+## RNA processing overview
+
+![Diagram of package flow for RNA model building](./docs/images/package_diagram.png)
+For more details, check out the [the BMFM-RNA preprint](https://arxiv.org/abs/2506.14861)..
 
 ## Credits
 
