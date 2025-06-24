@@ -13,4 +13,4 @@ layer_norm_eps: 1.0e-12
 pad_token_id: 0
 use_cache: true
 classifier_dropout: 0.1
-checkpoint: null
+checkpoint: ${checkpoint}

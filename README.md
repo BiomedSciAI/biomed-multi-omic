@@ -1,37 +1,13 @@
 # biomed multi omics
 
 Biomedical foundational models for omics data.
+This package supports the development of foundation models for scRNA or for DNA data.
+For details see the preprints:
 
-Instructions for installing and running the pre-training and fine-tuning tasks are available in their respective directories.
+- BMFM-RNA: An Open Framework for Building and Evaluating Transcriptomic Foundation Models, Bharath Dandala, Michael M. Danziger, Ella Barkan, Tanwi Biswas, Viatcheslav Gurev, Jianying Hu, Matthew Madgwick, Akira Koseki, Tal Kozlovski, Michal Rosen-Zvi, Yishai Shimoni, Ching-Huei Tsou, [arXiv:2506.14861](https://arxiv.org/abs/2506.14861)
+- DNA preprint to be released soon
 
-
-## Environment
-
-Code has been tested with Python 3.10, 3.11 and 3.12 only.
-Using a virtual environment for all commands in this guide is strongly recommended.
-Both conda and vanilla venv environments are supported.
-
-```sh
-# create a conda enviornment "bmfm" with Python version 3.11
-conda create -n bmfm python=3.11
-
-# activate the enviornment before installing new packages
-conda activate bmfm
-```
-
-## Installation
-
-### For non-developers
-The following command will install the repository as a Python package, and also attempt to install dependencies speficied in the setup.py file or the pyproject.toml. Note that the command does not clone the repositpry.
-
-```sh
-# assuming you have an SSH key set up on GitHub
-# this
-pip install "git@github.com:BiomedSciAI/biomed-multi-omic.git"
-```
-
-### For developers
-
+## Install
 
 ```sh
 # Clone the repository
@@ -39,22 +15,34 @@ git clone git@github.com:BiomedSciAI/biomed-multi-omic.git
 
 # Change directory to the root of the cloned repository
 cd biomed-multi-omics
-
-pip install --upgrade pre-commit
-
-# install from the local directory
-pip install -e ."[test]"
-
-pre-commit install
+# recommended venv setup (vanilla pip and conda also work)
+uv venv .venv -p3.12
+source ./.venv/bin/activate
+uv pip install -e .
 ```
 
-To verify that your installation works, try running the tests:
-```sh
-pytest bmfm_targets
-```
-The tests may take a long time to execute (~35 min on some machines, ~15 min on Travis).
-If the tests do not all pass, please open an issue in this repo.
+## Example usage
 
+To get scRNA embeddings and zero shot cell-type predictions:
+
+```bash
+export MY_DATA_FILE=... # path to h5ad file with raw counts and gene symbols
+bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1
+```
+
+For more options see [run](./run/README.md).
+
+## Checkpoints
+
+### scRNA
+
+- MLM+RDA [ibm-research/biomed.rna.bert.110m.mlm.rda.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.mlm.rda.v1)
+- MLM+Multitask [ibm-research/biomed.rna.bert.110m.mlm.multitask.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.mlm.multitask.v1)
+- WCED+Multitask [ibm-research/biomed.rna.bert.110m.wced.multitask.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.wced.multitask.v1)
+- WCED 10 pct [ibm-research/biomed.rna.bert.110m.wced.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.wced.v1)
+
+For details on how the models were trained, please refer to [the preprint](https://arxiv.org/abs/2506.14861).
 
 ## Credits
+
 This project was created in IBM Research.

@@ -8,15 +8,21 @@ seed:
 
 data_module:
   max_length: 32
-  data_dir: /PATH/TO/DATA/
-  processed_name: processed_data
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
   limit_genes: protein_coding #could be null, protein_coding, or tokenizer
   transform_datasets: false
+  collation_strategy: multitask
+  log_normalize_transform: true
 
 task:
-  checkpoint: null
+  checkpoint: ${checkpoint}
   output_embeddings: true
   output_predictions: true
+  default_root_dir: ${working_dir}
 
-output_directory: /tmp
 accelerator: gpu
+input_file: null
+working_dir: /tmp
+checkpoint: null
