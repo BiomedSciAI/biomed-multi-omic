@@ -3,7 +3,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytorch_lightning.callbacks
-from peft import LoraConfig as PeftLoraConfig
+from peft import (
+    LoraConfig as PeftLoraConfig,
+)
 
 
 def default_callbacks():
@@ -51,7 +53,7 @@ class BaseTaskConfig:
     barebones: bool = False
     sync_batchnorm: bool = False
     reload_dataloaders_every_n_epochs: int = 0
-    default_root_dir: str | Path | None = None
+    default_root_dir: str | Path | None = "/dccstor/bmfm-targets/scbert-pretrained"
     # # permitted nonNone values of tf32_mode:  "highest","high","medium"
     tf32_mode: str | None = None
 

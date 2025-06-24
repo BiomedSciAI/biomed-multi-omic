@@ -36,17 +36,11 @@ def get_training_module_class_for_data_module(data_module: DataModule):
     if data_module.collation_strategy == "multitask":
         return MultiTaskTrainingModule
     elif data_module.collation_strategy == "language_modeling":
-        if not data_module.mlm:
+        if not data_module.masker:
             logging.warning(
-                "Requested language_modeling without `mlm`! "
+                "Requested language_modeling without a masker!"
                 "Model can be used for predict only."
             )
-        return MLMTrainingModule
-    elif (
-        data_module.collation_strategy == "sequence_classification_with_lm"
-        and data_module.mlm
-    ):
-        ## TODO here we need to return another training module; will modify in the next PR
         return MLMTrainingModule
     elif data_module.collation_strategy == "sequence_classification":
         return SequenceClassificationTrainingModule

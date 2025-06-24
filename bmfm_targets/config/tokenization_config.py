@@ -1,5 +1,5 @@
 import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
@@ -182,11 +182,20 @@ class FieldInfo:
     vocab_update_strategy: str = "static"
     is_masked: bool = False
     is_input: bool = True
-    decode_modes: list[str] = field(default_factory=lambda: ["token_scores"])
+    decode_modes: dict[str, dict] | None = None
     tokenization_strategy: str = "tokenize"
     num_special_tokens: int = 0
     encoder_kwargs: dict | None = None
-    decoder_kwargs: dict | None = None
+
+    def __post_init__(self):
+        if isinstance(self.decode_modes, list):
+            self.decode_modes = {i: {} for i in self.decode_modes}
+        if (self.is_masked or not self.is_input) and not self.decode_modes:
+            raise ValueError("Requested masking with no decode modes")
+
+    @property
+    def is_decode(self):
+        return bool(self.decode_modes)
 
     def update_vocab_size(self, multifield_tokenizer):
         self.vocab_size = multifield_tokenizer.field_vocab_size(self.field_name)
@@ -198,7 +207,10 @@ class FieldInfo:
     def __setstate__(self, state):
         if "masked_output_modes" in state:
             state["decode_modes"] = state.pop("masked_output_modes")
+        if "continuous_value_encoder_kwargs" in state:
+            state["encoder_kwargs"] = state.pop("continuous_value_encoder_kwargs")
         self.__dict__.update(state)
+        self.__post_init__()
 
     def update_pretrained_embedding_indices(self, multifield_tokenizer):
         (

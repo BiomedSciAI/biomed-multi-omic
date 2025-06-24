@@ -10,6 +10,13 @@ from bmfm_targets.training import metrics
 logger = logging.getLogger(__name__)
 
 
+def lookup_wced_output_index(loss_name: str, field: FieldInfo) -> int:
+    for name, kwargs in field.decode_modes.items():
+        if name == "wced":
+            return kwargs["logit_outputs"].index(loss_name)
+    raise ValueError("No WCED decoder found for field!")
+
+
 class LossTask:
     def __init__(self, loss_name: str, output_size: int, weight: float = 1.0):
         """
@@ -26,7 +33,7 @@ class LossTask:
         self.weight = weight
 
     def calculate_loss(
-        self, logits: torch.Tensor, labels: torch.Tensor
+        self, logits: dict[str, torch.Tensor], labels: dict[str, torch.Tensor]
     ) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement this method.")
 
@@ -60,17 +67,21 @@ class LossTask:
                 - gt_labels: Processed ground truth labels in appropriate format
         """
         these_labels = labels[self.output_key]
+        if getattr(self, "label_set", None) is not None:
+            these_labels = these_labels[self.label_set]
         if self.loss_name in ("mse", "token_mse", "is_zero_bce"):
             model_outputs = self.get_predictions(logits)
             label_dtype = model_outputs.dtype
             gt_labels = these_labels.to(label_dtype).view(model_outputs.shape)
         # Multi-label binary class...
         elif self.loss_name == "BCEWithLogitsLoss":
-            model_outputs = torch.sigmoid(self.get_logits(logits))
+            model_outputs = torch.sigmoid(
+                self.get_logits(logits).view(-1, self.output_size)
+            )
             # Don't flatten for multi-label binary classification to preserve class structure
             gt_labels = these_labels.to(torch.int64)
         else:  # Multiclass classification
-            model_outputs = self.get_logits(logits)
+            model_outputs = self.get_logits(logits).view(-1, self.output_size)
             gt_labels = these_labels.to(torch.int64).view(-1)
         return self.metric_key, model_outputs, gt_labels
 
@@ -86,6 +97,23 @@ class LossTask:
     def logit_key(self) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
+    def concat_batch_tensors(self, batch, outputs, predictions):
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @property
+    def loss_display_name(self):
+        loss_display_name_components = [self.output_key, self.loss_name, "loss"]
+        if getattr(self, "loss_group", None):
+            loss_display_name_components = [
+                self.output_key,
+                self.loss_group,
+                self.loss_name,
+                "loss",
+            ]
+
+        loss_display_name = "_".join(loss_display_name_components)
+        return loss_display_name
+
 
 class FieldLossTask(LossTask):
     def __init__(
@@ -100,6 +128,7 @@ class FieldLossTask(LossTask):
         decoder_key: str | None = None,
         token_values: list[float] | None = None,
         loss_group: str | None = None,
+        wced_target: str | None = None,
     ):
         """
         Initialize a FieldLossTask.
@@ -127,6 +156,21 @@ class FieldLossTask(LossTask):
         self.token_values = token_values
         self.decoder_key = decoder_key
         self.loss_group = loss_group
+
+        # only used for wced
+        self.decode_token_index = None
+        self.decoder_output_index = None
+        self.label_set = None
+        self.wced_target = wced_target
+        if wced_target is not None:
+            self.decode_token_index = 0
+            self.decoder_output_index = lookup_wced_output_index(loss_name, field)
+            vocab_field = field.decode_modes["wced"]["vocab_field"]
+            self.label_set = wced_target.rstrip(f"_{vocab_field}")
+            if decoder_key is None:
+                self.decoder_key = f"{self.field.field_name}_wced"
+            if loss_group is None:
+                self.loss_group = wced_target
 
     @property
     def output_key(self):
@@ -164,18 +208,10 @@ class FieldLossTask(LossTask):
             FieldLossTask: An instantiated FieldLossTask.
 
         """
-        return cls(
-            field=field,
-            loss_name=loss_request.get("name", "cross_entropy"),
-            weight=loss_request.get("weight", 1.0),
-            decoder_key=loss_request.get("decoder_key", None),
-            label_smoothing=loss_request.get("label_smoothing", 0.01),
-            focal_gamma=loss_request.get("focal_gamma", 2.0),
-            ignore_zero=loss_request.get("ignore_zero", False),
-            link_function=loss_request.get("link_function"),
-            loss_group=loss_request.get("loss_group", None),
-            token_values=token_values,
-        )
+        exclude_keys = ["field_name", "name"]
+        kwargs = {k: v for k, v in loss_request.items() if not k in exclude_keys}
+        kwargs["loss_name"] = loss_request.get("name", "cross_entropy")
+        return cls(field=field, token_values=token_values, **kwargs)
 
     @staticmethod
     def _get_num_classes_for_field(loss_name: str, field: FieldInfo) -> int:
@@ -196,18 +232,10 @@ class FieldLossTask(LossTask):
             ValueError: If the field and loss name combination are unsupported.
 
         """
-        if "token_scores" in field.decode_modes and loss_name in (
-            "token_value",
-            "cross_entropy",
-            "focal",
-        ):
+        if loss_name in ("token_value", "cross_entropy", "focal"):
             return field.vocab_size
-        if "regression" in field.decode_modes and loss_name in (
-            "token_mse",
-            "mse",
-        ):
-            return 1
-        if "is_zero" in field.decode_modes and loss_name == "is_zero_bce":
+        # if "regression" in field.decode_modes and loss_name in (
+        if loss_name in ("token_mse", "mse", "is_zero_bce"):
             return 1
 
         raise ValueError(
@@ -215,22 +243,27 @@ class FieldLossTask(LossTask):
         )
 
     def get_predictions(self, logits: dict[str, torch.Tensor]):
+        these_logits = self.get_logits(logits)
+
         if self.loss_name in ["cross_entropy", "focal", "token_value"]:
-            predictions = torch.argmax(logits[self.logit_key], dim=-1)
+            predictions = torch.argmax(these_logits, dim=-1)
 
         elif self.loss_name in ["token_mse"]:
-            predictions = torch.round(logits[self.logit_key])
+            predictions = these_logits
+            if self.link_function == "exp":
+                predictions = torch.exp(predictions)
+            predictions = torch.round(predictions)
             predictions = torch.clip(predictions, 0, self.field.vocab_size - 1)
 
         elif self.loss_name in ["mse"]:
-            predictions = logits[self.logit_key]
+            predictions = these_logits
             if self.link_function == "exp":
                 predictions = torch.exp(predictions)
 
         elif self.loss_name in ["is_zero_bce"]:
             # prediction for is_zero is True (aka 1) if the value is 0 and False (aka 0)
             #  if it is non-zero
-            predictions = torch.where(logits[self.logit_key] > 0.5, 1, 0)
+            predictions = torch.where(these_logits > 0, 1, 0)
 
         else:
             raise ValueError("Requested predictions for field without a valid loss.")
@@ -238,26 +271,13 @@ class FieldLossTask(LossTask):
         return predictions.view(predictions.shape[0], -1)
 
     def get_logits(self, logits: dict[str, torch.Tensor]):
-        if self.loss_name in ["cross_entropy", "focal", "token_value"]:
-            logit_requested = logits[self.logit_key]
+        these_logits = logits[self.logit_key]
+        if self.decoder_output_index is not None:
+            these_logits = these_logits[..., self.decoder_output_index]
+        if self.wced_target is not None:
+            these_logits = these_logits[:, self.decode_token_index, :]
 
-        elif self.loss_name in ["token_mse"]:
-            logit_requested = torch.round(logits[self.logit_key])
-            logit_requested = torch.clip(logit_requested, 0, self.field.vocab_size - 1)
-
-        elif self.loss_name in ["mse"]:
-            logit_requested = logits[self.logit_key]
-            if self.link_function == "exp":
-                logit_requested = torch.exp(logit_requested)
-
-        elif self.loss_name in ["is_zero_bce"]:
-            # prediction for is_zero is True (aka 1) if the value is 0 and False (aka 0)
-            #  if it is non-zero
-            logit_requested = logits[self.logit_key]
-
-        else:
-            raise ValueError("Requested predictions for field without a valid loss.")
-        return logit_requested.view(-1, self.output_size)
+        return these_logits
 
     def _construct_loss_key(self) -> str:
         return f"{self.field.field_name}_{self.loss_name}_loss"
@@ -287,7 +307,7 @@ class FieldLossTask(LossTask):
             raise ValueError("Unsupported loss name: " + self.loss_name)
 
     def calculate_loss(
-        self, logits: torch.Tensor, labels: torch.Tensor
+        self, logits: dict[str, torch.Tensor], labels: dict[str, torch.Tensor]
     ) -> torch.Tensor:
         """
         Calculate a single loss based on task loss for a specific field.
@@ -309,7 +329,10 @@ class FieldLossTask(LossTask):
             tuple[str, torch.Tensor]: The loss name and the computed loss value.
 
         """
-        request_logits = logits.clone()
+        request_logits = self.get_logits(logits).clone()
+        labels = labels[self.output_key]
+        if self.label_set is not None:
+            labels = labels[self.label_set]
 
         if self.loss_name in ("token_mse", "mse"):
             if self.link_function == "exp":
@@ -353,6 +376,38 @@ class FieldLossTask(LossTask):
             )
 
         raise ValueError(f"Unsupported loss name: {self.loss_name}")
+
+    def concat_batch_tensors(self, batch, outputs, predictions):
+        from bmfm_targets.training.metrics.batch_prediction_metrics import (
+            concat_field_loss_batch_tensors,
+            concat_wced_field_loss_batch_tensors,
+        )
+
+        if self.label_set is None:
+            logits_to_record = {
+                k: v
+                for k, v in outputs.logits.items()
+                if k.startswith(self.output_key) and (v.shape[-1] == 1)
+            }
+            batch_tensors = concat_field_loss_batch_tensors(
+                input_ids=batch["input_ids"],
+                predictions=predictions[self.metric_key],
+                labels=batch["labels"][self.output_key],
+                **logits_to_record,
+            )
+
+        else:
+            logits_to_record = {
+                k: v[:, self.decode_token_index, :]
+                for k, v in outputs.logits.items()
+                if k == self.logit_key
+            }
+            batch_tensors = concat_wced_field_loss_batch_tensors(
+                predictions=predictions[self.metric_key],
+                labels=batch["labels"][self.output_key][self.label_set],
+                **logits_to_record,
+            )
+        return batch_tensors
 
 
 class LabelLossTask(LossTask):
@@ -440,8 +495,10 @@ class LabelLossTask(LossTask):
             raise ValueError("Unsupported loss name: " + self.loss_name)
 
     def calculate_loss(
-        self, logits: torch.Tensor, labels: torch.Tensor
+        self, logits: dict[str, torch.Tensor], labels: dict[str, torch.Tensor]
     ) -> torch.Tensor:
+        logits = logits[self.logit_key]
+        labels = labels[self.output_key]
         if self.link_function == "exp":
             logits = torch.exp(logits)
         return metrics.classification_loss(
@@ -454,6 +511,22 @@ class LabelLossTask(LossTask):
             class_weight=self.class_weight,
             focal_gamma=self.focal_gamma,
         )
+
+    def concat_batch_tensors(self, batch, outputs, predictions):
+        from bmfm_targets.training.metrics.batch_prediction_metrics import (
+            concat_label_loss_batch_tensors,
+        )
+
+        logits_to_record = {
+            k: v for k, v in outputs.logits.items() if k == self.output_key
+        }
+        batch_tensors = concat_label_loss_batch_tensors(
+            input_ids=batch["input_ids"],
+            predictions=predictions[self.metric_key],
+            labels=batch["labels"][self.output_key],
+            **logits_to_record,
+        )
+        return batch_tensors
 
     @classmethod
     def from_loss_request(cls, loss_request: dict, label_column: LabelColumnInfo):
@@ -539,21 +612,10 @@ def lookup_field(fields, field_name):
             "Try label-column-based loss specification in Trainer config if you run sequence_classification."
         )
 
-    matched_field = next(
-        (
-            field
-            for field in fields
-            if field.field_name == field_name
-            and (field.is_masked or not field.is_input)
-        ),
-        None,
-    )
-    if not matched_field:
-        raise ValueError(
-            f"Label column with name '{matched_field}' not found in input and masked fields."
-        )
-
-    return matched_field
+    field = next((f for f in fields if f.field_name == field_name), None)
+    if field:
+        return field
+    raise ValueError(f"Field with name '{field}' not found.")
 
 
 def lookup_label_column(label_columns, label_column_name):
@@ -617,20 +679,14 @@ def calculate_losses(
     total_weight, total_loss = 0, 0
 
     for loss_task in loss_tasks:
-        output_key = loss_task.output_key
-        logit_key = loss_task.logit_key
-        loss_val = loss_task.calculate_loss(logits[logit_key], labels[output_key])
+        loss_val = loss_task.calculate_loss(logits, labels)
         if loss_val is None or torch.isnan(loss_val):
             continue
         # *= syntax breaks when loss_val is float and weight is long
         loss_val = loss_task.weight * loss_val
         total_weight += loss_task.weight
         total_loss += loss_val
-        if "mvc" in logit_key:
-            loss_display_name = f"{output_key}_{loss_task.loss_name}_mvc_loss"
-        else:
-            loss_display_name = f"{output_key}_{loss_task.loss_name}_loss"
-        all_losses[loss_display_name] = loss_val
+        all_losses[loss_task.loss_display_name] = loss_val
 
     all_losses["loss"] = (
         (total_loss / total_weight)
@@ -664,7 +720,7 @@ def calculate_predictions(
 
 
 def combine_partial_predictions(
-    partial_predictions: dict[str, torch.Tensor]
+    partial_predictions: dict[str, torch.Tensor],
 ) -> torch.Tensor:
     if len(partial_predictions) == 1:
         return [*partial_predictions.values()][0]

@@ -3,6 +3,8 @@ num_workers: 8
 collation_strategy: "sequence_classification"
 batch_size: 20
 max_length: 512
-limit_dataset_samples: null
 shuffle: true
 sequence_order: "random"
+# for interpolation only
+counts_column_name: null
+batch_column_name: null

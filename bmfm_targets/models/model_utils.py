@@ -1,6 +1,10 @@
+import logging
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
+from huggingface_hub import list_repo_files, snapshot_download
 from transformers.modeling_outputs import (
     SequenceClassifierOutput,
 )
@@ -11,6 +15,8 @@ from transformers.models.auto import (
 )
 
 from bmfm_targets import config
+
+logger = logging.getLogger(__name__)
 
 
 def register_configs_and_models():
@@ -159,3 +165,54 @@ def instantiate_classification_model(model_config, loss_tasks):
     return get_model_from_config(
         model_config, modeling_strategy="sequence_classification"
     )
+
+
+def download_ckpt_from_huggingface(hf_repo) -> str:
+    """
+    Uses snapshot_download from huggingface_hub to download the files at
+    hf_repo.
+    Returns the path of the new .ckpt file.
+    """
+    local_hf_repo_path = snapshot_download(hf_repo, ignore_patterns=["*.git*", "*.md*"])
+    logger.info(
+        f"Downloaded checkpoint from HuggingFace: {hf_repo} - "
+        f"Local path: {local_hf_repo_path}"
+    )
+
+    # Find the ckpt file in the downloaded directory
+    ckpt_files = list(Path(local_hf_repo_path).glob("*.ckpt"))
+    if not ckpt_files:
+        logger.error(
+            f"No .ckpt files found in the downloaded directory: {local_hf_repo_path}"
+        )
+        sys.exit(1)
+    if len(ckpt_files) > 1:
+        logger.warning(
+            f"Multiple .ckpt files found in the directory: {local_hf_repo_path}. Using {ckpt_files[0]}."
+        )
+    checkpoint = ckpt_files[0]
+
+    logger.info(f"Downloaded HF checkpoint to: {checkpoint}")
+
+    return checkpoint
+
+
+def download_tokenizer_from_huggingface(hf_repo) -> None:
+    """
+    Uses snapshot_download from huggingface_hub to download the
+    tokenizer-specific files from an hf repo.
+    """
+    hf_repo_files = list_repo_files(hf_repo)
+    base_level_hf_repo_files = [f.split("/")[0] for f in hf_repo_files]
+    if "tokenizers" in base_level_hf_repo_files:
+        local_hf_repo_path = snapshot_download(
+            repo_id=hf_repo, allow_patterns=["tokenizers*"]
+        )
+        logger.info(
+            f"Downloaded tokenizer from HuggingFace: {hf_repo} - "
+            f"Local path: {local_hf_repo_path}"
+        )
+        return local_hf_repo_path
+    else:
+        logger.warning(f"Tokenizer not found in HuggingFace repo: {hf_repo}")
+        return hf_repo

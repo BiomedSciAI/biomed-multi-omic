@@ -1,38 +1,38 @@
 defaults:
   - data_module: sceval_default
   - tokenizer: all_genes
-  - fields: genes_expressions_cve
+  - fields: genes_expressions_wced
   - trainer: default
   - task: train
   - model: scbert
-  - label_columns: sceval_default
+  - label_columns: default
   - _self_
 seed:
   seed_value: 1234
 
 trainer:
   losses:
-    - name: cross_entropy
+    - name: focal
       label_column_name: ${label_columns[0].label_column_name}
-  # for rda models this should be set to `first_token`, for multitask 'pooling_layer'
+      focal_gamma: 3
+  # for rda models this should be set to `first_token`, for multitask 'pooling_layer' or 'mean_pooling'
   pooling_method: pooling_layer
   batch_prediction_behavior: track
 
 track_clearml:
   project_name: "bmfm-targets/evaluate/${checkpoint_name}"
-  task_name: "${dataset_name}_cta_ft"
+  task_name: "${data_module.dataset_name}_ft"
   continue_last_task: False
 
 # to adapt all of the dataset input to the ckpt modify this section
 # in general it should match the pretraining config except for masking settings
 data_module:
-  max_length: 4096
-  batch_size: 4
+  max_length: 1024
+  batch_size: 8
   # rda_transform: auto_align
-  log_normalize_transform: true
   # limit genes is modified per dataset to handle mouse
   pad_zero_expression_strategy: batch_wise
-  collation_strategy: multitask
+  collation_strategy: sequence_classification
 
 
 max_finetuning_epochs: 2

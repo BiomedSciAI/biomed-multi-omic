@@ -7,3 +7,8 @@ betas:
   - 0.99
 epsilon: 1.0e-8
 lr_decay_steps: null
+metrics:
+- name: accuracy
+- name: f1
+- name: recall
+- name: precision

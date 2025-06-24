@@ -2,3 +2,4 @@ defaults:
  - sceval_default
 
 data_dir: ${oc.env:BMFM_TARGETS_SCEVAL_DATA}/pbmc_10k/
+dataset_name: pbmc_10k

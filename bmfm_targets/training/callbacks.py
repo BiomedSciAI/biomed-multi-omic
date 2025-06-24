@@ -290,9 +290,12 @@ class BatchIntegrationCallback(pl.Callback):
             return np.zeros((adata.n_obs, 1))
         if "Unintegrated" not in adata.obsm:
             adata.obsm["X_pca"] = self.get_pca_of_x(adata)
-        return harmonize(
-            adata.obsm["X_pca"], adata.obs, batch_key=self.batch_column_name
-        )
+        try:
+            return harmonize(
+                adata.obsm["X_pca"], adata.obs, batch_key=self.batch_column_name
+            )
+        except:
+            return np.zeros((adata.n_obs, 1))
 
     def get_pca_of_x(self, adata_orig: sc.AnnData, flavor="cell_ranger"):
         """
@@ -371,19 +374,22 @@ class BatchIntegrationCallback(pl.Callback):
 
         if not "Scanorama" in self.benchmarking_methods:
             return np.zeros((adata.n_obs, 1))
-        batch_cats = adata.obs.batch.cat.categories
-        adata_list = [adata[adata.obs.batch == b].copy() for b in batch_cats]
-        scanorama.integrate_scanpy(adata_list)
+        try:
+            batch_cats = adata.obs.batch.cat.categories
+            adata_list = [adata[adata.obs.batch == b].copy() for b in batch_cats]
+            scanorama.integrate_scanpy(adata_list)
 
-        adata.obsm["Scanorama"] = np.zeros(
-            (adata.shape[0], adata_list[0].obsm["X_scanorama"].shape[1])
-        )
-        for i, b in enumerate(batch_cats):
-            adata.obsm["Scanorama"][adata.obs.batch == b] = adata_list[i].obsm[
-                "X_scanorama"
-            ]
+            adata.obsm["Scanorama"] = np.zeros(
+                (adata.shape[0], adata_list[0].obsm["X_scanorama"].shape[1])
+            )
+            for i, b in enumerate(batch_cats):
+                adata.obsm["Scanorama"][adata.obs.batch == b] = adata_list[i].obsm[
+                    "X_scanorama"
+                ]
 
-        return adata.obsm["Scanorama"]
+            return adata.obsm["Scanorama"]
+        except:
+            return np.zeros((adata.n_obs, 1))
 
     def liger_emb(self, adata):
         import pyliger
@@ -392,29 +398,32 @@ class BatchIntegrationCallback(pl.Callback):
 
         if not "LIGER" in self.benchmarking_methods or k < 1:
             return np.zeros((adata.n_obs, 1))
-        batch_cats = adata.obs.batch.cat.categories
-        bdata = adata.copy()
-        adata_list = [bdata[bdata.obs.batch == b].copy() for b in batch_cats]
-        for i, ad in enumerate(adata_list):
-            ad.uns["sample_name"] = batch_cats[i]
-            ad.uns["var_gene_idx"] = np.arange(bdata.n_vars)
+        try:
+            batch_cats = adata.obs.batch.cat.categories
+            bdata = adata.copy()
+            adata_list = [bdata[bdata.obs.batch == b].copy() for b in batch_cats]
+            for i, ad in enumerate(adata_list):
+                ad.uns["sample_name"] = batch_cats[i]
+                ad.uns["var_gene_idx"] = np.arange(bdata.n_vars)
 
-        liger_data = pyliger.create_liger(
-            adata_list, remove_missing=False, make_sparse=False
-        )
+            liger_data = pyliger.create_liger(
+                adata_list, remove_missing=False, make_sparse=False
+            )
 
-        liger_data.var_genes = bdata.var_names
-        pyliger.normalize(liger_data)
-        pyliger.scale_not_center(liger_data)
-        pyliger.optimize_ALS(liger_data, k=k)
-        pyliger.quantile_norm(liger_data)
+            liger_data.var_genes = bdata.var_names
+            pyliger.normalize(liger_data)
+            pyliger.scale_not_center(liger_data)
+            pyliger.optimize_ALS(liger_data, k=k)
+            pyliger.quantile_norm(liger_data)
 
-        bdata.obsm["LIGER"] = np.zeros(
-            (adata.shape[0], liger_data.adata_list[0].obsm["H_norm"].shape[1])
-        )
-        for i, b in enumerate(batch_cats):
-            bdata.obsm["LIGER"][adata.obs.batch == b] = liger_data.adata_list[i].obsm[
-                "H_norm"
-            ]
+            bdata.obsm["LIGER"] = np.zeros(
+                (adata.shape[0], liger_data.adata_list[0].obsm["H_norm"].shape[1])
+            )
+            for i, b in enumerate(batch_cats):
+                bdata.obsm["LIGER"][adata.obs.batch == b] = liger_data.adata_list[
+                    i
+                ].obsm["H_norm"]
 
-        return bdata.obsm["LIGER"]
+            return bdata.obsm["LIGER"]
+        except:
+            return np.zeros((adata.n_obs, 1))

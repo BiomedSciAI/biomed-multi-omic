@@ -4,3 +4,4 @@ defaults:
 data_dir: ${oc.env:BMFM_TARGETS_SCEVAL_DATA}/mhsp/
 limit_genes: mouse_to_human_orthologs
 map_orthologs: mouse_to_human_orthologs
+dataset_name: mhsp

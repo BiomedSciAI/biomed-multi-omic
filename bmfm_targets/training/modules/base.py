@@ -1,6 +1,6 @@
 import logging
 import pathlib
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from itertools import chain
 from pathlib import Path
 from typing import Literal
@@ -25,7 +25,6 @@ from bmfm_targets.training import metrics
 from bmfm_targets.training.metrics import (
     FieldLossTask,
     LabelLossTask,
-    concat_batch_tensors,
     get_loss_tasks,
     log_confusion_matrix_to_clearml,
     plots,
@@ -75,6 +74,9 @@ class BaseTrainingModule(pl.LightningModule):
 
         """
         super().__init__()
+
+        if "config_is_loaded_from_ckpt" in kwargs.keys():
+            model_config.checkpoint = None
 
         # this is needed when model_config is loaded from old checkpoints which don't contain the label_columns item in "hyperparameter" section
         if (
@@ -165,13 +167,19 @@ class BaseTrainingModule(pl.LightningModule):
         """
         model_outputs = {}
         gt_labels = {}
-        for loss_task in self.loss_tasks:
-            (
-                metric_key,
-                task_model_output,
-                task_labels,
-            ) = loss_task.extract_metric_inputs(outputs.logits, labels)
-            model_outputs[metric_key] = task_model_output
+        metric_inputs = [
+            loss_task.extract_metric_inputs(outputs.logits, labels)
+            for loss_task in self.loss_tasks
+        ]
+
+        duplicated_metric_keys = [
+            k for k, v in Counter([i[0] for i in metric_inputs]).items() if v > 1
+        ]
+        predictions = metrics.calculate_predictions(self.loss_tasks, outputs.logits)
+        for metric_key, task_outputs, task_labels in metric_inputs:
+            if metric_key in duplicated_metric_keys:
+                task_outputs = predictions[metric_key].view(task_labels.shape)
+            model_outputs[metric_key] = task_outputs
             gt_labels[metric_key] = task_labels
         return self.split_metrics(split)(model_outputs, gt_labels)
 
@@ -412,7 +420,7 @@ class BaseTrainingModule(pl.LightningModule):
             if loss_name.endswith(("cross_entropy_loss", "focal_loss")):
                 perplexity = torch.exp(loss_value)
                 field_name = loss_name.replace("_cross_entropy_loss", "").replace(
-                    "focal_loss", ""
+                    "_focal_loss", ""
                 )
                 self.log(
                     f"{split}/{prefix}{field_name}_perplexity",
@@ -460,8 +468,8 @@ class BaseTrainingModule(pl.LightningModule):
         # each field/label gets all the logits combined for the tracking code
         active_keys = {loss_task.metric_key: loss_task for loss_task in self.loss_tasks}
         for _, loss_task in active_keys.items():
-            batch_tensors = concat_batch_tensors(batch, outputs, predictions, loss_task)
-
+            batch_tensors = loss_task.concat_batch_tensors(batch, outputs, predictions)
+            batch_tensors = batch_tensors.detach().cpu()
             self.split_batch_predictions(split)[loss_task.metric_key].append(
                 batch_tensors
             )
@@ -480,7 +488,8 @@ class BaseTrainingModule(pl.LightningModule):
 
     def on_train_epoch_start(self) -> None:
         # This is a temporary partial fix for the issue: https://github.com/Lightning-AI/pytorch-lightning/issues/19604
-        self.log_epoch_metrics_and_reset("train", suffix="_epoch")
+        if self.global_step > 0:
+            self.log_epoch_metrics_and_reset("train", suffix="_epoch")
 
     def _shared_test_val_on_end(self, split: str):
         if not self.trainer_config.batch_prediction_behavior:
@@ -490,13 +499,17 @@ class BaseTrainingModule(pl.LightningModule):
             )
             return
         self.process_batch_predictions(split)
+        logger.info(f"plotting batch_predictions for split {split}")
         self.plot_batch_predictions_for_split(split)
+        logger.info(f"logging token level errors for split {split}")
         self.log_token_level_errors_for_split(split)
         if self.trainer_config.batch_prediction_behavior == "dump":
+            logger.info(f"dumping batch predictions {split}")
+
             self.dump_batch_predictions(split)
 
     def log_token_level_errors_for_split(self, split):
-        if self.get_supported_field_metric_keys() == []:
+        if len(self.get_supported_field_metric_keys()) == 0:
             return
 
         gene_level_error = self.token_level_errors["genes"]
@@ -532,18 +545,33 @@ class BaseTrainingModule(pl.LightningModule):
         ):
             preds_df = self.prediction_df.get(label_task.metric_key, None)
             if preds_df is not None:
-                self.create_and_log_accuracy_by_targets_w_ci(
-                    split,
-                    preds_df,
-                    label_column_name=label_task.output_key,
-                )
+                if label_task.label_column.is_regression_label:
+                    gt_label = label_task.metric_key + "_label"
+                    predicted_label = label_task.metric_key + "_prediction"
+                    self.create_and_log_predictions_density_plot(
+                        split,
+                        preds_df,
+                        gt_label=gt_label,
+                        predicted_label=predicted_label,
+                        suffix=label_task.metric_key,
+                        plot_only_non_zeros=False,
+                    )
+                else:
+                    self.create_and_log_accuracy_by_targets_w_ci(
+                        split,
+                        preds_df,
+                        label_column_name=label_task.output_key,
+                    )
 
     def dump_batch_predictions(self, split):
         active_keys = {loss_task.metric_key: loss_task for loss_task in self.loss_tasks}
         for output_key, lt in active_keys.items():
             if isinstance(lt, FieldLossTask):
+                columns = field_predictions_df_columns(
+                    self.model_config.fields, lt.field, self.MODELING_STRATEGY
+                )
                 preds_df = self._get_field_predictions_df(
-                    split, lt.output_key, include_nonmasked=True
+                    split, lt.output_key, include_nonmasked=True, columns=columns
                 )
             else:
                 preds_df = self._get_label_predictions_df(split, lt.output_key)
@@ -571,12 +599,18 @@ class BaseTrainingModule(pl.LightningModule):
         preds_df,
         predicted_label="predicted_expressions",
         gt_label="label_expressions",
+        plot_only_non_zeros=True,
         suffix="",
     ):
-        nonzero_preds = preds_df.query(f"{predicted_label} > 0 & {gt_label} > 0")
-        fig = plots.make_predictions_gt_density_plot(
-            nonzero_preds, predicted_label=predicted_label, gt_label=gt_label
-        )
+        if plot_only_non_zeros:
+            nonzero_preds = preds_df.query(f"{predicted_label} > 0 & {gt_label} > 0")
+            fig = plots.make_predictions_gt_density_plot(
+                nonzero_preds, predicted_label=predicted_label, gt_label=gt_label
+            )
+        else:
+            fig = plots.make_predictions_gt_density_plot(
+                preds_df, predicted_label=predicted_label, gt_label=gt_label
+            )
         cl = clearml.Logger.current_logger()
         if cl:
             cl.report_matplotlib_figure(
@@ -739,10 +773,15 @@ class BaseTrainingModule(pl.LightningModule):
 
     def process_batch_predictions(self, split):
         for metric_key in self.get_supported_field_metric_keys():
+            field = [f.field for f in self.loss_tasks if f.metric_key == metric_key][0]
+            columns = field_predictions_df_columns(
+                self.model_config.fields, field, self.MODELING_STRATEGY
+            )
             preds_df = self._get_field_predictions_df(
-                split, metric_key, include_nonmasked=False
+                split, metric_key, include_nonmasked=False, columns=columns
             )
             self.prediction_df[metric_key] = preds_df
+            logger.info(f"calculating get_gene_level_expression_error for {metric_key}")
             self.token_level_errors["genes"] = get_gene_level_expression_error(preds_df)
         for label_metric_key in [
             lt.metric_key for lt in self.loss_tasks if isinstance(lt, LabelLossTask)
@@ -753,7 +792,7 @@ class BaseTrainingModule(pl.LightningModule):
 
     def get_supported_field_metric_keys(
         self, limit_to_continuous_value_encoder=False
-    ) -> list[str]:
+    ) -> set[str]:
         supported_field_names = ("label_expressions", "expressions")
         basic_func = (
             lambda lt: isinstance(lt, FieldLossTask)
@@ -766,11 +805,10 @@ class BaseTrainingModule(pl.LightningModule):
             )
         else:
             filter_func = basic_func
-        return [lt.metric_key for lt in filter(filter_func, self.loss_tasks)]
+        return {lt.metric_key for lt in filter(filter_func, self.loss_tasks)}
 
-    def _get_field_predictions_df(self, split, metric_key, include_nonmasked):
+    def _get_field_predictions_df(self, split, metric_key, include_nonmasked, columns):
         predictions_list = self.split_batch_predictions(split)[metric_key]
-        field = [f.field for f in self.loss_tasks if f.metric_key == metric_key][0]
         id2gene = {v: k for k, v in self.tokenizer.get_field_vocab("genes").items()}
         if "cell_names" in self.split_batch_predictions(split):
             sample_names = list(
@@ -781,9 +819,7 @@ class BaseTrainingModule(pl.LightningModule):
         return create_field_predictions_df(
             predictions_list=predictions_list,
             id2gene=id2gene,
-            columns=field_predictions_df_columns(
-                self.model_config.fields, field, self.MODELING_STRATEGY
-            ),
+            columns=columns,
             sample_names=sample_names,
             include_nonmasked=include_nonmasked,
         )

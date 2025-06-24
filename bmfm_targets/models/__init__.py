@@ -4,6 +4,8 @@ from .model_utils import (
     get_base_model_from_config,
     get_model_from_config,
     instantiate_classification_model,
+    download_ckpt_from_huggingface,
+    download_tokenizer_from_huggingface,
 )
 
 __all__ = [
@@ -11,4 +13,6 @@ __all__ = [
     "get_base_model_from_config",
     "get_model_from_config",
     "instantiate_classification_model",
+    "download_ckpt_from_huggingface",
+    "download_tokenizer_from_huggingface",
 ]

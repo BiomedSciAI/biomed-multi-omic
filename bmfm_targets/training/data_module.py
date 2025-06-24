@@ -23,6 +23,7 @@ from bmfm_targets.tokenization.resources import (
     get_protein_coding_genes,
 )
 from bmfm_targets.training.masking import Masker, MaskingStrategy
+from bmfm_targets.training.masking.strategy import WCEDMasker
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,8 @@ class DataModule(pl.LightningDataModule):
         batch_size: int = 32,
         num_workers: int = 0,
         shuffle: bool = False,
+        tokenize_kwargs: dict | None = None,
+        **kwargs,  # to enable stashing hydra config settings
     ):
         """
         Construct a PyTorch Lightning DataModule for single-cell RNA expression datasets.
@@ -233,19 +236,23 @@ class DataModule(pl.LightningDataModule):
             pad_zero_expression_strategy = {"strategy": pad_zero_expression_strategy}
         self.pad_zero_expression_strategy = pad_zero_expression_strategy
         self.collation_strategy = collation_strategy
-        self.mlm = mlm
         if isinstance(masking_strategy, partial):
             masking_strategy = masking_strategy(tokenizer=tokenizer)
         self.masking_strategy = masking_strategy
-        self.masker = Masker(
-            change_ratio=change_ratio,
-            mask_ratio=mask_ratio,
-            switch_ratio=switch_ratio,
-            tokenizer=tokenizer,
-            prevent_attention_to_masked=prevent_attention_to_masked,
-            comask_across_fields=comask_across_fields,
-            masking_strategy=masking_strategy,
-        )
+        if isinstance(self.masking_strategy, WCEDMasker):
+            self.masker = masking_strategy
+        elif mlm:
+            self.masker = Masker(
+                change_ratio=change_ratio,
+                mask_ratio=mask_ratio,
+                switch_ratio=switch_ratio,
+                tokenizer=tokenizer,
+                prevent_attention_to_masked=prevent_attention_to_masked,
+                comask_across_fields=comask_across_fields,
+                masking_strategy=masking_strategy,
+            )
+        else:
+            self.masker = None
         self.train_dataset = None
         self.dev_dataset = None
         self.test_dataset = None
@@ -265,6 +272,7 @@ class DataModule(pl.LightningDataModule):
                 None,
             )
         self.map_orthologs = map_orthologs
+        self.tokenize_kwargs = tokenize_kwargs
         self.__post_init__()
 
     def __post_init__(self):
@@ -620,7 +628,10 @@ class DataModule(pl.LightningDataModule):
             DataLoader: DataLoader for validation
         """
         collator = self.collate_fn
-        if self.masking_strategy and not self.masking_strategy.use_for_validation:
+        if (
+            isinstance(self.masking_strategy, MaskingStrategy)
+            and not self.masking_strategy.use_for_validation
+        ):
             collator.masker = deepcopy(collator.masker)
             collator.masker.masking_strategy = None
         return DataLoader(
@@ -696,7 +707,6 @@ class DataModule(pl.LightningDataModule):
             rda_transform = self.rda_transform
         return MultiFieldCollator(
             tokenizer=self.tokenizer,
-            mlm=self.mlm,
             label_dict=self.label_dict,
             padding=self.padding,
             pad_to_multiple_of=self.pad_to_multiple_of,
@@ -711,6 +721,7 @@ class DataModule(pl.LightningDataModule):
             rda_transform=rda_transform,
             pad_zero_expression_strategy=self.pad_zero_expression_strategy,
             map_orthologs=self.map_orthologs,
+            tokenize_kwargs=self.tokenize_kwargs,
         )
 
 
@@ -914,8 +925,6 @@ class DNASeqDataModule(pl.LightningDataModule):
         self.limit_dataset_samples = limit_dataset_samples
         self.sequence_order = sequence_order
         self.collation_strategy = collation_strategy
-        if collation_strategy == "sequence_classification":
-            self.mlm = False
         self.train_dataset = None
         self.dev_dataset = None
         self.test_dataset = None
@@ -1174,7 +1183,6 @@ class DNASeqDataModule(pl.LightningDataModule):
         """
         return MultiFieldCollator(
             tokenizer=self.tokenizer,
-            mlm=self.mlm,
             fields=self.fields,
             label_columns=self.label_columns,
             label_dict=self.label_dict,

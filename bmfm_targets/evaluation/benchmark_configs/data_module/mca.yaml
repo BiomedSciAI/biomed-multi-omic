@@ -2,3 +2,6 @@ defaults:
  - sceval_default
 
 data_dir: ${oc.env:BMFM_TARGETS_SCEVAL_DATA}/mca/
+limit_genes: mouse_to_human_orthologs
+map_orthologs: mouse_to_human_orthologs
+dataset_name: mca

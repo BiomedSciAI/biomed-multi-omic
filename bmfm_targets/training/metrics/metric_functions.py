@@ -6,7 +6,7 @@ from clearml.logger import Logger
 from focal_loss.focal_loss import (
     FocalLoss,  # https://github.com/mathiaszinnen/focal_loss_torch
 )
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torchmetrics import Metric
 from torchmetrics.classification import BinaryConfusionMatrix
 
@@ -225,27 +225,27 @@ def deduce_problem_type(labels: torch.Tensor, output_size: int):
 
 
 def mse_loss(logits, labels, ignore_index=-100.0, ignore_zero=False):
-    ignore_mask = labels == ignore_index
     if ignore_zero:
-        zero_mask = labels == 0.0
-        ignore_mask = ignore_mask | zero_mask
-    if ignore_mask.all():
-        return torch.tensor(0, device=logits.device)
-    loss_fct = MSELoss(reduction="none")
-    field_loss = loss_fct(logits.float(), labels.float())
-    field_masked_loss = field_loss * ~ignore_mask
-    field_loss = field_masked_loss.sum() / ((~ignore_mask).sum() + 1e-6)
-    return field_loss
+        ignore_mask = (labels == ignore_index) | (labels == 0.0)
+    else:
+        ignore_mask = labels == ignore_index
+
+    n_valid_elements = (~ignore_mask).sum().to(logits.dtype)
+    field_loss_unreduced = F.mse_loss(logits, labels.to(logits.dtype), reduction="none")
+    field_masked_loss = field_loss_unreduced * (~ignore_mask)
+    field_loss_sum = field_masked_loss.sum()
+
+    return field_loss_sum / (n_valid_elements + 1e-6)
 
 
 def is_zero_bce_loss(logits: torch.Tensor, labels: torch.Tensor, ignore_index=-100):
     ignore_mask = labels == ignore_index
-    if ignore_mask.all():
-        return torch.tensor(0, device=logits.device)
-    loss_fct = BCEWithLogitsLoss(reduction="none")
-    field_loss = loss_fct(logits, (labels == 0.0).float())
+    n_valid_elements = (~ignore_mask).sum()
+    field_loss = F.binary_cross_entropy_with_logits(
+        logits, (labels == 0.0).float(), reduction="none"
+    )
     field_masked_loss = field_loss * ~ignore_mask
-    field_loss = field_masked_loss.sum() / ((~ignore_mask).sum() + 1e-6)
+    field_loss = field_masked_loss.sum() / (n_valid_elements + 1e-6)
     return field_loss
 
 

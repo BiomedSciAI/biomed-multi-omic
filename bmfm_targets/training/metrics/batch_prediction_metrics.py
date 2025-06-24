@@ -1,3 +1,6 @@
+import logging
+import warnings
+
 import numpy as np
 import pandas as pd
 import torch
@@ -18,89 +21,97 @@ def group_roc_auc(group: pd.Series):
     return roc_auc_score(y_true, y_pred)
 
 
-def get_gene_level_expression_error(exp_preds: pd.DataFrame):
+def _resolve_input_expression_column(exp_preds: pd.DataFrame) -> str:
+    for candidate in ["input_expressions", "control_expressions", "label_expressions"]:
+        if candidate in exp_preds.columns:
+            return candidate
+    raise ValueError("No input_expressions column found.")
+
+
+def get_gene_level_expression_error(exp_preds: pd.DataFrame) -> pd.DataFrame:
     metrics = {}
-    # first get counts total and non-zero
-    if "input_expressions" in exp_preds.columns:
-        input_expressions_col_name = "input_expressions"
-    elif "control_expressions" in exp_preds.columns:
-        input_expressions_col_name = "control_expressions"
-    else:
-        raise ValueError("No input_expressions_column available!")
-    metrics["gene_freq"] = (
-        exp_preds.groupby("input_genes").count()[input_expressions_col_name].astype(int)
-    )
-    metrics["gene_nz_freq"] = (
+    input_expr_col = _resolve_input_expression_column(exp_preds)
+
+    # === Precompute frequency ===
+    grouped_all = exp_preds.groupby("input_genes")
+    metrics["gene_freq"] = grouped_all[input_expr_col].count()
+
+    # === Null baselines ===
+    avg_label_expr = grouped_all["label_expressions"].mean()
+    avg_nz_label_expr = (
         exp_preds.query("label_expressions > 0")
-        .groupby("input_genes")
-        .count()[input_expressions_col_name]
-        .astype(int)
+        .groupby("input_genes")["label_expressions"]
+        .mean()
     )
 
-    # for null approximation consider the avg value and avg nonzero value
-    avg_label_expressions = exp_preds.groupby("input_genes").label_expressions.mean()
-    avg_nz_label_expressions = (
-        exp_preds.query("label_expressions > 0")
-        .groupby("input_genes")
-        .label_expressions.mean()
+    exp_preds = exp_preds.assign(
+        avg_expressions=exp_preds["input_genes"].map(avg_label_expr),
+        avg_nz_expressions=exp_preds["input_genes"].map(avg_nz_label_expr),
     )
 
-    # align null predictions with gene names
-    exp_preds_avg = exp_preds.assign(
-        avg_nz_expressions=exp_preds.input_genes.map(avg_nz_label_expressions),
-        avg_expressions=exp_preds.input_genes.map(avg_label_expressions),
-    )
-    # calculate pointwise abs error
-    exp_preds_diff = exp_preds_avg.assign(
+    # === Absolute Errors ===
+    exp_preds = exp_preds.assign(
         abs_diff=(
-            exp_preds_avg["predicted_expressions"] - exp_preds_avg["label_expressions"]
+            exp_preds["predicted_expressions"] - exp_preds["label_expressions"]
         ).abs(),
+        null_diff=(exp_preds["avg_expressions"] - exp_preds["label_expressions"]).abs(),
         nz_null_diff=(
-            exp_preds_avg["avg_nz_expressions"] - exp_preds_avg["label_expressions"]
-        ).abs(),
-        null_diff=(
-            exp_preds_avg["avg_expressions"] - exp_preds_avg["label_expressions"]
+            exp_preds["avg_nz_expressions"] - exp_preds["label_expressions"]
         ).abs(),
     )
+
     if "logits_expressions_regression" in exp_preds.columns:
-        exp_preds_diff = exp_preds_diff.assign(
-            abs_diff_regression_logits=(
-                exp_preds_avg["logits_expressions_regression"]
-                - exp_preds_avg["label_expressions"]
-            ).abs()
-        )
+        exp_preds["abs_diff_regression_logits"] = (
+            exp_preds["logits_expressions_regression"] - exp_preds["label_expressions"]
+        ).abs()
         metrics["gene_err_nz_by_logits"] = (
-            exp_preds_diff.query("label_expressions > 0")
-            .groupby("input_genes")
-            .abs_diff_regression_logits.mean()
+            exp_preds.query("label_expressions > 0")
+            .groupby("input_genes")["abs_diff_regression_logits"]
+            .mean()
         )
 
-    # calculate the average error limited to the nonzero expressions
-    metrics["gene_err_nz_null"] = (
-        exp_preds_diff.query("label_expressions > 0")
-        .groupby("input_genes")
-        .nz_null_diff.mean()
-    )
-    metrics["gene_err_nz"] = (
-        exp_preds_diff.query("label_expressions > 0")
-        .groupby("input_genes")
-        .abs_diff.mean()
-    )
+    # === Now do all groupings on the updated DataFrame ===
+    grouped_all = exp_preds.groupby("input_genes")
+    grouped_nz = exp_preds.query("label_expressions > 0").groupby("input_genes")
 
-    # calculate the average error across all label expressions
-    metrics["gene_err_null"] = exp_preds_diff.groupby("input_genes").null_diff.mean()
-    metrics["gene_err"] = exp_preds_diff.groupby("input_genes").abs_diff.mean()
+    metrics["gene_nz_freq"] = grouped_nz[input_expr_col].count()
+    metrics["gene_err_nz"] = grouped_nz["abs_diff"].mean()
+    metrics["gene_err_nz_null"] = grouped_nz["nz_null_diff"].mean()
+    metrics["gene_err"] = grouped_all["abs_diff"].mean()
+    metrics["gene_err_null"] = grouped_all["null_diff"].mean()
 
-    # calculate gene-wise f1 score
-    metrics["is_zero_f1"] = exp_preds.groupby("input_genes").apply(group_is_zero_f1)
+    # === Zero classification ===
+    is_label_zero = exp_preds["label_expressions"] == 0
+    is_pred_zero = exp_preds["predicted_expressions"] == 0
+
+    zero_df = pd.DataFrame(
+        {
+            "input_genes": exp_preds["input_genes"],
+            "tp": (is_label_zero & is_pred_zero).astype(int),
+            "fp": (~is_label_zero & is_pred_zero).astype(int),
+            "fn": (is_label_zero & ~is_pred_zero).astype(int),
+        }
+    )
+    zero_counts = zero_df.groupby("input_genes")[["tp", "fp", "fn"]].sum()
+
+    precision = zero_counts["tp"] / (zero_counts["tp"] + zero_counts["fp"]).replace(
+        0, np.nan
+    )
+    recall = zero_counts["tp"] / (zero_counts["tp"] + zero_counts["fn"]).replace(
+        0, np.nan
+    )
+    f1 = 2 * (precision * recall) / (precision + recall).replace(0, np.nan)
+    metrics["is_zero_f1"] = f1
+
     if "logits_expressions_is_zero" in exp_preds.columns:
-        metrics["is_zero_roc_auc"] = exp_preds.groupby("input_genes").apply(
-            group_roc_auc
-        )
+        try:
+            metrics["is_zero_roc_auc"] = exp_preds.groupby("input_genes").apply(
+                group_roc_auc
+            )
+        except Exception:
+            pass
 
-    gene_level_err = pd.DataFrame(metrics)
-
-    return gene_level_err
+    return pd.DataFrame(metrics)
 
 
 def get_best_and_worst_genes(
@@ -118,36 +129,63 @@ def get_best_and_worst_genes(
     return best_genes, worst_genes
 
 
+def _get_label_column_idx(columns: list) -> int:
+    """Find the index of the label column for filtering (-100)."""
+    label_col = next((c for c in columns if c.startswith("label_")), None)
+    if label_col is None:
+        raise ValueError("No label_ column found in columns list.")
+    return columns.index(label_col)
+
+
 def create_field_predictions_df(
     predictions_list, id2gene, columns, sample_names=None, include_nonmasked=False
 ):
-    predictions_array = (
-        torch.concat([*predictions_list]).detach().cpu().to(torch.float32).numpy()
+    logging.info(f"Preparing to concat {len(predictions_list)} batches")
+    predictions_array = torch.concat([*predictions_list]).to(torch.float32).numpy()
+    reshaped = predictions_array.reshape(-1, predictions_array.shape[-1])
+
+    n_samples, n_genes = predictions_array.shape[:2]
+    sample_ids = np.repeat(
+        sample_names if sample_names is not None else np.arange(n_samples), n_genes
     )
-    reshaped_arr = predictions_array.reshape(-1, predictions_array.shape[-1])
-    if sample_names is not None:
-        assert len(sample_names) == predictions_array.shape[0]
-    else:
-        sample_names = np.arange(predictions_array.shape[0])
-    sample_ids = np.repeat(sample_names, predictions_array.shape[1])
-    predictions_df = pd.DataFrame(reshaped_arr, columns=columns, index=sample_ids)
-    predictions_df = (
-        predictions_df.reset_index()
-        .rename(columns={"index": "sample_id"})
-        .astype({"gene_id": int})
-        .set_index("sample_id")
-    )
-    if include_nonmasked == False:
-        label_column = [c for c in predictions_df.columns if c.startswith("label_")][0]
-        predictions_df = predictions_df[predictions_df[label_column] != -100]
 
-    input_genes = predictions_df.pop("gene_id").map(id2gene)
+    # Adjust columns to match prediction shape
+    columns = list(columns)
+    while len(columns) < reshaped.shape[1]:
+        columns.append(f"logits_{len(columns)}")
+    while len(columns) > reshaped.shape[1]:
+        dropped = columns.pop()
+        warnings.warn(f"Too many columns; dropped {dropped}")
 
-    for col in predictions_df.columns:
-        if "genes" in col:
-            predictions_df[col] = predictions_df[col].map(id2gene)
+    # Mask -100 entries early
+    if not include_nonmasked:
+        label_idx = _get_label_column_idx(columns)
+        mask = reshaped[:, label_idx] != -100
+        reshaped = reshaped[mask]
+        sample_ids = sample_ids[mask]
+        logging.info(f"Filtered -100s, remaining shape: {reshaped.shape}")
 
-    return predictions_df.assign(input_genes=input_genes)
+    # Create DataFrame
+    preds_df = pd.DataFrame(reshaped, columns=columns)
+    preds_df["sample_id"] = sample_ids
+
+    # Gene ID mapping
+    if "gene_id" not in preds_df.columns:
+        raise ValueError("Expected 'gene_id' column missing")
+
+    preds_df["gene_id"] = preds_df["gene_id"].astype(int)
+    preds_df["input_genes"] = preds_df["gene_id"].map(id2gene)
+    preds_df = preds_df.drop(columns=["gene_id"])
+
+    # Map other *_genes columns if needed
+    for col in preds_df.columns:
+        if "genes" in col and col != "input_genes":
+            preds_df[col] = pd.to_numeric(preds_df[col], errors="coerce")
+            preds_df[col] = preds_df[col].map(id2gene)
+
+    preds_df = preds_df.set_index("sample_id")
+    logging.info(f"Final predictions_df shape: {preds_df.shape}")
+    return preds_df
 
 
 def concat_field_loss_batch_tensors(
@@ -165,6 +203,45 @@ def concat_field_loss_batch_tensors(
 
     batch_tensor = torch.concat(tensors_to_cat, dim=-1)
     return batch_tensor
+
+
+def concat_wced_field_loss_batch_tensors(
+    labels: torch.Tensor, predictions: torch.Tensor, **kwargs
+):
+    """
+    Process WCED batch tensors assuming:
+    - predictions: [batch_size, vocab_size] - regression-like predictions
+    - labels: [batch_size, vocab_size] - with -100 for tokens with no label values.
+
+    """
+    batch_size, vocab_size = predictions.shape
+
+    # Create vocab indices tensor [batch_size, vocab_size]
+    # This replaces the role of input_ids from MLM batch tracking
+    vocab_indices = (
+        torch.arange(vocab_size, device=predictions.device)
+        .unsqueeze(0)
+        .expand(batch_size, -1)
+    )
+
+    # Shape: [batch_size, vocab_size, num_features]
+    tensors_to_stack = [
+        vocab_indices.unsqueeze(-1),  # gene_id (vocab index)
+        predictions.unsqueeze(-1),  # Prediction values
+        labels.unsqueeze(-1),  # Labels (including -100)
+    ]
+
+    # Add any additional tensors from kwargs (e.g., logits)
+    for key, value in sorted(kwargs.items()):
+        # Assume kwargs tensors are also [batch_size, vocab_size]
+        if len(value.shape) < 3:
+            value = value.unsqueeze(-1)
+        tensors_to_stack.append(value)
+
+    # Shape: [batch_size, vocab_size, num_features]
+    stacked_tensor = torch.cat(tensors_to_stack, dim=-1)
+
+    return stacked_tensor
 
 
 def concat_label_loss_batch_tensors(
@@ -185,6 +262,16 @@ def concat_label_loss_batch_tensors(
 
 def field_predictions_df_columns(fields, this_field, modeling_strategy):
     one_dim_decode_modes = ["regression", "is_zero", "mvc_regression", "mvc_is_zero"]
+    logits_columns = [
+        f"logits_{this_field.field_name}_{m}"
+        for m in sorted(this_field.decode_modes)
+        if m in one_dim_decode_modes
+    ]
+    if "wced" in this_field.decode_modes:
+        logits_columns = [
+            f"logits_{this_field.field_name}_{m}"
+            for m in this_field.decode_modes["wced"].get("logit_outputs", [])
+        ]
     input_field_names = [f.field_name for f in fields if f.is_input]
     field_column_map = {
         "mlm": {"genes": "gene_id", "expressions": "input_expressions"},
@@ -195,14 +282,14 @@ def field_predictions_df_columns(fields, this_field, modeling_strategy):
         },
     }
     field_column_map["multitask"] = field_column_map["mlm"]
-    logits_columns = [
-        f"logits_{this_field.field_name}_{m}"
-        for m in sorted(this_field.decode_modes)
-        if m in one_dim_decode_modes
-    ]
-    input_columns = [
-        field_column_map[modeling_strategy][fn] for fn in input_field_names
-    ]
+
+    # check if we are in wced mode
+    if not this_field.is_masked and this_field.is_input:
+        input_columns = ["gene_id"]
+    else:
+        input_columns = [
+            field_column_map[modeling_strategy][fn] for fn in input_field_names
+        ]
     if modeling_strategy in ("mlm", "multitask"):
         output_columns = [
             f"predicted_{this_field.field_name}",
@@ -229,43 +316,6 @@ def get_gene_metrics_from_gene_errors(gene_level_err: pd.DataFrame):
         gene_level_err.gene_err > gene_level_err.gene_err_null
     ).mean()
     return metrics
-
-
-def concat_batch_tensors(batch, outputs, predictions, loss_task):
-    output_key = loss_task.output_key
-    metric_key = loss_task.metric_key
-    from .loss_handling import FieldLossTask, LabelLossTask
-
-    if isinstance(loss_task, LabelLossTask):
-        logits_to_record = {k: v for k, v in outputs.logits.items() if k == output_key}
-        batch_tensors = (
-            concat_label_loss_batch_tensors(
-                input_ids=batch["input_ids"],
-                predictions=predictions[metric_key],
-                labels=batch["labels"][output_key],
-                **logits_to_record,
-            )
-            .cpu()
-            .detach()
-        )
-    elif isinstance(loss_task, FieldLossTask):
-        logits_to_record = {
-            k: v
-            for k, v in outputs.logits.items()
-            if k.startswith(output_key) and (v.shape[-1] == 1)
-        }
-        batch_tensors = (
-            concat_field_loss_batch_tensors(
-                input_ids=batch["input_ids"],
-                predictions=predictions[metric_key],
-                labels=batch["labels"][output_key],
-                **logits_to_record,
-            )
-            .cpu()
-            .detach()
-        )
-
-    return batch_tensors
 
 
 def create_label_predictions_df(

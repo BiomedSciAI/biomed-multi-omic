@@ -7,15 +7,12 @@ import torch
 from transformers.tokenization_utils_base import PaddingStrategy, TruncationStrategy
 
 from bmfm_targets.config import FieldInfo, LabelColumnInfo
-from bmfm_targets.tokenization.resources import get_ortholog_genes
-from bmfm_targets.training import sample_transforms
-from bmfm_targets.training.masking import Masker
+from bmfm_targets.training.sample_transforms import transform_inputs
 
 from .multifield_instance import MultiFieldInstance
 from .multifield_tokenizer import MultiFieldTokenizer
 
 logger = logging.getLogger(__name__)
-from functools import partial, reduce
 
 
 class MultiFieldCollator:
@@ -56,13 +53,16 @@ class MultiFieldCollator:
         padding: PaddingStrategy | bool = True,
         pad_zero_expression_strategy: dict | None = None,
         truncation: TruncationStrategy | bool = True,
-        mlm: bool = True,
-        masker: Masker | None = None,
+        masker: object | None = None,
         sequence_order: str | None = None,
         sequence_dropout_factor: float | int | None = None,
         log_normalize_transform: bool = False,
-        rda_transform: Literal["downsample"] | Literal["equal"] | int | None = None,
+        rda_transform: Literal["downsample", "poisson_downsample", "equal"]
+        | int
+        | None = None,
         map_orthologs: str | None = None,
+        tokenize_kwargs: dict | None = None,
+        renoise: float | None = 0.6,
     ):
         """
         Multifield Data collator.
@@ -72,7 +72,6 @@ class MultiFieldCollator:
             tokenizer (MultiFieldTokenizer): Tokenizer
             fields (list[FieldInfo]): List of FieldInfo
             label_dict (dict[dict[str, int]] | None, optional): Label dictionary. Defaults to None.
-            mlm (bool): Whether to use MLM
             pad_to_multiple_of (int): Pad inputs to multiple of
             max_length (int | None, optional): Maximum length of input sequence. Defaults to None.
             return_attention_mask (bool, optional): Whether to return attention mask. Defaults to True.
@@ -84,16 +83,10 @@ class MultiFieldCollator:
         ------
             ValueError: If tokenizer does not have a mask token
             ValueError: If input fields are not specified
-            ValueError: If mlm and mask fields are not specified
-            ValueError: If mlm and mask fields are not subset of input fields
-            ValueError: If mlm and change ratio is not between 0 and 1
-            ValueError: If mlm and mask ratio is not between 0 and 1
-            ValueError: If mlm and switch ratio is not between 0 and 1
-            ValueError: If mlm and mask ratio + switch ratio is greater than 1
+
 
         """
         self.tokenizer = tokenizer
-        self.mlm = mlm
         self.fields = fields
         self.label_columns = label_columns
         self.padding = padding
@@ -106,9 +99,6 @@ class MultiFieldCollator:
         self.masker = masker
         self.input_fields = [fi for fi in self.fields if fi.is_input]
         self.input_field_names = [fi.field_name for fi in self.input_fields]
-        self.mask_field_names = [
-            fi.field_name for fi in self.fields if fi.is_masked and fi.is_input
-        ]
         self.label_field_names = [
             fi.field_name for fi in self.fields if not fi.is_input
         ]
@@ -119,196 +109,19 @@ class MultiFieldCollator:
         self.collation_strategy = collation_strategy
         self.label_dict = label_dict
         self.map_orthologs = map_orthologs
+        self.tokenize_kwargs = tokenize_kwargs if tokenize_kwargs is not None else {}
+        self.renoise = renoise
         self.__post__init__()
 
     def __post__init__(self):
-        if self.mlm and self.tokenizer.mask_token is None:
-            raise ValueError(
-                "This tokenizer does not have a mask token which is necessary for masked language modeling. Remove the --mlm flag if you want to use this tokenizer."
-            )
-        if self.mlm and self.masker is None:
-            raise ValueError("MLM requested but no Masker object provided")
-
         if self.input_field_names is None or len(self.input_field_names) == 0:
             raise ValueError("You need to specify the input fields")
 
-        if (
-            self.mlm
-            and (self.mask_field_names is None or len(self.mask_field_names)) == 0
-        ):
-            raise ValueError("You need to specify the mask fields")
-
-        if self.mlm and not set(self.mask_field_names).issubset(
-            set(self.input_field_names)
-        ):
-            raise ValueError("Mask fields should be subset of input fields")
-        if self.mlm and self.rda_transform and self.masker.switch_ratio > 0:
+        if self.rda_transform and getattr(self.masker, "switch_ratio", 0) > 0:
             raise ValueError("switch ratio is not allowed with rda down sampling")
 
-        if self.rda_transform in {"downsample", "equal"}:
+        if self.rda_transform in {"downsample", "poisson_downsample", "equal"}:
             assert "label_expressions" in self.label_field_names
-
-    def _compose_transforms(
-        self,
-        sequence_order=None,
-        log_normalize_transform=False,
-        rda_transform=None,
-        pad_zero_expression_strategy=None,
-        max_length=None,
-        sequence_dropout_factor=None,
-        fields_to_downcast=None,
-        map_orthologs=None,
-    ):
-        transforms = []
-        if sequence_order == "random":
-            transforms.append(sample_transforms.randomize)
-        elif sequence_order == "sorted":
-            transforms.append(
-                partial(sample_transforms.sort_by_field, field="expressions")
-            )
-        if sequence_dropout_factor is not None:
-            if sequence_dropout_factor > 1:
-                transforms.append(
-                    partial(
-                        sample_transforms.dropout_chunk_in_range,
-                        chunk_size=sequence_dropout_factor,
-                        drop_range=(0, max_length - 1),
-                    )
-                )
-            else:
-                transforms.append(
-                    partial(
-                        sample_transforms.dropout_random,
-                        dropout_ratio=sequence_dropout_factor,
-                    )
-                )
-
-        if pad_zero_expression_strategy is not None:
-            transforms.append(
-                partial(
-                    sample_transforms.pad_zero_expressed_genes,
-                    pad_zero_expression_strategy=pad_zero_expression_strategy,
-                    max_length=max_length,
-                )
-            )
-
-        if log_normalize_transform:
-            transforms.append(
-                partial(sample_transforms.log_normalize, max_length=max_length)
-            )
-
-        if rda_transform == "downsample":
-            transforms.append(
-                partial(
-                    sample_transforms.rda_downsample,
-                    max_length=max_length,
-                    downsample_threshold=1000,
-                    normalized_sum=10000,
-                )
-            )
-        elif rda_transform == "equal":
-            transforms.append(
-                partial(
-                    sample_transforms.rda_downsample,
-                    max_length=max_length,
-                    downsample_threshold=torch.inf,
-                    normalized_sum=10000,
-                )
-            )
-        elif isinstance(rda_transform, int) and not isinstance(rda_transform, bool):
-            transforms.append(
-                partial(
-                    sample_transforms.rda_align,
-                    target_read_resolution=rda_transform,
-                    max_length=max_length,
-                    normalized_sum=10000,
-                )
-            )
-        if fields_to_downcast:
-            transforms.append(
-                partial(
-                    sample_transforms.downcast_numeric_fields,
-                    fields_to_downcast=fields_to_downcast,
-                )
-            )
-        if map_orthologs == "mouse_to_human_orthologs":
-            mapping = get_ortholog_genes(
-                return_mapping=True,
-                from_species="mmusculus",
-                to_species="hsapiens",
-                id_type="gene_name",
-            )
-            mapping.update({"[S]": "[S]", "[T]": "[T]"})
-            transforms.append(
-                partial(
-                    sample_transforms.field_remap,
-                    field_to_remap="genes",
-                    mapping=mapping,
-                )
-            )
-        elif map_orthologs == "human_to_mouse_orthologs":
-            mapping = get_ortholog_genes(
-                return_mapping=True,
-                from_species="hsapiens",
-                to_species="mmusculus",
-                id_type="gene_name",
-            )
-            mapping.update({"[S]": "[S]", "[T]": "[T]"})
-            transforms.append(
-                partial(
-                    sample_transforms.field_remap,
-                    field_to_remap="genes",
-                    mapping=mapping,
-                )
-            )
-
-        return transforms
-
-    def _transform_inputs(self, examples):
-        fields_to_downcast = [
-            f.field_name
-            for f in self.fields
-            if "expressions" in f.field_name
-            and f.tokenization_strategy != "continuous_value_encoder"
-            and f.is_input
-        ]
-        transforms = self._compose_transforms(
-            sequence_order=self.sequence_order,
-            log_normalize_transform=self.log_normalize_transform,
-            rda_transform=self.rda_transform,
-            pad_zero_expression_strategy=self.pad_zero_expression_strategy,
-            max_length=self.max_length,
-            sequence_dropout_factor=self.sequence_dropout_factor,
-            fields_to_downcast=fields_to_downcast,
-            map_orthologs=self.map_orthologs,
-        )
-        if "perturbations" in [i.field_name for i in self.fields]:
-            transforms.append(
-                partial(sample_transforms.sort_by_field, field="perturbations")
-            )
-        if len(transforms) > 0:
-            expressed_genes_in_batch = set()
-            if (
-                self.pad_zero_expression_strategy is not None
-                and self.pad_zero_expression_strategy["strategy"] == "batch_wise"
-            ):
-                expressed_genes_in_batch = {
-                    gene
-                    for mfi in examples
-                    for gene, expression in zip(
-                        mfi.data["genes"], mfi.data["expressions"]
-                    )
-                    if expression != 0.0
-                }
-            combined_func = reduce(
-                lambda f, g: lambda x, *a, **k: g(f(x, *a, **k), *a, **k),
-                transforms,
-            )
-            return [
-                combined_func(x, expressed_genes_in_batch=expressed_genes_in_batch)
-                for x in examples
-            ]
-        return examples
 
     def _mark_rda_special_tokens(self, batch, fields: list[FieldInfo]):
         for field in fields:
@@ -415,18 +228,23 @@ class MultiFieldCollator:
 
         Returns:
         -------
-            dict[str, torch.Tensor]: Dictionary of tensors for input_ids, labels for each field if mlm is True else input_ids. If return_attention_mask is True, attention_mask is also returned. If return_special_tokens_mask is True, special_tokens_mask is also returned.
+            dict[str, torch.Tensor]: Dictionary of tensors for input_ids, labels for each field if masking fields else input_ids. If return_attention_mask is True, attention_mask is also returned. If return_special_tokens_mask is True, special_tokens_mask is also returned.
 
         """
         examples_pair = None
+        pre_transformed_examples = examples
         if isinstance(examples[0], MultiFieldInstance):
-            examples = self._transform_inputs(examples)
+            examples = transform_inputs(examples, **self._transform_inputs_kwargs)
         else:
             examples, examples_pair = list(map(list, zip(*examples)))
-            examples = self._transform_inputs(examples)
-            examples_pair = self._transform_inputs(examples_pair)
+            examples = transform_inputs(examples, **self._transform_inputs_kwargs)
+            examples_pair = transform_inputs(
+                examples_pair, **self._transform_inputs_kwargs
+            )
 
         batch = self.tokenize_batch(examples, examples_pair)
+        batch["mfi"] = pre_transformed_examples
+
         # TODO: This is not generic, this should be addressed
         if examples[0].metadata is not None and "cell_name" in examples[0].metadata:
             batch["cell_names"] = [mfi.metadata.get("cell_name") for mfi in examples]
@@ -446,89 +264,81 @@ class MultiFieldCollator:
         return_dict = self._prepare_return_dict(batch)
         return return_dict
 
-    def tokenize_batch(self, examples, examples_pair=None):
-        batch = self.tokenizer(
-            mfi=examples,
-            mfi_pair=examples_pair,
-            fields=self.fields,
-            return_tensors="pt",
-            truncation=self.truncation,
-            max_length=self.max_length,
-            padding=self.padding,
-            return_attention_mask=self.return_attention_mask,
-            return_special_tokens_mask=self.return_special_tokens_mask,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-        )
+    @property
+    def _transform_inputs_kwargs(self):
+        return {
+            "fields": self.fields,
+            "sequence_order": self.sequence_order,
+            "log_normalize_transform": self.log_normalize_transform,
+            "rda_transform": self.rda_transform,
+            "pad_zero_expression_strategy": self.pad_zero_expression_strategy,
+            "max_length": self.max_length,
+            "sequence_dropout_factor": self.sequence_dropout_factor,
+            "map_orthologs": self.map_orthologs,
+            "renoise": self.renoise,
+        }
 
+    def tokenize_batch(self, examples, examples_pair=None):
+        tokenize_kwargs = {
+            "return_tensors": "pt",
+            "truncation": self.truncation,
+            "max_length": self.max_length,
+            "padding": self.padding,
+            "return_attention_mask": self.return_attention_mask,
+            "return_special_tokens_mask": self.return_special_tokens_mask,
+            "pad_to_multiple_of": self.pad_to_multiple_of,
+        }
+        tokenize_kwargs.update(self.tokenize_kwargs)
+        batch = self.tokenizer(
+            mfi=examples, mfi_pair=examples_pair, fields=self.fields, **tokenize_kwargs
+        )
         return batch
 
     def _prepare_return_dict(self, batch):
-        attention_mask: torch.Tensor = batch[self.input_field_names[0]][
-            "attention_mask"
-        ]
-        special_tokens_mask = batch[self.input_field_names[0]][
-            "special_tokens_mask"
-        ].bool()
+        """Prepare the final return dictionary with input_ids, labels, and metadata."""
+        attention_mask = batch[self.input_field_names[0]]["attention_mask"]
+        input_ids = torch.stack(
+            [batch[field]["input_ids"] for field in self.input_field_names], dim=1
+        )
 
-        field_input_ids = [
-            batch[field]["input_ids"] for field in self.input_field_names
-        ]
-        input_ids = torch.stack(field_input_ids, dim=1)
-        return_dict = {}
+        return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
 
-        if self.collation_strategy == "multitask":
-            labels = {}
-            if self.mlm and self.mask_field_names is not None:
-                input_ids, labels, attention_mask = self.masker.mask_inputs(
-                    self.fields, batch
-                )
-            if "label_ids" in batch:
-                for key in batch["label_ids"]:
-                    labels[key] = batch["label_ids"][key]
-                return_dict = {
+        # MLM masking for language_modeling and multitask
+        if self.masker is not None:
+            input_ids, labels, attention_mask = self.masker.mask_inputs(
+                self.fields, batch
+            )
+            return_dict.update(
+                {
                     "input_ids": input_ids,
                     "labels": labels,
                     "attention_mask": attention_mask,
                 }
+            )
 
-            if len(labels) == 0:
-                return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        if self.collation_strategy == "language_modeling":
-            if self.mlm and self.mask_field_names is not None:
-                input_ids, labels, attention_mask = self.masker.mask_inputs(
-                    self.fields, batch
-                )
-
-                return_dict = {
-                    "input_ids": input_ids,
-                    "labels": labels,
-                    "attention_mask": attention_mask,
-                }
+        # Classification labels for sequence_classification and multitask
+        if (
+            self.collation_strategy in ["sequence_classification", "multitask"]
+            and "label_ids" in batch
+        ):
+            if "labels" in return_dict:
+                return_dict["labels"].update(batch["label_ids"])
             else:
-                return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        elif self.collation_strategy == "sequence_classification":
-            return_dict = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-            }
-
-            if "label_ids" in batch:
                 return_dict["labels"] = batch["label_ids"]
 
-        elif self.collation_strategy == "sequence_labeling":
-            field_label_ids = {
+        # Sequence labeling labels
+        if self.collation_strategy == "sequence_labeling":
+            special_tokens_mask = batch[self.input_field_names[0]][
+                "special_tokens_mask"
+            ].bool()
+            labels = {
                 field: batch[field]["input_ids"] for field in self.label_field_names
             }
-            for field in field_label_ids:
-                field_label_ids[field][special_tokens_mask] = -100
-            return_dict = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "labels": field_label_ids,
-            }
+            for field_labels in labels.values():
+                field_labels[special_tokens_mask] = -100
+            return_dict["labels"] = labels
 
-        if "cell_names" in batch:
-            return_dict["cell_names"] = batch["cell_names"]
+        # Add metadata
+        return_dict.update({k: batch[k] for k in ["cell_names"] if k in batch})
+
         return return_dict

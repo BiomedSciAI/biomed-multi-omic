@@ -316,35 +316,49 @@ class SCSelfOutput(nn.Module):
 class SCPooler(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.pooling = getattr(config, "classifier_pooling", "cls")
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.activation = nn.Tanh()
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        # We "pool" the model by simply taking the hidden state corresponding
-        # to the first token.
-        first_token_tensor = hidden_states[:, 0]
-        pooled_output = self.dense(first_token_tensor)
-        pooled_output = self.activation(pooled_output)
-        return pooled_output
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor = None
+    ) -> torch.Tensor:
+        if self.pooling == "cls":
+            pooled = hidden_states[:, 0]
+        elif self.pooling == "mean":
+            if attention_mask is None:
+                raise ValueError("attention_mask is required for mean pooling")
+            pooled = (hidden_states * attention_mask.unsqueeze(-1)).sum(
+                dim=1
+            ) / attention_mask.sum(dim=1, keepdim=True).clamp(min=1e-9)
+        else:
+            raise ValueError(f"Unsupported pooling method: {self.pooling}")
+
+        pooled_output = self.dense(pooled)
+        return self.activation(pooled_output)
 
 
 def make_field_decoder(
-    config, field_name: str, decode_mode: str, vocab_size: int = 1
+    config, field_name: str, decode_mode: str, output_dim: int = 1, **kwargs
 ) -> nn.Module:
     if decode_mode in ("regression", "is_zero"):
-        return FieldDecoder(config)
+        return FieldDecoder(config, **kwargs)
     elif decode_mode in ("mvc_regression", "mvc_is_zero"):
-        return MVCFieldDecoder(config)
+        return MVCFieldDecoder(config, **kwargs)
     elif decode_mode == "token_scores":
-        if vocab_size == 1:
+        if output_dim == 1:
             raise ValueError(
                 f"Cannot use `token_scores` mode with vocab_size=1 for: {field_name}"
             )
-        if vocab_size is None:
+        if output_dim is None:
             raise ValueError(
                 f"Cannot use `token_scores` mode without setting vocab size for field: {field_name}"
             )
-        return FieldDecoder(config, vocab_size)
+        return FieldDecoder(config, output_dim, **kwargs)
+    elif decode_mode == "wced":
+        num_outputs_per_target = len(kwargs["logit_outputs"])
+        assert output_dim > 1
+        return FieldDecoder(config, output_dim, num_outputs_per_target)
     else:
         raise ValueError(f"Unsupported decode mode: {decode_mode}")
 
@@ -354,12 +368,24 @@ class FieldDecoder(nn.Linear):
         self,
         config: SCModelConfigBase,
         output_size: int = 1,
+        num_outputs_per_target: int = 1,
     ):
-        super().__init__(config.hidden_size, output_size)
-        self.bias = nn.Parameter(torch.zeros(output_size))
+        self.output_size = output_size
+        self.num_outputs_per_target = num_outputs_per_target
+        super().__init__(config.hidden_size, output_size * num_outputs_per_target)
+        self.bias = nn.Parameter(torch.zeros(output_size * num_outputs_per_target))
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return super().forward(hidden_states)
+        output = super().forward(hidden_states)
+
+        if self.num_outputs_per_target > 1:
+            output = output.view(
+                hidden_states.size(0),
+                hidden_states.size(1),
+                self.output_size,
+                self.num_outputs_per_target,
+            )
+        return output
 
 
 class MVCFieldDecoder(nn.Module):
@@ -450,18 +476,26 @@ class SCBaseFieldDecoder(nn.Module):
         self.config = config
         self.field_decoders = nn.ModuleDict()
 
-        for field in self.fields_to_decode():
-            for decode_mode in field.decode_modes:
-                output_dim = field.vocab_size if decode_mode == "token_scores" else 1
+        for field in filter(lambda f: f.is_decode, self.config.fields):
+            for decode_mode, decoder_kwargs in field.decode_modes.items():
+                if decode_mode == "token_scores":
+                    output_dim = field.vocab_size
+                elif decode_mode == "wced":
+                    vocab_field = [
+                        f
+                        for f in self.config.fields
+                        if f.field_name == decoder_kwargs["vocab_field"]
+                    ][0]
+                    output_dim = vocab_field.vocab_size
+                else:
+                    output_dim = 1
+
                 field_decoder_name = f"{field.field_name}_{decode_mode}"
-                decoder_kwargs = (
-                    field.decoder_kwargs if field.decoder_kwargs is not None else {}
-                )
                 field_decoder = make_field_decoder(
-                    config,
-                    field.field_name,
-                    decode_mode,
-                    vocab_size=output_dim,
+                    config=config,
+                    field_name=field.field_name,
+                    decode_mode=decode_mode,
+                    output_dim=output_dim,
                     **decoder_kwargs,
                 )
                 self.field_decoders[field_decoder_name] = field_decoder
@@ -501,14 +535,14 @@ class SCClassificationDecoder(nn.Module):
         return label_logits
 
 
+# kept only for artifact compatibility
 class SCLMFieldDecoder(SCBaseFieldDecoder):
-    def fields_to_decode(self):
-        return filter(lambda f: f.is_masked, self.config.fields)
+    pass
 
 
+# kept only for artifact compatibility
 class SCLabelFieldDecoder(SCBaseFieldDecoder):
-    def fields_to_decode(self):
-        return filter(lambda f: not f.is_input, self.config.fields)
+    pass
 
 
 class SCPredictionHeadTransform(nn.Module):
@@ -532,7 +566,7 @@ class SCLMPredictionHead(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.transform = SCPredictionHeadTransform(config)
-        self.decoder = SCLMFieldDecoder(config)
+        self.decoder = SCBaseFieldDecoder(config)
 
     def forward(
         self,
@@ -548,7 +582,7 @@ class SCSequenceLabelPredictionHead(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.transform = SCPredictionHeadTransform(config)
-        self.decoder = SCLabelFieldDecoder(config)
+        self.decoder = SCBaseFieldDecoder(config)
 
     def forward(self, hidden_states: torch.Tensor) -> dict[str, torch.Tensor]:
         hidden_states = self.transform(hidden_states)

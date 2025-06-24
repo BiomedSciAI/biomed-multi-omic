@@ -2,9 +2,10 @@ defaults:
  - base_seq_cls
 
 _target_: bmfm_targets.training.data_module.DataModule
-transform_datasets: True
+transform_datasets: false
 processed_name: processed_pass_through
 limit_genes: protein_coding
+log_normalize_transform: true
 dataset_kwargs:
   label_dict_path: ${data_module.data_dir}/labels.json
   expose_zeros: null
@@ -21,3 +22,6 @@ transform_kwargs:
         transform_args:
           pct_counts_mt: null
           total_counts_iqr_scale: 1.5
+label_column_name: CellType
+batch_column_name: batch
+counts_column_name: total_counts

@@ -2,6 +2,38 @@ import re
 
 import torch
 
+from bmfm_targets.training.sample_transforms import transform_inputs
+
+
+def select_input_labels(
+    label_tensor: torch.Tensor,
+    sample_idx: int,
+    lookup_ids: torch.Tensor,
+    lookup_vals: torch.Tensor,
+    input_ids: torch.Tensor,
+) -> None:
+    """Assign labels for genes present in input."""
+    input_mask = torch.isin(lookup_ids, input_ids[sample_idx, 0])
+    label_tensor[sample_idx, lookup_ids[input_mask]] = lookup_vals[input_mask]
+
+
+def select_non_input_labels(
+    label_tensor: torch.Tensor,
+    sample_idx: int,
+    lookup_ids: torch.Tensor,
+    lookup_vals: torch.Tensor,
+    input_ids: torch.Tensor,
+) -> None:
+    """Assign labels for genes NOT present in input."""
+    non_input_mask = ~torch.isin(lookup_ids, input_ids[sample_idx, 0])
+    label_tensor[sample_idx, lookup_ids[non_input_mask]] = lookup_vals[non_input_mask]
+
+
+LABEL_SET_FUNCTIONS = {
+    "input": select_input_labels,
+    "non_input": select_non_input_labels,
+}
+
 
 class MaskingStrategy:
     def __init__(
@@ -79,3 +111,104 @@ class MaskingStrategy:
         pattern = re.compile(regex)
         matching_ids = [tok_id for tok, tok_id in vocab.items() if pattern.match(tok)]
         return matching_ids
+
+
+class WCEDMasker:
+    """
+    Whole Cell Expression Decoder Masker.
+
+    Prepares labels for predicting gene expression values, distinguishing between
+    genes in the input sequence vs. non_input genes. Creates "input" and "non_input"
+    label sets for training models on complete cellular expression profiles.
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        label_sets: list[str] | None = None,
+        transform_kwargs: dict | None = None,
+        **kwargs,
+    ):
+        """Initialize WCED masker with tokenizer and optional label sets."""
+        self.tokenizer = tokenizer
+        self.lookup_field_name = "genes"
+        self.value_field_name = "expressions"
+        self.label_sets = label_sets or ["non_input", "input"]
+        self.transform_kwargs = transform_kwargs or {}
+
+        self.lookup_field_vocab_len = len(
+            self.tokenizer.get_field_vocab(self.lookup_field_name)
+        )
+        self.lookup_field_tokenizer = self.tokenizer.get_field_tokenizer(
+            self.lookup_field_name
+        )
+
+    @property
+    def _transform_inputs_kwargs(self) -> dict:
+        """Get transformation parameters with defaults."""
+        kwargs = {
+            "sequence_order": None,
+            "log_normalize_transform": True,
+            "rda_transform": None,
+            "pad_zero_expression_strategy": None,
+            "max_length": None,
+            "sequence_dropout_factor": None,
+            "map_orthologs": None,
+            "renoise": None,
+        }
+        kwargs.update(self.transform_kwargs)
+        return kwargs
+
+    def mask_inputs(
+        self, fields: list, batch: dict
+    ) -> tuple[torch.Tensor, dict[str, dict[str, torch.Tensor]], torch.Tensor]:
+        """
+        Process batch to create input tensors and expression labels.
+
+        Returns: (input_ids, labels, attention_mask)
+        """
+        input_fields = [f for f in fields if f.is_input]
+        attention_mask = batch[input_fields[0].field_name]["attention_mask"]
+        input_ids = torch.stack(
+            [batch[field.field_name]["input_ids"] for field in input_fields], dim=1
+        )
+
+        batch_size = input_ids.shape[0]
+
+        # Initialize label tensors
+        label_tensor_dict = {
+            label_set: -100
+            * torch.ones(batch_size, self.lookup_field_vocab_len, dtype=torch.float)
+            for label_set in self.label_sets
+        }
+
+        # Transform examples and populate labels
+        examples = transform_inputs(
+            batch["mfi"], fields, **self._transform_inputs_kwargs
+        )
+        tokenized_lookup_field = self.lookup_field_tokenizer(
+            [mfi[self.lookup_field_name] for mfi in examples],
+            is_split_into_words=True,
+            add_special_tokens=False,
+            return_attention_mask=True,
+            truncation=False,
+            padding="longest",
+            return_token_type_ids=False,
+            return_tensors="pt",
+        )
+
+        for sample_idx, mfi in enumerate(examples):
+            lookup_vals = torch.tensor(mfi[self.value_field_name], dtype=torch.float)
+            lookup_ids = tokenized_lookup_field["input_ids"][sample_idx][
+                tokenized_lookup_field["attention_mask"][sample_idx].bool()
+            ]
+            for label_set in self.label_sets:
+                LABEL_SET_FUNCTIONS[label_set](
+                    label_tensor_dict[label_set],
+                    sample_idx,
+                    lookup_ids,
+                    lookup_vals,
+                    input_ids,
+                )
+
+        return input_ids, {"expressions": label_tensor_dict}, attention_mask

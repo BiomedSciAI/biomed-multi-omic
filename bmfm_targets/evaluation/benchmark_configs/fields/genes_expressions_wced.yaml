@@ -1,0 +1,13 @@
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: genes
+  is_masked: false
+  decode_modes:
+    token_scores:
+      num_outputs_per_target: 2
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: expressions
+  is_masked: false
+  tokenization_strategy: continuous_value_encoder
+  encoder_kwargs:
+    kind: mlp_with_special_token_embedding
+    zero_as_special_token: true

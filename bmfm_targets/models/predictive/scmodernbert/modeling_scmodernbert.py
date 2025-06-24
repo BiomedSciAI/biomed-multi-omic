@@ -7,7 +7,7 @@ from torch import nn
 from transformers.activations import ACT2FN
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 from transformers.modeling_outputs import (
-    BaseModelOutput,
+    BaseModelOutputWithPoolingAndCrossAttentions,
     MaskedLMOutput,
     TokenClassifierOutput,
 )
@@ -28,6 +28,7 @@ from bmfm_targets.models.predictive.layers import (
     SCEmbeddingsLayer,
     SCMultiTaskHead,
     SCOnlyMLMHead,
+    SCPooler,
     SCSequenceLabelingHead,
 )
 from bmfm_targets.training.serialization import prepare_model_dict_from_checkpoint
@@ -715,7 +716,7 @@ def _pad_modernbert_output(
 
 
 class SCModernBertModel(SCModernBertPreTrainedModel):
-    def __init__(self, config: SCModernBertConfig):
+    def __init__(self, config: SCModernBertConfig, add_pooling_layer=True):
         super().__init__(config)
         self.config = config
         self.embeddings = SCEmbeddingsLayer(config)
@@ -729,6 +730,7 @@ class SCModernBertModel(SCModernBertPreTrainedModel):
             config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
         )
         self.gradient_checkpointing = False
+        self.pooler = SCPooler(config) if add_pooling_layer else None
         self.post_init()
 
     def get_input_embeddings(self):
@@ -753,12 +755,13 @@ class SCModernBertModel(SCModernBertPreTrainedModel):
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         head_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, ...] | BaseModelOutput:
+    ) -> tuple[torch.Tensor, ...] | BaseModelOutputWithPoolingAndCrossAttentions:
         output_attentions = (
             output_attentions
             if output_attentions is not None
             else self.config.output_attentions
         )
+        original_attention_mask = attention_mask.detach().clone()
         output_hidden_states = (
             output_hidden_states
             if output_hidden_states is not None
@@ -882,10 +885,17 @@ class SCModernBertModel(SCModernBertPreTrainedModel):
                 if v is not None
             )
 
-        return BaseModelOutput(
+        pooler_output = (
+            self.pooler(hidden_states, original_attention_mask)
+            if self.pooler is not None
+            else None
+        )
+
+        return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=hidden_states,
             hidden_states=all_hidden_states,
             attentions=all_self_attentions,
+            pooler_output=pooler_output,
         )
 
     def _update_attention_mask(
@@ -949,7 +959,7 @@ class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
     def __init__(self, config: SCModernBertConfig):
         super().__init__(config)
         self.config = config
-        self.scmodernbert = SCModernBertModel(config)
+        self.scmodernbert = SCModernBertModel(config, add_pooling_layer=False)
         self.cls = SCOnlyMLMHead(config)
 
         self.sparse_prediction = self.config.sparse_prediction
@@ -1182,16 +1192,7 @@ class SCModernBertForSequenceClassification(SCModernBertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        last_hidden_state = outputs[0]
-
-        if self.config.classifier_pooling == "cls":
-            last_hidden_state = last_hidden_state[:, 0]
-        elif self.config.classifier_pooling == "mean":
-            last_hidden_state = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(
-                dim=1
-            ) / attention_mask.sum(dim=1, keepdim=True)
-
-        pooled_output = self.head(last_hidden_state)
+        pooled_output = self.head(outputs.pooler_output)
         pooled_output = self.drop(pooled_output)
         logits = {self.label_column.label_column_name: self.classifier(pooled_output)}
 

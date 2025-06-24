@@ -1,0 +1,15 @@
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: genes
+  pretrained_embedding: null
+  is_masked: false
+  vocab_update_strategy: static
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: expressions
+  is_masked: false
+  tokenization_strategy: continuous_value_encoder
+  encoder_kwargs:
+    kind: scale_adapt
+    n_sin_basis: 48
+    basis_scale: 1.5
+    trainable: true
+    zero_as_special_token: true

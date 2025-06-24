@@ -1,0 +1,20 @@
+defaults:
+ - base_seq_cls
+
+_target_: bmfm_targets.datasets.multiple_sclerosis.MultipleSclerosisDataModule
+_partial_: true
+num_workers: 8
+mlm: false
+limit_genes: protein_coding
+shuffle: true
+transform_datasets: false
+data_dir: ${oc.env:BMFM_TARGETS_MULTIPLE_SCLEROSIS_DATA}
+processed_name: processed_all_obs_no_trans_rda
+dataset_kwargs:
+  split_column_name: split_cross
+  label_columns:
+  - celltype
+label_column_name: celltype
+dataset_name: multiple_sclerosis
+batch_column_name: str_batch
+log_normalize_transform: false

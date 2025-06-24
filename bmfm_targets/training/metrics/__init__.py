@@ -19,13 +19,12 @@ from .loss_handling import (
     FieldLossTask,
     LabelLossTask,
 )
-from .batch_prediction_metrics import concat_batch_tensors, create_field_predictions_df
+from .batch_prediction_metrics import create_field_predictions_df
 
 __all__ = [
     "MaskedAccuracy",
     "FieldLossTask",
     "calculate_predictions",
-    "concat_batch_tensors",
     "LabelLossTask",
     "create_field_predictions_df",
     "ce_loss",

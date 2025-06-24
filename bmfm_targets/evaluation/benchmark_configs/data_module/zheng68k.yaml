@@ -3,3 +3,22 @@ defaults:
 
 _target_: bmfm_targets.datasets.zheng68k.Zheng68kDataModule
 data_dir: ${oc.env:BMFM_TARGETS_ZHENG68K_DATA}
+processed_name: raw_counts
+transform_kwargs:
+    transforms:
+      - transform_name: RenameGenesTransform
+        transform_args:
+          gene_map: null
+      - transform_name: KeepGenesTransform
+        transform_args:
+          genes_to_keep: null
+      - transform_name: QcMetricsTransform
+        transform_args:
+          pct_counts_mt: null
+          total_counts_iqr_scale: 1.5
+transform_datasets: true
+
+dataset_name: zheng68k
+label_column_name: celltype
+batch_column_name: null
+counts_column_name: total_counts

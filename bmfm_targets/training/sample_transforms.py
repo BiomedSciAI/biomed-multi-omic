@@ -6,32 +6,23 @@ Used for modifying training logic or augmenting data.
 
 import random
 import warnings
+from functools import partial, reduce
 from operator import itemgetter
 from typing import Literal
 
 import numpy as np
 import scipy.stats as stats
+import torch
 
 from bmfm_targets.tokenization import MultiFieldInstance
+from bmfm_targets.tokenization.resources import get_ortholog_genes
 
 
 def randomize(mfi: MultiFieldInstance, *args, **kwargs) -> MultiFieldInstance:
-    """
-    Randomize the order of the tokens in each field.
-
-    Args:
-    ----
-        mfi (MultiFieldInstance): mfi
-
-    Returns:
-    -------
-        MultiFieldInstance: mfi
-
-    """
-    shuffled_indices = random.sample(range(mfi.seq_length), k=mfi.seq_length)
-    randomized_data = {}
-    for field, values in mfi.data.items():
-        randomized_data[field] = [values[i] for i in shuffled_indices]
+    indices = np.random.permutation(mfi.seq_length)
+    randomized_data = {
+        field: np.array(values)[indices].tolist() for field, values in mfi.data.items()
+    }
     return MultiFieldInstance(data=randomized_data, metadata=mfi.metadata)
 
 
@@ -172,6 +163,84 @@ def rda_downsample(
     ST_list = [np.log1p(input_expressions_sum), np.log1p(raw_expressions_sum)]
     input_expressions = ST_list + input_expressions.tolist()
     raw_expressions = ST_list + raw_expressions.tolist()
+
+    updated_data = {}
+    for field, vals in mfi.data.items():
+        if field == "genes":
+            updated_data[field] = genes
+        elif field == "expressions":
+            updated_data[field] = input_expressions
+            updated_data["label_expressions"] = raw_expressions
+        else:
+            updated_data[field] = vals
+
+    return MultiFieldInstance(
+        data=updated_data,
+        metadata=mfi.metadata,
+    )
+
+
+def poisson_downsample(
+    mfi: MultiFieldInstance,
+    renoise: float = 0.6,
+    max_length: int = None,
+    log_transform: bool = True,
+    *args,
+    **kwargs,
+) -> MultiFieldInstance:
+    """
+    Downsamples the gene expression values in a MultiFieldInstance using a Poisson distribution.
+
+    Approach based on Jiang, R., Sun, T., Song, D. et al. Statistics or biology: the zero-inflation
+    controversy about scRNA-seq data. Genome Biol 23, 31 (2022) and Kalfon, J., Samaran, J.,
+    Peyré, G. et al. scPRINT: pre-training on 50 million cells allows robust gene network
+    predictions. Nat Commun 16, 3607 (2025).
+
+    Args:
+    ----
+        mfi (MultiFieldInstance): The input MultiFieldInstance containing gene and expression data.
+        renoise (float, optional): The renoise parameter for the Poisson distribution. Default is 0.6.
+        log_transform (bool, optional): Log1p normalize data after downsampling. Default is True.
+
+    Returns:
+    -------
+        MultiFieldInstance: A new MultiFieldInstance with downsampled expression values.
+
+    """
+    genes = mfi["genes"]
+    expressions = mfi["expressions"]
+
+    if max_length is not None:
+        genes = genes[: max_length - 2]
+        expressions = expressions[: max_length - 2]
+
+    n_genes = len(genes)
+    raw_expressions = np.array([float(value) for value in expressions])
+
+    if not np.all(np.mod(raw_expressions, 1) == 0):
+        raise ValueError("Poisson requires raw expression values.")
+
+    r = renoise * 0.55
+    p = stats.poisson(raw_expressions * r)
+    rng = np.random.default_rng()
+    msk = (rng.random((1, n_genes)) >= r).astype(int)
+    input_expressions = (raw_expressions - p.rvs(size=(n_genes,))) * msk
+    input_expressions = np.maximum(input_expressions, np.zeros((1, 1), dtype=int))
+
+    raw_expressions_sum = sum(raw_expressions)
+    input_expressions_sum = input_expressions.sum()
+    genes = ["[S]", "[T]"] + genes
+    ST_list = (
+        [np.log1p(input_expressions_sum), np.log1p(raw_expressions_sum)]
+        if log_transform
+        else [input_expressions_sum, raw_expressions_sum]
+    )
+
+    if log_transform:
+        input_expressions = np.log1p(input_expressions)
+
+    input_expressions = ST_list + [*input_expressions.ravel()]
+    raw_expressions = ST_list + [*raw_expressions.ravel()]
 
     updated_data = {}
     for field, vals in mfi.data.items():
@@ -540,3 +609,185 @@ def downcast_numeric_fields(
         for k, v in mfi
     }
     return MultiFieldInstance(data=data, metadata=mfi.metadata)
+
+
+def compose_transforms(
+    sequence_order=None,
+    log_normalize_transform=False,
+    rda_transform=None,
+    pad_zero_expression_strategy=None,
+    max_length=None,
+    sequence_dropout_factor=None,
+    fields_to_downcast=None,
+    map_orthologs=None,
+    renoise=None,
+):
+    transforms = []
+    if sequence_order == "random":
+        transforms.append(randomize)
+    elif sequence_order == "sorted":
+        transforms.append(partial(sort_by_field, field="expressions"))
+    if sequence_dropout_factor is not None:
+        if sequence_dropout_factor > 1:
+            transforms.append(
+                partial(
+                    dropout_chunk_in_range,
+                    chunk_size=sequence_dropout_factor,
+                    drop_range=(0, max_length - 1),
+                )
+            )
+        else:
+            transforms.append(
+                partial(
+                    dropout_random,
+                    dropout_ratio=sequence_dropout_factor,
+                )
+            )
+
+    if pad_zero_expression_strategy is not None:
+        transforms.append(
+            partial(
+                pad_zero_expressed_genes,
+                pad_zero_expression_strategy=pad_zero_expression_strategy,
+                max_length=max_length,
+            )
+        )
+
+    if log_normalize_transform:
+        transforms.append(partial(log_normalize, max_length=max_length))
+
+    if rda_transform == "downsample":
+        transforms.append(
+            partial(
+                rda_downsample,
+                max_length=max_length,
+                downsample_threshold=1000,
+                normalized_sum=10000,
+            )
+        )
+    elif rda_transform == "poisson_downsample":
+        transforms.append(
+            partial(
+                poisson_downsample,
+                renoise=renoise,
+                max_length=max_length,
+                log_normalize_transform=True,
+            )
+        )
+    elif rda_transform == "equal":
+        transforms.append(
+            partial(
+                rda_downsample,
+                max_length=max_length,
+                downsample_threshold=torch.inf,
+                normalized_sum=10000,
+            )
+        )
+    elif isinstance(rda_transform, int) and not isinstance(rda_transform, bool):
+        transforms.append(
+            partial(
+                rda_align,
+                target_read_resolution=rda_transform,
+                max_length=max_length,
+                normalized_sum=10000,
+            )
+        )
+    if fields_to_downcast:
+        transforms.append(
+            partial(
+                downcast_numeric_fields,
+                fields_to_downcast=fields_to_downcast,
+            )
+        )
+    if map_orthologs == "mouse_to_human_orthologs":
+        mapping = get_ortholog_genes(
+            return_mapping=True,
+            from_species="mmusculus",
+            to_species="hsapiens",
+            id_type="gene_name",
+        )
+        mapping.update({"[S]": "[S]", "[T]": "[T]"})
+        transforms.append(
+            partial(
+                field_remap,
+                field_to_remap="genes",
+                mapping=mapping,
+            )
+        )
+    elif map_orthologs == "human_to_mouse_orthologs":
+        mapping = get_ortholog_genes(
+            return_mapping=True,
+            from_species="hsapiens",
+            to_species="mmusculus",
+            id_type="gene_name",
+        )
+        mapping.update({"[S]": "[S]", "[T]": "[T]"})
+        transforms.append(
+            partial(
+                field_remap,
+                field_to_remap="genes",
+                mapping=mapping,
+            )
+        )
+
+    return transforms
+
+
+def get_genes_expressed_in_batch(examples):
+    return {
+        gene
+        for mfi in examples
+        for gene, expression in zip(mfi.data["genes"], mfi.data["expressions"])
+        if expression != 0.0
+    }
+
+
+def transform_inputs(
+    examples,
+    fields,
+    sequence_order,
+    log_normalize_transform,
+    rda_transform,
+    pad_zero_expression_strategy,
+    max_length,
+    sequence_dropout_factor,
+    map_orthologs,
+    renoise,
+):
+    fields_to_downcast = [
+        f.field_name
+        for f in fields
+        if "expressions" in f.field_name
+        and f.tokenization_strategy != "continuous_value_encoder"
+        and f.is_input
+    ]
+    transforms = compose_transforms(
+        sequence_order=sequence_order,
+        log_normalize_transform=log_normalize_transform,
+        rda_transform=rda_transform,
+        pad_zero_expression_strategy=pad_zero_expression_strategy,
+        max_length=max_length,
+        sequence_dropout_factor=sequence_dropout_factor,
+        fields_to_downcast=fields_to_downcast,
+        map_orthologs=map_orthologs,
+        renoise=renoise,
+    )
+    if "perturbations" in [i.field_name for i in fields]:
+        transforms.append(partial(sort_by_field, field="perturbations"))
+    if len(transforms) > 0:
+        combined_func = reduce(
+            lambda f, g: lambda x, *a, **k: g(f(x, *a, **k), *a, **k),
+            transforms,
+        )
+        if (
+            pad_zero_expression_strategy is not None
+            and pad_zero_expression_strategy["strategy"] == "batch_wise"
+        ):
+            expressed_genes_in_batch = get_genes_expressed_in_batch(examples)
+        else:
+            expressed_genes_in_batch = {}
+        return [
+            combined_func(x, expressed_genes_in_batch=expressed_genes_in_batch)
+            for x in examples
+        ]
+    return examples

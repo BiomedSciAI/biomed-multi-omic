@@ -2,3 +2,4 @@ defaults:
  - sceval_default
 
 data_dir: ${oc.env:BMFM_TARGETS_SCEVAL_DATA}/immune_atlas/
+dataset_name: immune_atlas

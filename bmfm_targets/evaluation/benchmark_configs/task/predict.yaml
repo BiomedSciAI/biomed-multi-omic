@@ -1,10 +1,10 @@
 _target_: bmfm_targets.config.PredictTaskConfig
-default_root_dir: "${output_directory}/${checkpoint_name}/${dataset_name}"
+default_root_dir: "${output_directory}/${checkpoint_name}/${data_module.dataset_name}"
 precision: "16-mixed"
 accelerator: "gpu"
 checkpoint: ${checkpoint_path}
 output_embeddings: true
 callbacks:
   - _target_: bmfm_targets.training.callbacks.BatchIntegrationCallback
-    batch_column_name: batch
-    counts_column_name: total_counts
+    batch_column_name: ${data_module.batch_column_name}
+    counts_column_name: ${data_module.counts_column_name}

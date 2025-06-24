@@ -21,6 +21,10 @@ from bmfm_targets.config import (
 )
 from bmfm_targets.config.model_config import SCModelConfigBase
 from bmfm_targets.config.training_config import BaseTaskConfig
+from bmfm_targets.models import (
+    download_ckpt_from_huggingface,
+    download_tokenizer_from_huggingface,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +133,8 @@ class SCBertMainConfig:
         checkpoint = self._get_checkpoint()
         if not checkpoint:
             return
+        if not os.path.isfile(checkpoint):
+            checkpoint = download_ckpt_from_huggingface(checkpoint)
         ckpt_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
         if self.fields is None:
             self.fields = ckpt_dict["hyper_parameters"]["model_config"].fields
@@ -187,7 +193,10 @@ class SCBertMainConfig:
 
         checkpoint = self._get_checkpoint()
         if checkpoint:
-            checkpoint_dir = os.path.dirname(checkpoint)
+            if os.path.isfile(checkpoint):
+                checkpoint_dir = os.path.dirname(checkpoint)
+            else:
+                checkpoint_dir = download_tokenizer_from_huggingface(checkpoint)
             tokenizer = load_tokenizer(checkpoint_dir)
             # switch field's update_vocab_strategy to static
             for f in self.fields:

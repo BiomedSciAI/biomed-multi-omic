@@ -21,6 +21,7 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
 from bmfm_targets import config
+from bmfm_targets.models import download_ckpt_from_huggingface
 from bmfm_targets.training.data_module import DataModule
 from bmfm_targets.training.metrics import (
     log_confusion_matrix_to_clearml,
@@ -87,6 +88,11 @@ def make_trainer_for_task(task_config):
 
 
 def train_run(pl_trainer, task_config, model_config, data_module, trainer_config):
+    if model_config.checkpoint:
+        if not os.path.isfile(model_config.checkpoint):
+            model_config.checkpoint = download_ckpt_from_huggingface(
+                model_config.checkpoint
+            )
     pl_module_factory = get_training_module_class_for_data_module(data_module)
     checkpoint_path = None
     if task_config.resume_training_from_ckpt:
@@ -116,6 +122,9 @@ def test_run(
     if task_config.checkpoint is None:
         logger.error("Test task requires TestTaskConfig.checkpoint to be set")
         sys.exit(1)
+
+    if not os.path.isfile(task_config.checkpoint):
+        task_config.checkpoint = download_ckpt_from_huggingface(task_config.checkpoint)
 
     pl_module = instantiate_module_from_checkpoint(
         task_config, data_module, model_config, trainer_config
@@ -156,6 +165,9 @@ def predict_run(pl_trainer, task_config, model_config, data_module, trainer_conf
         logger.error("Predict task requires a checkpoint in task.checkpoint")
         sys.exit(1)
 
+    if not os.path.isfile(task_config.checkpoint):
+        task_config.checkpoint = download_ckpt_from_huggingface(task_config.checkpoint)
+
     pl_module = instantiate_module_from_checkpoint(
         task_config, data_module, model_config, trainer_config
     )
@@ -195,7 +207,12 @@ def instantiate_module_from_checkpoint(
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
     if trainer_config is not None:
         extra_kwargs["trainer_config"] = trainer_config
+    extra_kwargs["config_is_loaded_from_ckpt"] = True
     if model_config is None:
+        logger.info(
+            "Model config is none then loading model from checkpoint "
+            + str(task_config.checkpoint)
+        )
         pl_module = pl_factory.load_from_checkpoint(
             task_config.checkpoint, **extra_kwargs
         )
