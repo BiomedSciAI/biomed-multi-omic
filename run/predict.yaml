@@ -7,7 +7,7 @@ seed:
   seed_value: 1234
 
 data_module:
-  max_length: 32
+  max_length: 1024
   dataset_kwargs:
     processed_data_source: ${input_file}
     label_dict_path: ${working_dir}/labels.json
