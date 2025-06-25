@@ -19,7 +19,8 @@ from bmfm_targets.tokenization.resources import get_ortholog_genes
 
 
 def randomize(mfi: MultiFieldInstance, *args, **kwargs) -> MultiFieldInstance:
-    indices = np.random.permutation(mfi.seq_length)
+    gen = np.random.default_rng(seed=kwargs.get("seed", None))
+    indices = gen.permutation(mfi.seq_length)
     randomized_data = {
         field: np.array(values)[indices].tolist() for field, values in mfi.data.items()
     }

@@ -37,7 +37,7 @@ def test_shuffle_sort_instance():
     mfi = sample_transforms.sort_by_field(mfi_0, "expressions")
     assert mfi["genes"] == ["token4", "token3", "token1", "token2"]
     assert mfi["expressions"] == ["6", "5", "4", "1"]
-    mfi = sample_transforms.randomize(mfi_0)
+    mfi = sample_transforms.randomize(mfi_0, seed=123)
     assert mfi["genes"] != ["token4", "token3", "token1", "token2"]
     assert mfi["expressions"] != ["6", "5", "4", "1"]
 
