@@ -190,7 +190,7 @@ class FieldInfo:
     def __post_init__(self):
         if isinstance(self.decode_modes, list):
             self.decode_modes = {i: {} for i in self.decode_modes}
-        if (self.is_masked or not self.is_input) and not self.decode_modes:
+        if self.is_masked and not self.decode_modes:
             raise ValueError("Requested masking with no decode modes")
 
     @property
