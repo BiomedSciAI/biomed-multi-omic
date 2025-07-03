@@ -45,6 +45,7 @@ class SCModelConfigBase(PretrainedConfig):
 
     def __setstate__(self, state):
         state.setdefault("label_columns", None)
+        state.setdefault("_output_attentions", state.get("output_attentions", None))
         self.__dict__.update(state)
 
 
