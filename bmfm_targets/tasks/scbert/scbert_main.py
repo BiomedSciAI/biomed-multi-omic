@@ -1,6 +1,5 @@
 import logging
 import os
-import subprocess
 from copy import deepcopy
 
 import hydra
@@ -54,10 +53,6 @@ def main(cfg: config.SCBertMainHydraConfigSchema) -> None:
             cfg_obj.data_module,
             cfg_obj.trainer,
             clearml_logger,
-        )
-
-        subprocess.run(
-            ["chmod", "-R", "g+rws", str(cfg_obj.task.default_root_dir)], check=False
         )
 
 
