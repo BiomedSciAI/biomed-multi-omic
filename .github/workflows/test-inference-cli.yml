@@ -51,10 +51,10 @@ jobs:
         "
                 echo "MY_DATA_FILE=/tmp/my_data_file.h5ad" >> $GITHUB_ENV
     - name: Test MLM+RDA inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1  task.accelerator=cpu
     - name: Test MLM+Multitask inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1 task.accelerator=cpu
     - name: Test WCED+Multitask inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1 task.accelerator=cpu
     - name: Test WCED inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1  task.accelerator=cpu
