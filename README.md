@@ -44,10 +44,29 @@ For more options see [run](./run/README.md).
 
 For details on how the models were trained, please refer to [the BMFM-RNA preprint](https://arxiv.org/abs/2506.14861).
 
+### DNA
+
+- MLM+REF_GENOME [ibm-research/biomed.dna.ref.modernbert.113m](https://huggingface.co/ibm-research/biomed.dna.ref.modernbert.113m.v1)
+- MLM+REFSNP_GENOME [ibm-research/biomed.dna.snp.modernbert.113m](https://huggingface.co/ibm-research/biomed.dna.snp.modernbert.113m.v1)
+
+
 ## RNA processing overview
 
 ![Diagram of package flow for RNA model building](./docs/images/package_diagram.png)
 For more details, check out the [the BMFM-RNA preprint](https://arxiv.org/abs/2506.14861)..
+
+
+### DNA processing overview
+
+The `bmfm-dna` framework addresses key limitations of existing DNA language models by incorporating natural genomic variations into the pre-training process, rather than relying solely on the reference genome. This allows the model to better capture critical biological properties, especially in regulatory regions where many disease-associated variants reside. 
+
+![bmfm_dna](docs/images/dna_fig1.png)
+
+
+`bmfm-dna` framework diagram schematic shows the modules avaliable for multiple strategies to encode natural genomic variations; fine-tuning and benchmarking of the pre-trained models on well-established biologically meaningful tasks, such as Evaluation (GUE) package released in DNABERT-2, promoter activity prediction on Massive Parallel Reporting Assays (MPRA) dataset, and SNP-disease association prediction.
+
+For more details, check out the [the BMFM-DNA preprint](https://www.arxiv.org/abs/2507.05265)..
+
 
 ## Credits
 
