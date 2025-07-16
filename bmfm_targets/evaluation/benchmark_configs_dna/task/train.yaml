@@ -1,0 +1,21 @@
+- _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: "${output_directory}/${model_name}_${checkpoint_name}${extra_tag}/${dataset_name}"
+  max_epochs: ${max_finetuning_epochs}
+  precision: 32
+  val_check_interval: 0.1
+  accelerator: "gpu"
+  gradient_clip_val: 0.5
+  max_steps: -1  # -1 means no limit
+  tf32_mode: null  # permitted values: "highest", "high", "medium"
+  accumulate_grad_batches: 1
+  freeze_encoder: false
+  num_sanity_val_steps: 0
+  use_distributed_sampler: false
+  resume_training_from_ckpt: false
+
+- _target_: bmfm_targets.config.TestTaskConfig
+  default_root_dir: "${output_directory}/${model_name}_${checkpoint_name}${extra_tag}/${dataset_name}"
+  precision: 32
+  accelerator: gpu
+  tf32_mode: null
+  checkpoint: last

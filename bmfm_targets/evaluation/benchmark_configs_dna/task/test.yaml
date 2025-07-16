@@ -1,0 +1,7 @@
+
+- _target_: bmfm_targets.config.TestTaskConfig
+  default_root_dir: "${output_directory}/${model_name}_${checkpoint_name}${extra_tag}/${dataset_name}"
+  precision: 16-mixed
+  accelerator: gpu
+  tf32_mode: null
+  checkpoint: ${checkpoint_path}

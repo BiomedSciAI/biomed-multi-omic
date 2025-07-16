@@ -1,0 +1,38 @@
+defaults:
+  - fields: default
+  - label_columns: dnaeval_default
+  - tokenizer: ref2vec
+  - data_module: dnaeval_default
+  - model: modernbert
+  - trainer: classification
+  - task: train
+  - _self_
+
+seed:
+  seed_value: 1234
+
+track_clearml:
+  project_name: "bmfm-targets/evaluate_dna/${model_name}_${checkpoint_name}${extra_tag}"
+  task_name: "${track_clearml.tags[0]}_${track_clearml.tags[1]}_${track_clearml.tags[2]}_batchsize${data_module.batch_size}_maxlen${data_module.max_length}_lr${trainer.learning_rate}_wd${trainer.weight_decay}_pe${model_pe}_${track_clearml.tags[3]}"
+  tags:
+    - "${dataset_name}${extra_clearml_tags}"
+    - "token_${tokenizer.identifier}"
+    - "model_${model_name}"
+    - "ckpt_${checkpoint_name}"
+  continue_last_task: False
+
+max_finetuning_epochs: 12
+batch_size: 32
+dataset_name: "" # do not modify, set by script, it should contain fold name within
+fold: "" # This is for some dataset which has multiple folds...
+label_column_name: ""
+model_name: ""
+model_pe: 128
+model_wd: 0.01
+checkpoint_path: null
+checkpoint_name: ""
+learning_rate: 1e-5
+input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/
+output_directory: /proj/bmfm/users/sanjoy/benchmarking/
+extra_tag: ""
+extra_clearml_tags: ""

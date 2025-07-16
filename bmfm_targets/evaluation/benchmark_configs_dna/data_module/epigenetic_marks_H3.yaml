@@ -1,0 +1,8 @@
+defaults:
+ - base_seq_cls
+
+_target_: bmfm_targets.datasets.dnaseq.DNASeqEpigeneticMarksDataModule
+max_length: 50
+dataset_kwargs:
+  processed_data_source: ${input_directory}/epigenetic_marks_prediction/H3
+  dataset_name: ${dataset_name}

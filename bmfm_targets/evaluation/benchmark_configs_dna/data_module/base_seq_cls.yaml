@@ -1,0 +1,5 @@
+_partial_: true
+num_workers: 16
+collation_strategy: "sequence_classification"
+batch_size: ${batch_size}
+shuffle: True

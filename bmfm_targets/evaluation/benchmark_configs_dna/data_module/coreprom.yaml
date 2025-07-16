@@ -1,0 +1,8 @@
+defaults:
+ - base_seq_cls
+
+_target_: bmfm_targets.datasets.dnaseq.DNASeqPromoterDataModule
+max_length: 32
+dataset_kwargs:
+   processed_data_source: ${input_directory}/core_promoter_prediction/${fold}
+   dataset_name: ${dataset_name}

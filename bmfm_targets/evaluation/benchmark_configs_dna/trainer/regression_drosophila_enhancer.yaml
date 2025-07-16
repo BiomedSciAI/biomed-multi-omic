@@ -1,0 +1,12 @@
+defaults:
+  - regression
+
+metrics:
+  - name: pcc
+  - name: mse
+
+losses:
+    - weight: 1
+      label_column_name: ${label_columns[0].label_column_name}
+    - weight: 1
+      label_column_name: ${label_columns[1].label_column_name}

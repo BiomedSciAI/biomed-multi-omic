@@ -1,0 +1,6 @@
+_target_: bmfm_targets.config.LoraConfigWrapper
+target_modules:
+  - attn.Wqkv
+  - attn.Wo
+  - mlp.Wi
+  - mlp.Wo

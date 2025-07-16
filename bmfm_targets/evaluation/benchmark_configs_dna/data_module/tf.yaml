@@ -1,0 +1,8 @@
+defaults:
+ - base_seq_cls
+
+_target_: bmfm_targets.datasets.dnaseq.DNASeqTranscriptionFactorDataModule
+max_length: 64
+dataset_kwargs:
+  processed_data_source: ${input_directory}/tf_prediction/human/${fold}
+  dataset_name: ${dataset_name}

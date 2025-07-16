@@ -1,0 +1,6 @@
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: "Dev_log2_enrichment"
+  is_regression_label: true
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: "Hk_log2_enrichment"
+  is_regression_label: true

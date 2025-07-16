@@ -1,0 +1,6 @@
+defaults:
+  - default
+
+metrics:
+  - name: pcc
+  - name: mse

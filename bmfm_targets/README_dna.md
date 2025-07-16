@@ -28,7 +28,7 @@ The `bmfm-dna` framework addresses key limitations of existing DNA language mode
 
 `bmfm-dna` framework diagram schematic shows the modules avaliable for multiple strategies to encode natural genomic variations; multiple architectures such as BERT, Performer, ModernBERT to build genomic foundation models; fine-tuning and benchmarking of the foundation models on well-established biologically meaningful tasks. In particular, the package incorporates most of the benchmarking datasets from Genomic Understanding and Evaluation (GUE) package released in DNABERT-2. In addition, the package also supports promoter activity prediction on datasets created using Massive Parallel Reporting Assays (MPRA), and SNP-disease association prediction.
 
-![bmfm_dna](docs/images/dna_fig1.png)
+![bmfm_dna](../docs/images/dna_fig1.png)
 
 
 ## Installation
@@ -107,14 +107,14 @@ Note to use the notebook you will need to install the `notebook` optional depend
 
 ### Running pre-training framework 
 
-Our framework supports running pretraining framework using MLM or supervised loss on a class label or both. Please refer to this [readme](bmfm_targets/README.md) for details on running pre-training on both scRNA and DNA framework. 
+Our framework supports running pretraining framework using MLM or supervised loss on a class label or both. Please refer to this [readme](README.md) for details on running pre-training on both scRNA and DNA framework. 
 
-For pre-processing DNA datasets using both reference and SNPified version, please use the [steps](bmfm_targets/README_SNP_PREPROCESSING.md) for pre-processing before running the pre-training framework.
+For pre-processing DNA datasets using both reference and SNPified version, please use the [steps](README_SNP_PREPROCESSING.md) for pre-processing before running the pre-training framework.
 
 
 ### Running fine-tuning tasks of DNA
 
-Similarly, please refer to the [readme](bmfm_targets/evaluation_dna/benchmark_configs/README.md) for running the 6 finetuning tasks of DNA. 
+Similarly, please refer to the [readme](evaluation_dna/benchmark_configs/README.md) for running the 6 finetuning tasks of DNA. 
 
 
 ### Fine-tuning on a biological task containing DNA-sequences
