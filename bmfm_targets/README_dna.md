@@ -161,7 +161,7 @@ drosophilla_datamodule.yaml
   
   ```
 
-Then run the [yaml](biomed-multi-omic_forked/biomed-multi-omic/run/dna_finetune_train_and_test_config.yaml).
+Then run the [yaml](run/dna_finetune_train_and_test_config.yaml).
 
 ## Citation
 
