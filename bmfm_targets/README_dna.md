@@ -112,9 +112,16 @@ Our framework supports running pretraining framework using MLM or supervised los
 For pre-processing DNA datasets using both reference and SNPified version, please use the [steps](README_SNP_PREPROCESSING.md) for pre-processing before running the pre-training framework.
 
 
+### Snpification of the finetuning data
+
+We preprocessed a few datasets to impute SNPs extracting from the reference genome. The easiest way to impute such SNPs is to map each input dna sequence to the reference geneome if the chromose and position location of the sequence is availabe. For example, we extracted the promoter location from [here](https://genome.ucsc.edu/cgi-bin/hgTables) provided by EPDNew. Then we use the [notebook script](datasets/dnaseq/preprocess_dataset/snpify_promoter_dnabert2_v1.ipynb) to preprocess the promoter dataset to impute SNPs. In this version, the negative sequences were imputed with random SNPs coming from the same distribution of the positive set (Class 1 of the paper). 
+
+For other types of SNPification of data, we had different scripts which are available upon request. 
+
+
 ### Running fine-tuning tasks of DNA
 
-Similarly, please refer to the [readme](evaluation_dna/benchmark_configs/README.md) for running the 6 finetuning tasks of DNA. 
+Please refer to the [readme](evaluation/benchmark_configs_dna/README.md) for running the 6 finetuning tasks of DNA. 
 
 
 ### Fine-tuning on a biological task containing DNA-sequences
@@ -132,8 +139,8 @@ ACGTTTACCCCTGGGTAAG, -0.24, 0.35, seq_99
 
 and the corresponding datamodule and LabelInfo yaml cofig should be modified as:
 
-```yaml
-label_columns: 
+```
+drosophilla_labelcolumns.yaml
 - _target_: bmfm_targets.config.LabelColumnInfo
   label_column_name: "Dev_log2_enrichment"
   is_regression_label: true
@@ -142,22 +149,19 @@ label_columns:
   is_regression_label: true
 
 
-data_module:
-  _target_: bmfm_targets.datasets.zheng68k.Zheng68kDataModule
-  _partial_: true
-  num_workers: 8
-  collation_strategy: "sequence_classification"
-  batch_size: 20
-  max_length: 512
-  pad_to_multiple_of: 16
-  change_ratio: 0.15
-  mask_ratio: 0.5
-  switch_ratio: 0.5
-  limit_dataset_samples: null
-  shuffle: true
-  data_dir: ${oc.env:BMFM_TARGETS_DNAFINETUNE_DATA}
-```
+drosophilla_datamodule.yaml 
+  defaults:
+  - base_seq_cls
 
+  _target_: bmfm_targets.datasets.dnaseq.DNASeqDrosophilaEnhancerDataModule
+  max_length: 80
+  dataset_kwargs:
+    processed_data_source: ${input_directory}/drosophila_enhancer_prediction
+    dataset_name: ${dataset_name}
+  
+  ```
+
+Then run the [yaml](biomed-multi-omic_forked/biomed-multi-omic/run/dna_finetune_train_and_test_config.yaml).
 
 ## Citation
 
