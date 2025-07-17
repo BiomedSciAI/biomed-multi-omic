@@ -87,42 +87,6 @@ The model's weights can be aquired from [IBM's HuggingFace collection](https://h
 
 For details on how the models were trained, please refer to [the BMFM-DNA preprint](https://arxiv.org/abs/2507.05265).
 
-### Zero-shot inference (CLI)
-`biomed-multi-omic` allows for multiple input data types, but the core data object at the heart of the tool is based around the adata object. Once your dataset is created.
-
-To get scRNA embeddings and zero shot cell-type predictions:
-
-```bash
-export MY_DATA_FILE=... # path to h5ad file with raw counts and gene symbols
-bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
-```
-
-### Zero-shot inference (programmatically)
-To run inference programmatically, you can see a zero-shot example in this [notebook](notebooks/1_zero_shot_cell_type_anno.ipynb).
-
-Note to use the notebook you will need to install the `notebook` optional dependencies (see [Installation](#2-installation))
-
-
-## Contributing
-
-### Running pre-training framework 
-
-Our framework supports running pretraining framework using MLM or supervised loss on a class label or both. Please refer to this [readme](README.md) for details on running pre-training on both scRNA and DNA framework. 
-
-For pre-processing DNA datasets using both reference and SNPified version, please use the [steps](README_SNP_PREPROCESSING.md) for pre-processing before running the pre-training framework.
-
-
-### Snpification of the finetuning data
-
-We preprocessed a few datasets to impute SNPs extracting from the reference genome. The easiest way to impute such SNPs is to map each input dna sequence to the reference geneome if the chromose and position location of the sequence is availabe. For example, we extracted the promoter location from [here](https://genome.ucsc.edu/cgi-bin/hgTables) provided by EPDNew. Then we use the [notebook script](datasets/dnaseq/preprocess_dataset/snpify_promoter_dnabert2_v1.ipynb) to preprocess the promoter dataset to impute SNPs. In this version, the negative sequences were imputed with random SNPs coming from the same distribution of the positive set (Class 1 of the paper). 
-
-For other types of SNPification of data, we had different scripts which are available upon request. 
-
-
-### Running fine-tuning tasks of DNA
-
-Please refer to the [readme](evaluation/benchmark_configs_dna/README.md) for running the 6 finetuning tasks of DNA. 
-
 
 ### Fine-tuning on a biological task containing DNA-sequences
 
@@ -137,10 +101,13 @@ sequence, Dev_enrichment, HK_enrichment, seq_id
 ACGTTTACCCCTGGGTAAG, -0.24, 0.35, seq_99
 ```
 
-and the corresponding datamodule and LabelInfo yaml cofig should be modified as:
+Next, the yaml file has to be created properly. A simple finetuning yaml for single classification task is provided [here](../run/dna_finetune_train_and_test_config.yaml).
+
+For a new dataset such as the drosophilla expression prediction task, the corresponding datamodule and LabelInfo yaml should be overridden as belows:
 
 ```
-drosophilla_labelcolumns.yaml
+
+label_columns: 
 - _target_: bmfm_targets.config.LabelColumnInfo
   label_column_name: "Dev_log2_enrichment"
   is_regression_label: true
@@ -148,20 +115,60 @@ drosophilla_labelcolumns.yaml
   label_column_name: "Hk_log2_enrichment"
   is_regression_label: true
 
+data_module: 
+    defaults: dna_base_seq_cls
+    max_length: 80
+    dataset_kwargs:
+      processed_data_source: ${input_directory}
+      dataset_name: ${dataset_name}
+      label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
 
-drosophilla_datamodule.yaml 
-  defaults:
-  - base_seq_cls
 
-  _target_: bmfm_targets.datasets.dnaseq.DNASeqDrosophilaEnhancerDataModule
-  max_length: 80
-  dataset_kwargs:
-    processed_data_source: ${input_directory}/drosophila_enhancer_prediction
-    dataset_name: ${dataset_name}
-  
+trainer:
+  batch_size: ${batch_size} 
+  learning_rate: ${learning_rate}
+  losses:
+    - name: mse
+      label_column_name: ${label_columns[0].label_column_name}
+    - name: mse
+      label_column_name: ${label_columns[1].label_column_name}
+
   ```
 
-Then run the [yaml](run/dna_finetune_train_and_test_config.yaml).
+
+
+
+
+### Zero-shot inference (CLI)
+`biomed-multi-omic` allows for multiple input data types, but the core data object at the heart of the tool is based around the adata object. Once your dataset is created.
+
+To get scRNA embeddings and zero shot cell-type predictions:
+
+```bash
+export MY_DATA_FILE=... # path to h5ad file with raw counts and gene symbols
+bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+```
+
+## Contributing
+
+### Running pre-training framework 
+
+Our framework supports running pretraining framework using MLM or supervised loss on a class label or both. Please refer to this [readme](README.md) for details on running pre-training on both scRNA and DNA framework. 
+
+For pre-processing DNA datasets using both reference and SNPified version, please use the [steps](README_SNP_PREPROCESSING.md) for pre-processing before running the pre-training framework.
+
+
+### Snpification of the finetuning data
+
+We preprocessed a few datasets to impute SNPs extracting from the reference genome. The easiest way to impute such SNPs is to map each input dna sequence to the reference geneome if the chromose and position location of the sequence is availabe. For example, we extracted the promoter location from [here](https://genome.ucsc.edu/cgi-bin/hgTables) provided by EPDNew. Then we use the [notebook script](datasets/dnaseq/preprocess_dataset/snpify_promoter_dnabert2_v1.ipynb) to preprocess the promoter dataset to impute SNPs. In this version, the negative sequences were imputed with random SNPs coming from the same distribution of the positive set (Class 1 of the paper). Note that the notebook requires reference genome fasta data (fasta_path), preprocessed SNPified chromosome-wise data (cell 4 of the notebook) for both forward and reverse strands, which can be downloaded from [here](https://zenodo.org/records/15981429). 
+
+For other types of SNPification of data, we had different scripts which are available upon request. 
+
+
+### Running fine-tuning tasks of DNA
+
+Please refer to the [readme](evaluation/benchmark_configs_dna/README.md) for running the 6 finetuning tasks of DNA. 
+
 
 ## Citation
 

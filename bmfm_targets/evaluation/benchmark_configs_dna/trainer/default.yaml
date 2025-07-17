@@ -20,14 +20,3 @@ lora_config: null
 #   - attn.Wo
 #   - mlp.Wi
 #   - mlp.Wo
-
-
-_target_: bmfm_targets.config.TrainerConfig
-warmup_steps: 0
-weight_decay: null
-learning_rate: 1.0e-5
-betas:
-  - 0.9
-  - 0.99
-epsilon: 1.0e-8
-lr_decay_steps: null

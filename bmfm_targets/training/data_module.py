@@ -851,7 +851,7 @@ class PerturbationDataModule(DataModule):
 
 
 class DNASeqDataModule(pl.LightningDataModule):
-    DATASET_FACTORY: type[BaseDNASeqDataset] = ...
+    DATASET_FACTORY: type[BaseDNASeqDataset] = BaseDNASeqDataset
 
     def __init__(
         self,

@@ -1,5 +1,5 @@
 defaults:
-  - data_module: dnaeval_default
+  - data_module: dna_base_seq_cls
   - tokenizer: ref2vec
   - fields: dna_chunks
   - trainer: default
@@ -11,27 +11,39 @@ defaults:
 seed:
   seed_value: 1234
 
-model:
-  checkpoint: null
+
 
 data_module:
-  max_length: 32
-  data_dir: /PATH/TO/DATA/
-  processed_name: processed_data
-  batch_size: 20
-  limit_genes: protein_coding #could be null, protein_coding, or tokenizer
-  transform_datasets: false
+  dataset_kwargs:
+    processed_data_source: ${input_directory}
+    dataset_name: ${dataset_name}
+    label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
+
 
 trainer:
-  learning_rate: 1.0e-5
+  batch_size: ${batch_size} 
+  learning_rate: ${learning_rate}
   losses:
     - name: cross_entropy
-      label_column_name: ${label_column_name}
+      label_column_name: ${label_columns[0].label_column_name}
 
-label_column_name: celltype
-output_directory: /tmp
-accelerator: gpu
+
+batch_size: 32
+dataset_name: coreprom
+label_column_name: label
+model_name: modernbert
+checkpoint_path: null
+checkpoint_name: ""
+accelerator: cpu
+input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction
+output_directory: /proj/bmfm/users/sanjoy/benchmarking/
+max_epochs: 2
+learning_rate: 1e-5
+model_pe: 128
 val_check_interval: 0.5
-max_epochs: 20
 accumulate_grad_batches: 5
 checkpoints_every_n_train_steps: 5000
+
+extra_tag: ""
+extra_clearml_tags: ""
+
