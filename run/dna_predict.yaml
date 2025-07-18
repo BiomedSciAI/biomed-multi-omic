@@ -1,0 +1,34 @@
+defaults:
+  - data_module: dna_base_seq_cls
+  - task: predict
+  - _self_
+
+seed:
+  seed_value: 1234
+
+data_module:
+  dataset_kwargs:
+    processed_data_source: ${input_directory}
+    dataset_name: ${dataset_name}
+    label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
+
+
+
+
+task:
+  checkpoint: ${checkpoint}
+  output_embeddings: true
+  output_predictions: true
+  default_root_dir: ${working_dir}
+
+accelerator: gpu
+input_file: null
+working_dir: /tmp
+checkpoint: null
+
+
+
+batch_size: 32
+dataset_name: coreprom
+#label_column_name: label
+input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction

@@ -17,7 +17,7 @@ readme = "README.md"
 requires-python = ">=3.10, <3.13"
 dependencies = [
   "anndata>=0.10.0",
-  "scanpy[louvain]",
+  "scanpy",
   "numpy<2",
   "scipy<1.15.0", #unpin when upstream fixes this https://github.com/scverse/anndata/issues/1811
   "torch",
@@ -45,7 +45,6 @@ dependencies = [
   "focal-loss-torch @ git+https://github.com/mathiaszinnen/focal_loss_torch.git",
   "torchdata<0.10",
   "peft"
-
 ]
 
 [project.optional-dependencies]
@@ -58,6 +57,7 @@ benchmarking = [
   "scanorama",
   "harmony-pytorch",
 ]
+notebook = ["cellxgene-ontology-guide", "jupyter", "swatch"]
 
 [project.urls]
 repository = "https://github.com/BiomedSciAI/biomed-multi-omic/"

@@ -34,7 +34,7 @@ label_column_name: label
 model_name: modernbert
 checkpoint_path: null
 checkpoint_name: ""
-accelerator: cpu
+accelerator: gpu
 input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction
 output_directory: /proj/bmfm/users/sanjoy/benchmarking/
 max_epochs: 2
