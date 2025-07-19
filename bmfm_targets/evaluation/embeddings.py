@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -137,26 +138,16 @@ def get_clusters(
     n_classes_in_data: int,
     **kwargs,
 ):
-    if clustering_method == "louvain":
-        if not "resolution" in kwargs:
-            kwargs["resolution"] = 0.6
-        clusters = sc.tl.louvain(adata_dim_reduced, copy=True, **kwargs)
-    elif clustering_method == "leiden":
-        if not "resolution" in kwargs:
-            kwargs["resolution"] = 0.6
-        clusters = sc.tl.leiden(adata_dim_reduced, copy=True, **kwargs)
-    elif clustering_method == "kmeans":
+    if clustering_method == "kmeans":
         if not "n_clusters" in kwargs:
             kwargs["n_clusters"] = n_classes_in_data
         kmeans = KMeans(**kwargs).fit(adata_dim_reduced.obsm["X_pca"])
         clusters = adata_dim_reduced.copy()
         clusters.obs["kmeans"] = pd.Categorical(kmeans.labels_)
     elif clustering_method == "dbscan":
-        logger.info("Running DBSCAN")
         db = DBSCAN(**kwargs).fit(adata_dim_reduced.obsm["X_pca"])
         clusters = adata_dim_reduced.copy()
         clusters.obs["dbscan"] = pd.Categorical(db.labels_)
-        logger.info("Number of clusters DBSCAN found: %d" % len(np.unique(db.labels_)))
     elif clustering_method == "hierarchical":
         if not "n_clusters" in kwargs:
             kwargs["n_clusters"] = n_classes_in_data
@@ -164,10 +155,13 @@ def get_clusters(
         hierarchical = clusterer.fit(adata_dim_reduced.obsm["X_pca"])
         clusters = adata_dim_reduced.copy()
         clusters.obs["hierarchical"] = pd.Categorical(hierarchical.labels_)
-
+    elif clustering_method in ["leiden", "louvain"]:
+        raise NotImplementedError(
+            "Both leiden and louvain are currently not implemented due to GPL license."
+        )
     else:
         raise ValueError(
-            "clustering_method is not 'kmeans' or 'louvain' or 'dbscan' or 'leiden' or 'hierarchical'"
+            "clustering_method is not 'kmeans' or 'dbscan' or 'hierarchical'"
         )
 
     return clusters
@@ -204,6 +198,39 @@ def evaluate_clusters(clusters, clustering_method, label="CellType", normalize=F
         ]
 
     return eval_res_dict
+
+
+def load_predictions(working_dir: Path | str, to_adata: bool = True) -> dict:
+    working_dir = Path(working_dir)
+    try:
+        results_files = {
+            "embeddings": working_dir / "embeddings.csv",
+            "logits": working_dir / "logits.csv",
+            "predictions": working_dir / "predictions.csv",
+            "probabilities": working_dir / "probabilities.csv",
+        }
+        results = {
+            i: pd.read_csv(results_files[i], index_col=0)
+            if i != "embeddings"
+            else pd.read_csv(results_files[i], index_col=0, header=None)
+            for i in results_files
+        }
+    except FileNotFoundError:
+        raise FileNotFoundError("Check your working directory.")
+
+    if to_adata:
+        results["embeddings"].index.name = "cellnames"
+        results["embeddings"].index = results["embeddings"].index.astype(str)
+        results["embeddings"].columns = results["embeddings"].columns.astype(str)
+
+        adata = sc.AnnData(X=results["embeddings"])
+        adata.X = adata.X.astype("float64")
+
+        results["predictions"].index.name = "cellnames"
+        adata.obs = adata.obs.join(results["predictions"], how="left", lsuffix="_bmfm")
+        results["adata"] = adata
+
+    return results
 
 
 def load_prediction_data_to_anndata(df_emb, df_labels, df_pred):

@@ -10,7 +10,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bmfm-targets"
 description = "Biomedical foundational models for target discovery"
-authors = [{ name = "Bharath Dandala", email = "bdand@us.ibm.com" }]
+authors = [
+  { name = "Bharath Dandala", email = "bdand@us.ibm.com" },
+  { name = "Michael M. Danziger", email = "michael.danziger@ibm.com" },
+  { name = "Pablo Meyer", email = "pmeyerr@us.ibm.com" },
+]
 version = "0.15.0"
 readme = "README.md"
 # due to how PEP 440 defines version matching, prefer [incl, excl) definitions like below:
