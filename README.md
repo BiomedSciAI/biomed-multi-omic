@@ -126,7 +126,7 @@ To perform DNA zero-shot:
 
 ```bash
 export MY_DATA_FILE=... # path to your DNA sequences files
-bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+bmfm-targets-run -cn dna_predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
 ```
 
 For more details tutorial see DNA tutoirals.

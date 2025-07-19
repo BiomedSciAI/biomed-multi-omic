@@ -136,17 +136,20 @@ trainer:
   ```
 
 
-
+```bash
+export MY_DATA_FILE=... # path to the three (train/test/dev.csv) files
+bmfm-targets-run -cn dna_finetune_train_and_test_config input_directory=$MY_DATA_FILE output_directory=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+```
 
 
 ### Zero-shot inference (CLI)
 `biomed-multi-omic` allows for multiple input data types, but the core data object at the heart of the tool is based around the adata object. Once your dataset is created.
 
-To get scRNA embeddings and zero shot cell-type predictions:
+To get DNA embeddings and zero shot cell-type predictions:
 
 ```bash
-export MY_DATA_FILE=... # path to h5ad file with raw counts and gene symbols
-bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+export MY_DATA_FILE=... # path to the three (train/test/dev.csv) files
+bmfm-targets-run -cn dna_predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
 ```
 
 ## Contributing
