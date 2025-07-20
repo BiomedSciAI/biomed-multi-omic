@@ -38,7 +38,7 @@ In `benchmark_<train|test>_run.sh` choose a way to launch your job by modifying 
 
 ### Key Configuration Details
 
-- The benchmarks run sequence classification (train and test) and embedding generation, using the main entry point for the scRNA foundation model, `bmfm-targets-scbert`.
+- The benchmarks run sequence classification (train and test) and embedding generation, using the main entry point for the scRNA foundation model, `bmfm-targets-run`.
 - For the predict task, we are assuming the model was trained with MLM and therefore require `data_module.collation_strategy=language_modeling`. We also remove the model settings `~model` so that everything is loaded from the ckpt.
 - The logs will be saved on <repo_dir>/../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
 - Tasks will be created in ClearML `bmfm-targets/evaluation_dna/{checkpoint_name}/${DATASET}ft` and ` bmfm-targets/evaluation/{checkpoint_name}/${DATASET}zero_shot`
