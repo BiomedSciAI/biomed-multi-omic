@@ -18,7 +18,7 @@ Biomedical foundational models for omics data. This package supports the develop
 
 ## Introduction
 
-`biomed-multi-omic` is a comprehensive software package that not only facilitates this combinatorial exploration but is also inherently flexible and easily extensible to incorporate novel methods as the field continues to advance. It also facilitates downstream tasks such as promoter prediction task, splice site prediction, transcription factor prediction and promoter affect on gene expression prediction task using benchmark datasets such as GUE from DNA-BERT2 and MPRA data. 
+`biomed-multi-omic` is a comprehensive software package that not only facilitates this combinatorial exploration but is also inherently flexible and easily extensible to incorporate novel methods as the field continues to advance. It also facilitates downstream tasks such as promoter prediction task, splice site prediction, transcription factor prediction and promoter affect on gene expression prediction task using benchmark datasets such as GUE from DNA-BERT2 and MPRA data.
 
 ## Package Architecture
 
@@ -62,7 +62,7 @@ uv venv .venv -p3.12
 source ./.venv/bin/activate
 uv pip install -e .
 ```
-<!-- 
+<!--
 ### Optional dependencies
 In addition to the base package there are additional optional dependencies which extends `bmfm-mulit-omics` capabilites further. These include:
 - `bulk_rna`: Extends modules for extracting and preprocessing bulk RNA-seq data
@@ -90,8 +90,8 @@ For details on how the models were trained, please refer to [the BMFM-DNA prepri
 
 ### Fine-tuning on a biological task containing DNA-sequences
 
-For fine-tuning DNA pre-trained model on a new biological task involves first creating a dataset folder with three files train.csv, test.csv and dev.csv. The framework will 
-look for these files for model development automatically. Each file should contains at least two columns. The first column must contain the dna sequence and then followed by the class labels, where column names are passed in the LabelColumnInfo yaml. 
+For fine-tuning DNA pre-trained model on a new biological task involves first creating a dataset folder with three files train.csv, test.csv and dev.csv. The framework will
+look for these files for model development automatically. Each file should contains at least two columns. The first column must contain the dna sequence and then followed by the class labels, where column names are passed in the LabelColumnInfo yaml.
 Additional columns (e.g., seq_id) can follow in each of the files which will not be used.
 
 As an example of 'Sample' dataset with the multiclass prediction problem where there are two regression lables measuring gene expression in types of genes: development and housekeeping (Dev_enrichment, HK_enrichment), the dataset siles should be like follows:
@@ -107,7 +107,7 @@ For a new dataset such as the drosophilla expression prediction task, the corres
 
 ```
 
-label_columns: 
+label_columns:
 - _target_: bmfm_targets.config.LabelColumnInfo
   label_column_name: "Dev_log2_enrichment"
   is_regression_label: true
@@ -115,7 +115,7 @@ label_columns:
   label_column_name: "Hk_log2_enrichment"
   is_regression_label: true
 
-data_module: 
+data_module:
     defaults: dna_base_seq_cls
     max_length: 80
     dataset_kwargs:
@@ -125,7 +125,7 @@ data_module:
 
 
 trainer:
-  batch_size: ${batch_size} 
+  batch_size: ${batch_size}
   learning_rate: ${learning_rate}
   losses:
     - name: mse
@@ -154,23 +154,23 @@ bmfm-targets-run -cn dna_predict input_file=$MY_DATA_FILE working_dir=/tmp check
 
 ## Contributing
 
-### Running pre-training framework 
+### Running pre-training framework
 
-Our framework supports running pretraining framework using MLM or supervised loss on a class label or both. Please refer to this [readme](README.md) for details on running pre-training on both scRNA and DNA framework. 
+Our framework supports running pretraining framework using MLM or supervised loss on a class label or both. Please refer to this [readme](README.md) for details on running pre-training on both scRNA and DNA framework.
 
 For pre-processing DNA datasets using both reference and SNPified version, please use the [steps](README_SNP_PREPROCESSING.md) for pre-processing before running the pre-training framework.
 
 
 ### Snpification of the finetuning data
 
-We preprocessed a few datasets to impute SNPs extracting from the reference genome. The easiest way to impute such SNPs is to map each input dna sequence to the reference geneome if the chromose and position location of the sequence is availabe. For example, we extracted the promoter location from [here](https://genome.ucsc.edu/cgi-bin/hgTables) provided by EPDNew. Then we use the [notebook script](datasets/dnaseq/preprocess_dataset/snpify_promoter_dnabert2_v1.ipynb) to preprocess the promoter dataset to impute SNPs. In this version, the negative sequences were imputed with random SNPs coming from the same distribution of the positive set (Class 1 of the paper). Note that the notebook requires reference genome fasta data (fasta_path), preprocessed SNPified chromosome-wise data (cell 4 of the notebook) for both forward and reverse strands, which can be downloaded from [here](https://zenodo.org/records/15981429). 
+We preprocessed a few datasets to impute SNPs extracting from the reference genome. The easiest way to impute such SNPs is to map each input dna sequence to the reference geneome if the chromose and position location of the sequence is availabe. For example, we extracted the promoter location from [here](https://genome.ucsc.edu/cgi-bin/hgTables) provided by EPDNew. Then we use the [notebook script](datasets/dnaseq/preprocess_dataset/snpify_promoter_dnabert2_v1.ipynb) to preprocess the promoter dataset to impute SNPs. In this version, the negative sequences were imputed with random SNPs coming from the same distribution of the positive set (Class 1 of the paper). Note that the notebook requires reference genome fasta data (fasta_path), preprocessed SNPified chromosome-wise data (cell 4 of the notebook) for both forward and reverse strands, which can be downloaded from [here](https://zenodo.org/records/15981429).
 
-For other types of SNPification of data, we had different scripts which are available upon request. 
+For other types of SNPification of data, we had different scripts which are available upon request.
 
 
 ### Running fine-tuning tasks of DNA
 
-Please refer to the [readme](evaluation/benchmark_configs_dna/README.md) for running the 6 finetuning tasks of DNA. 
+Please refer to the [readme](evaluation/benchmark_configs_dna/README.md) for running the 6 finetuning tasks of DNA.
 
 
 ## Citation
@@ -188,12 +188,12 @@ To cite the tool for both RNA and DNA, please cite both the following articles:
 }
 
 @misc{li2025bmfmdnasnpawarednafoundation,
-      title={BMFM-DNA: A SNP-aware DNA foundation model to capture variant effects}, 
+      title={BMFM-DNA: A SNP-aware DNA foundation model to capture variant effects},
       author={Hongyang Li and Sanjoy Dey and Bum Chul Kwon and Michael Danziger and Michal Rosen-Tzvi and Jianying Hu and James Kozloski and Ching-Huei Tsou and Bharath Dandala and Pablo Meyer},
       year={2025},
       eprint={2507.05265},
       archivePrefix={arXiv},
       primaryClass={q-bio.GN},
-      url={https://arxiv.org/abs/2507.05265}, 
+      url={https://arxiv.org/abs/2507.05265},
 }
 ```

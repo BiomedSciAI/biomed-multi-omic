@@ -32,7 +32,7 @@ correction on benchmark datasets. `biomed-multi-omic` is built upon anndata, Hug
 
 ## DNA Modules
 
-The `bmfm-dna` framework addresses key limitations of existing DNA language models by incorporating natural genomic variations into the pre-training process, rather than relying solely on the reference genome. This allows the model to better capture critical biological properties, especially in regulatory regions where many disease-associated variants reside. 
+The `bmfm-dna` framework addresses key limitations of existing DNA language models by incorporating natural genomic variations into the pre-training process, rather than relying solely on the reference genome. This allows the model to better capture critical biological properties, especially in regulatory regions where many disease-associated variants reside.
 
 ![bmfm_dna](docs/images/dna_fig1.png)
 

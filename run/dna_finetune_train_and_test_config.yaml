@@ -21,7 +21,7 @@ data_module:
 
 
 trainer:
-  batch_size: ${batch_size} 
+  batch_size: ${batch_size}
   learning_rate: ${learning_rate}
   losses:
     - name: cross_entropy
@@ -46,4 +46,3 @@ checkpoints_every_n_train_steps: 5000
 
 extra_tag: ""
 extra_clearml_tags: ""
-
