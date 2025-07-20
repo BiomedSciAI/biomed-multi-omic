@@ -2,7 +2,6 @@
 
 Biomedical foundational models for omics data. This package supports the development of foundation models for scRNA or for DNA data.
 
-### Highlights
 
 - 🧬 A single package for DNA and RNA Foundation models
 - 🚀 Built around anndata, HuggingFace transformers and PyTorchLighting to integrate into existing software stacks
@@ -43,7 +42,6 @@ For more details, check out the [the BMFM-DNA preprint](https://www.arxiv.org/ab
 
 We recommend using [uv](https://github.com/astral-sh/uv) to create your environment due to it's 10-100x speed up over pip.
 
-NB - `biomed-multi-omic` depends on `hic-straw` which requires `curl`. You may need to install `curl` or `libcurl` , for more information please refer to `curl`'s install instructions for your OS.
 
 Install using cloned repo:
 
@@ -54,6 +52,8 @@ uv venv .venv -p3.12
 source ./.venv/bin/activate
 uv pip install -e .
 ```
+
+NB - `biomed-multi-omic` depends on `hic-straw` which requires `curl`. You may need to install `curl` or `libcurl` , for more information please refer to `curl`'s install instructions for your OS.
 
 ### Optional dependencies
 
