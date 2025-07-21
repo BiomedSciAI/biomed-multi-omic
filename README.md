@@ -31,7 +31,7 @@ NB - `biomed-multi-omic` depends on `hic-straw` which requires `curl`. You may n
 
 ### Optional dependencies
 
-In addition to the base package there are additional optional dependencies which extends `bmfm-mulit-omics` capabilites further. These include:
+In addition to the base package there are additional optional dependencies which extends `biomed-multi-omic` capabilities further. These include:
 
 - `bulk_rna`: Extends modules for extracting and preprocessing bulk RNA-seq data
 - `benchmarking`: Installs additional models used benchmark `bmfm-mulit-omics` against. These include scib, scib-metrics, pyliger, scanorama and harmony-pytorch.
@@ -61,7 +61,7 @@ export MY_DATA_FILE=... # path to h5ad file with raw counts and gene symbols
 bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1
 ```
 
-For more details tutorial see RNA tutorials. Note to use the notebook you will need to install the `notebook` optional dependencies (see [Installation](#2-installation)):
+For more details tutorial see RNA tutorials. Note to use the notebook you will need to install the `notebook` optional dependencies (see [Installation](#installation)):
 
 - To run inference programmatically, you can see a zero-shot example in this [scRNA zero-shot notebook](tutorials/RNA/1_zero_shot_using_yaml.ipynb).
 - To inspect the resulting embeddings and cell-type predictions use this [scRNA inspect embeddings notebook](tutorials/RNA/2_inference_inspection.ipynb).
@@ -80,8 +80,8 @@ For details on how the models were trained, please refer to the [BMFM-DNA prepri
 To get embeddings for DNA sequences run:
 
 ```bash
-export MY_DATA_FILE=... # path to your DNA sequences files
-bmfm-targets-run -cn dna_predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+export INPUT_DIRECTORY=... # path to your DNA sequences files
+bmfm-targets-run -cn dna_predict input_directory=$INPUT_DIRECTORY working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
 ```
 
 For more details tutorial see DNA tutorials.
@@ -101,9 +101,9 @@ By training models to autocomplete the expression profiles, WCED improves the mo
 
 The `bmfm-dna` framework addresses key limitations of existing DNA language models by incorporating natural genomic variations into the pre-training process, rather than relying solely on the reference genome. This allows the model to better capture critical biological properties, especially in regulatory regions where many disease-associated variants reside. As a result, `bmfm-dna` offers a more comprehensive and biologically meaningful representation, advancing the field beyond traditional DNALM strategies.
 
-`bmfm-dna` framework diagram schematic shows the modules avaliable for multiple strategies to encode natural genomic variations; multiple architectures such as BERT, Performer, ModernBERT to build genomic foundation models; fine-tuning and benchmarking of the foundation models on well-established biologically meaningful tasks. In particular, the package incorporates most of the benchmarking datasets from Genomic Understanding and Evaluation (GUE) package released in DNABERT-2. In addition, the package also supports promoter activity prediction on datasets created using Massive Parallel Reporting Assays (MPRA), and SNP-disease association prediction.
+`bmfm-dna` framework diagram schematic shows the modules available for multiple strategies to encode natural genomic variations; multiple architectures such as BERT, Performer, ModernBERT to build genomic foundation models; fine-tuning and benchmarking of the foundation models on well-established biologically meaningful tasks. In particular, the package incorporates most of the benchmarking datasets from Genomic Understanding and Evaluation (GUE) package released in DNABERT-2. In addition, the package also supports promoter activity prediction on datasets created using Massive Parallel Reporting Assays (MPRA), and SNP-disease association prediction.
 
-![bmfm_dna](../docs/images/dna_fig1.png)
+![bmfm_dna](./docs/images/dna_fig1.png)
 
 
 For more details, check out the [the BMFM-DNA preprint](https://www.arxiv.org/abs/2507.05265).
