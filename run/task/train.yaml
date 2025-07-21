@@ -1,12 +1,11 @@
 _target_: bmfm_targets.config.TrainingTaskConfig
-default_root_dir: "${output_directory}"
+default_root_dir: "${working_dir}"
 max_epochs: "${max_epochs}"
 precision: "16-mixed"
 val_check_interval: "${val_check_interval}"
 accelerator: "${accelerator}"
 max_steps: -1  # -1 means no limit
 tf32_mode: medium  # permitted values: "highest", "high", "medium"
-accumulate_grad_batches: "${accumulate_grad_batches}"
 freeze_encoder: false
 resume_training_from_ckpt: false
 checkpoints_every_n_train_steps: "${checkpoints_every_n_train_steps}"

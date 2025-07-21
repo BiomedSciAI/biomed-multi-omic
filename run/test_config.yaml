@@ -17,5 +17,5 @@ task:
   checkpoint: null
   num_bootstrap_runs: 0
 
-output_directory: /tmp
+working_dir: /tmp
 accelerator: gpu

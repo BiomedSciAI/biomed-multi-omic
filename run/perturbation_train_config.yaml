@@ -24,9 +24,8 @@ data_module:
 trainer:
   learning_rate: 1.0e-5
 
-output_directory: /tmp
+working_dir: /tmp
 accelerator: gpu
 val_check_interval: 0.5
 max_epochs: 20
-accumulate_grad_batches: 5
 checkpoints_every_n_train_steps: 5000

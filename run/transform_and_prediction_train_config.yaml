@@ -57,9 +57,8 @@ trainer:
 
 
 label_column_name: cell_type
-output_directory: /tmp/
+working_dir: /tmp/
 accelerator: gpu
 val_check_interval: 0.5
 max_epochs: 100
-accumulate_grad_batches: 5
 checkpoints_every_n_train_steps: 100

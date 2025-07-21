@@ -1,0 +1,45 @@
+defaults:
+  - data_module: base_seq_cls
+  - task: train_and_test
+  - model: scbert
+  - trainer: default
+  - _self_
+
+seed:
+  seed_value: 1234
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: "${label_column_name}"
+    is_regression_label: false
+
+
+data_module:
+  max_length: 1024
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+    split_column_name: ${split_column_name}
+  limit_genes: protein_coding #could be null, protein_coding, or tokenizer
+  transform_datasets: false
+  collation_strategy: sequence_classification
+  log_normalize_transform: true
+
+trainer:
+  metrics:
+   - name: accuracy
+   - name: f1
+   - name: precision
+   - name: recall
+  losses:
+   - label_column_name: ${label_column_name}
+     name: cross_entropy # focal also supported, or mse if column is a regression_label
+
+accelerator: gpu
+input_file: null
+working_dir: /tmp
+checkpoint: null
+split_column_name: null # a column with strings "train", "dev", "test"
+label_column_name: null
+max_epochs: 2
+val_check_interval: 0.5 # see https://lightning.ai/docs/pytorch/stable/common/trainer.html#val-check-interval

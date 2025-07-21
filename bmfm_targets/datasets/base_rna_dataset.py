@@ -65,8 +65,10 @@ class BaseRNAExpressionDataset(Dataset):
             split (str): Split to use. Must be one of train, dev, test or None to get all data.
             label_dict_path: str | None = None
             split_column_name: str | None = None, column name where split is stored. If None,
-                a new split column with name `split_stratified_{label}` where label is the
-                first value in label_columns will be created with samples stratified by label
+                it will look for a column with name `split_stratified_{stratifying_label}`
+                if `stratifying_label` is provided, otherwise it will use `split_random`.
+                If not split column is found and split other than None is requested, an error
+                will be raised.
             label_columns: list[str] | None = None, the columns from the h5ad file to use as labels
                 in the dataset. If None, will use the column defined in the `default_label_column_name`
                 of the dataset.

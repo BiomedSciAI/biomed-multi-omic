@@ -1,5 +1,5 @@
 _target_: bmfm_targets.config.PredictTaskConfig
-default_root_dir: "${output_directory}"
+default_root_dir: "${working_dir}"
 precision: "16-mixed"
 accelerator: "${accelerator}"
 checkpoint: null

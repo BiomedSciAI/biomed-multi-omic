@@ -211,11 +211,20 @@ class SCBertMainConfig:
             return load_tokenizer(self.tokenizer.identifier)
 
     def _get_checkpoint(self):
+        task_ckpt = getattr(self.task, "checkpoint", None)
+        model_ckpt = None
         if self.model is not None:
             if isinstance(self.model, functools.partial):
-                return self.model.keywords.get("checkpoint")
-            return self.model.checkpoint
-        return getattr(self.task, "checkpoint", None)
+                model_ckpt = self.model.keywords.get("checkpoint")
+            else:
+                model_ckpt = self.model.checkpoint
+        if task_ckpt is not None:
+            if model_ckpt is not None:
+                logger.warning(
+                    "Found checkpoint in model config and task config, using task checkpoint"
+                )
+            return task_ckpt
+        return model_ckpt
 
     def add_checkpointing_callbacks(self):
         """
