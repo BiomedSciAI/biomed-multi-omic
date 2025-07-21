@@ -46,8 +46,8 @@ jobs:
 
         ad = sc.datasets.pbmc68k_reduced()
         ad = ad[np.random.choice(ad.shape[0], 50, replace=False)]  # downsample to 50
-        ad.obs["split_random"] = du.get_random_split(ad.obs, {"train":0.8, "dev": 0.1, "test": 0.1},random_state=42)
-        ad.obs["celltype"] = ad.obs["bulk_labels"]
+        ad.obs['split_random'] = du.get_random_split(ad.obs, {'train':0.8, 'dev': 0.1, 'test': 0.1},random_state=42)
+        ad.obs['celltype'] = ad.obs['bulk_labels']
         ad.write_h5ad('/tmp/my_data_file.h5ad')
         "
                 echo "MY_DATA_FILE=/tmp/my_data_file.h5ad" >> $GITHUB_ENV
