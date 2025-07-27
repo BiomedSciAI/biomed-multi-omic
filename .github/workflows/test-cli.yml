@@ -53,22 +53,22 @@ jobs:
         ad.obs['split_random'] = du.get_random_split(ad.obs, {'train':0.8, 'dev': 0.1, 'test': 0.1}, random_state)
         splits_array = rng.choice(['celltype1', 'celltype2', 'celltype3', 'celltype4'], size=ad.shape[0], p=[0.25]*4)
         ad.obs['celltype'] = ad.obs.assign(split=splits_array).pop('split')
-        ad.write_h5ad('/tmp/my_data_file.h5ad')
+        ad.write_h5ad('/home/runner/my_data_file.h5ad')
         "
-                echo "MY_DATA_FILE=/tmp/my_data_file.h5ad" >> $GITHUB_ENV
+                echo "MY_DATA_FILE=/home/runner/my_data_file.h5ad" >> $GITHUB_ENV
     - name: Test MLM+RDA inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling data_module.log_normalize_transform=false data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1  task.accelerator=cpu task.precision=32
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.collation_strategy=language_modeling data_module.log_normalize_transform=false data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1  task.accelerator=cpu task.precision=32 && rm -rf /tmp/runs/*
     - name: Test MLM+Multitask inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false && rm -rf /tmp/runs/*
     - name: Test WCED+Multitask inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false && rm -rf /tmp/runs/*
     - name: Test WCED inference
-      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
+      run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.collation_strategy=language_modeling data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false && rm -rf /tmp/runs/*
     - name: Test MLM+RDA finetune
-      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp data_module.log_normalize_transform=false checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0
+      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.log_normalize_transform=false checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 && rm -rf /tmp/runs/*
     - name: Test MLM+Multitask finetune
-      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false
+      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false && rm -rf /tmp/runs/*
     - name: Test WCED+Multitask finetune
-      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false
+      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false && rm -rf /tmp/runs/*
     - name: Test WCED finetune
-      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false
+      run: bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false && rm -rf /tmp/runs/*
