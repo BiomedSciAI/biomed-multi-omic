@@ -52,7 +52,7 @@ jobs:
         ad.X = ad.X.tocsr() if sp.issparse(ad.X) else sp.csr_matrix(ad.X)
         ad.obs['split_random'] = du.get_random_split(ad.obs, {'train':0.8, 'dev': 0.1, 'test': 0.1}, random_state)
         splits_array = rng.choice(['celltype1', 'celltype2', 'celltype3', 'celltype4'], size=ad.shape[0], p=[0.25]*4)
-        ad.obs['celltype'] = ad.obs.assign(split=splits_array).pop("split")
+        ad.obs['celltype'] = ad.obs.assign(split=splits_array).pop('split')
         ad.write_h5ad('/tmp/my_data_file.h5ad')
         "
                 echo "MY_DATA_FILE=/tmp/my_data_file.h5ad" >> $GITHUB_ENV
