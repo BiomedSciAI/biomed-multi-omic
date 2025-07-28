@@ -15,13 +15,13 @@ for DNA sequences)
 
 ## Installation
 
-We recommend using [uv](https://github.com/astral-sh/uv) to create your environment due to it's 10-100x speed up over pip.
+We recommend using [uv](https://github.com/astral-sh/uv) to create your environment due to it's 10-100x speed up over pip, which also can be used for installation. 
 
 Install using cloned repo:
 
 ```sh
 git clone git@github.com:BiomedSciAI/biomed-multi-omic.git
-cd biomed-multi-omics
+cd biomed-multi-omic
 uv venv .venv -p3.12
 source ./.venv/bin/activate
 uv pip install -e .
