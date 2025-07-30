@@ -71,7 +71,8 @@ def encode_expression_as_repeats(
     filtered_exprs = expr_values[is_in_chrom_df]
 
     sampling_probs = filtered_weights / filtered_weights.sum()
-    sample_idxs = np.random.choice(
+    rng = np.random.default_rng(kwargs.get("seed"))
+    sample_idxs = rng.choice(
         len(filtered_genes), size=max_length, replace=True, p=sampling_probs
     )
 

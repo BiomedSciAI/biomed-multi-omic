@@ -39,7 +39,7 @@ def test_shuffle_sort_instance():
     mfi = sample_transforms.sort_by_field(mfi_0, "expressions")
     assert mfi["genes"] == ["token4", "token3", "token1", "token2"]
     assert mfi["expressions"] == ["6", "5", "4", "1"]
-    mfi = sample_transforms.randomize(mfi_0)
+    mfi = sample_transforms.randomize(mfi_0, seed=123)
     assert mfi["genes"] != ["token4", "token3", "token1", "token2"]
     assert mfi["expressions"] != ["6", "5", "4", "1"]
 
@@ -330,10 +330,12 @@ def test_uce_input():
             "species": ["human", "human", "human"],
         }
     ).set_index("gene_symbol")
-    transformed_mfi = sample_transforms.encode_expression_as_repeats(mfi, chrom_df)
+    transformed_mfi = sample_transforms.encode_expression_as_repeats(
+        mfi, chrom_df, seed=42
+    )
     gene_counts = Counter(transformed_mfi["genes"])
-    assert gene_counts["MFSD14A"] >= gene_counts["TRMT13"]
-    assert gene_counts["MFSD14A"] >= gene_counts["TSPY9"]
+    assert gene_counts["MFSD14A"] >= gene_counts["TRMT13"], gene_counts
+    assert gene_counts["MFSD14A"] >= gene_counts["TSPY9"], gene_counts
 
 
 def test_uce_sorting_is_correctly_random():
