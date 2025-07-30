@@ -29,9 +29,21 @@ def select_non_input_labels(
     label_tensor[sample_idx, lookup_ids[non_input_mask]] = lookup_vals[non_input_mask]
 
 
+def select_all_labels(
+    label_tensor: torch.Tensor,
+    sample_idx: int,
+    lookup_ids: torch.Tensor,
+    lookup_vals: torch.Tensor,
+    input_ids: torch.Tensor,
+) -> None:
+    """Assign labels for all genes."""
+    label_tensor[sample_idx, lookup_ids] = lookup_vals
+
+
 LABEL_SET_FUNCTIONS = {
     "input": select_input_labels,
     "non_input": select_non_input_labels,
+    "all": select_all_labels,
 }
 
 
@@ -133,7 +145,7 @@ class WCEDMasker:
         self.tokenizer = tokenizer
         self.lookup_field_name = "genes"
         self.value_field_name = "expressions"
-        self.label_sets = label_sets or ["non_input", "input"]
+        self.label_sets = label_sets or ["non_input", "input", "all"]
         self.transform_kwargs = transform_kwargs or {}
 
         self.lookup_field_vocab_len = len(

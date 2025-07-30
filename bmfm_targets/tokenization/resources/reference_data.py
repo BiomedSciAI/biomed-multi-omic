@@ -1,3 +1,4 @@
+import functools
 import json
 from pathlib import Path
 
@@ -32,6 +33,27 @@ def get_protein_coding_genes():
     fname = Path(__file__).parent / "protein_coding_genes.json"
     with open(fname) as f:
         return json.load(f)
+
+
+@functools.lru_cache
+def get_gene_chromosome_locations(
+    species: str = "human",
+    chroms_file: Path | str | None = None,
+) -> pd.DataFrame:
+    """Get chromosomes for genes."""
+    if chroms_file is None:
+        fname = Path(__file__).parent / f"{species}_to_chrom_pos.csv"
+        if not fname.exists():
+            _get_gene_chromosome_info(
+                species,
+                file_name=fname,
+            )
+    else:
+        fname = Path(chroms_file)
+
+    chroms_df = pd.read_csv(fname, index_col="gene_symbol")
+
+    return chroms_df
 
 
 def get_ortholog_genes(
@@ -134,3 +156,93 @@ def _create_ortholog_mapping_table(
         mapping_df.to_csv(file_name, sep="\t", index=False)
 
     return mapping_df
+
+
+def _get_gene_chromosome_info(
+    species: str,
+    file_name: Path | str | None = None,
+) -> dict | None:
+    import gzip
+    import io
+
+    import requests
+
+    query_bm = "https://ftp.ensembl.org/pub/release-114/fasta/homo_sapiens/pep/Homo_sapiens.GRCh38.pep.all.fa.gz"
+
+    req = requests.get(query_bm)
+    if str(req.text).startswith("Query ERROR"):
+        raise requests.exceptions.RequestException(f"{req.text}")
+
+    all_pos_def = []
+
+    missing_genes = {}
+    missing_genes[species] = []
+
+    gzip_file = io.BytesIO(req.content)
+    with gzip.open(gzip_file, "rt") as f:
+        proteome_lines = f.readlines()
+
+    gene_symbol_to_location = {}
+    gene_symbol_to_chrom = {}
+
+    for line in proteome_lines:
+        if line.startswith(">"):
+            split_line = line.split()
+            gene_symbol = [
+                token for token in split_line if token.startswith("gene_symbol")
+            ]
+            if len(gene_symbol) > 0:
+                gene_symbol = gene_symbol[0].split(":")
+
+                if len(gene_symbol) == 2:
+                    gene_symbol = gene_symbol[1]
+                elif len(gene_symbol) > 2:
+                    gene_symbol = ":".join(
+                        gene_symbol[1:]
+                    )  # fix for annoying zebrafish gene names with colons in them
+                else:
+                    1 / 0  # something weird happening, throw an error
+
+                chrom = None
+
+                chrom_arr = [
+                    token for token in split_line if token.startswith("chromosome:")
+                ]
+                if len(chrom_arr) > 0:
+                    chrom = chrom_arr[0].replace("chromosome:", "")
+                else:
+                    chrom_arr = [
+                        token
+                        for token in split_line
+                        if token.startswith("primary_assembly:")
+                    ]
+                    if len(chrom_arr) > 0:
+                        chrom = chrom_arr[0].replace("primary_assembly:", "")
+                    else:
+                        chrom_arr = [
+                            token
+                            for token in split_line
+                            if token.startswith("scaffold:")
+                        ]
+                        if len(chrom_arr) > 0:
+                            chrom = chrom_arr[0].replace("scaffold:", "")
+                if chrom is not None:
+                    gene_symbol_to_location[gene_symbol] = chrom.split(":")[2]
+                    gene_symbol_to_chrom[gene_symbol] = chrom.split(":")[1]
+                else:
+                    missing_genes[species].append(gene_symbol)
+
+    positional_df = pd.DataFrame()
+    positional_df["gene_symbol"] = [
+        gn.upper() for gn in list(gene_symbol_to_chrom.keys())
+    ]
+    positional_df["chromosome"] = list(gene_symbol_to_chrom.values())
+    positional_df["start"] = list(gene_symbol_to_location.values())
+    positional_df = positional_df.sort_values(["chromosome", "start"])
+    positional_df["species"] = species
+    all_pos_def.append(positional_df)
+
+    master_pos_def = pd.concat(all_pos_def)
+    # generate csv
+    if file_name is not None:
+        master_pos_def.to_csv(f"{file_name}", index=False)

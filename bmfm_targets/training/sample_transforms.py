@@ -11,16 +11,97 @@ from operator import itemgetter
 from typing import Literal
 
 import numpy as np
+import pandas as pd
 import scipy.stats as stats
 import torch
+from transformers.utils import logging
 
 from bmfm_targets.tokenization import MultiFieldInstance
-from bmfm_targets.tokenization.resources import get_ortholog_genes
+from bmfm_targets.tokenization.resources import (
+    get_gene_chromosome_locations,
+    get_ortholog_genes,
+)
+
+logger = logging.get_logger(__name__)
+
+
+def encode_expression_as_repeats(
+    mfi: MultiFieldInstance,
+    chrom_df: pd.DataFrame,
+    max_length: int | None = None,
+    *args,
+    **kwargs,
+) -> MultiFieldInstance:
+    """
+    Convert a single-cell expression profile into a genomic gene sequence
+    for training. Sampling reflects abundance; ordering preserves
+    spatial genomic structure.
+
+    Based on the input format of
+        Universal Cell Embeddings: A Foundation Model for Cell Biology
+        Yanay Rosen, Yusuf Roohani, Ayush Agrawal, Leon Samotorčan,
+        Tabula Sapiens Consortium, Stephen R. Quake, Jure Leskovec
+        bioRxiv 2023.11.28.568918; doi: https://doi.org/10.1101/2023.11.28.568918
+
+    Parameters
+    ----------
+    mfi : MultiFieldInstance
+        Contains 'genes' and 'expressions' from a single cell.
+    chrom_df : pd.DataFrame
+        Indexed by `gene_symbol`. Must include:
+            - 'chromosome': identifier for sorting
+            - 'start': genomic start position
+    max_length : int
+        Desired sequence length. Sampling is with replacement.
+
+    Returns
+    -------
+    MultiFieldInstance
+        Contains reordered 'genes' and corresponding 'expressions'.
+
+    """
+    gene_ids = np.array(mfi["genes"])
+    expr_values = np.array(mfi["expressions"])
+    weights = np.log1p(expr_values)
+    if max_length is None:
+        max_length = gene_ids.shape[0]
+    is_in_chrom_df = np.isin(gene_ids, chrom_df.index)
+    filtered_genes = gene_ids[is_in_chrom_df]
+    filtered_weights = weights[is_in_chrom_df]
+    filtered_exprs = expr_values[is_in_chrom_df]
+
+    sampling_probs = filtered_weights / filtered_weights.sum()
+    sample_idxs = np.random.choice(
+        len(filtered_genes), size=max_length, replace=True, p=sampling_probs
+    )
+
+    sampled_genes = filtered_genes[sample_idxs]
+    sampled_exprs = filtered_exprs[sample_idxs]
+
+    gene_positions = chrom_df.loc[sampled_genes]
+    chrom_codes = gene_positions["chromosome"].values
+    start_coords = gene_positions["start"].values
+
+    shuffled_chroms = np.random.permutation(np.unique(chrom_codes))
+
+    final_genes = []
+    final_exprs = []
+
+    for chrom in shuffled_chroms:
+        in_chrom = chrom_codes == chrom
+        order = np.argsort(start_coords[in_chrom])
+        indices = np.where(in_chrom)[0][order]
+
+        final_genes.extend(sampled_genes[indices])
+        final_exprs.extend(sampled_exprs[indices])
+
+    return MultiFieldInstance(
+        data={"genes": final_genes, "expressions": final_exprs}, metadata=mfi.metadata
+    )
 
 
 def randomize(mfi: MultiFieldInstance, *args, **kwargs) -> MultiFieldInstance:
-    gen = np.random.default_rng(seed=kwargs.get("seed", None))
-    indices = gen.permutation(mfi.seq_length)
+    indices = np.random.permutation(mfi.seq_length)
     randomized_data = {
         field: np.array(values)[indices].tolist() for field, values in mfi.data.items()
     }
@@ -408,9 +489,12 @@ def rda_align(
 
     raw_expressions = np.array([float(value) for value in expressions])
     raw_expressions_sum = sum(raw_expressions)
-    normed_expressions = np.log1p(
-        (raw_expressions / raw_expressions_sum) * normalized_sum
-    )
+    if raw_expressions_sum > 0:
+        normed_expressions = np.log1p(
+            (raw_expressions / raw_expressions_sum) * normalized_sum
+        )
+    else:
+        normed_expressions = raw_expressions
 
     genes = ["[S]", "[T]"] + genes
     ST_list = [np.log1p(raw_expressions_sum), np.log1p(target_read_resolution)]
@@ -628,6 +712,13 @@ def compose_transforms(
         transforms.append(randomize)
     elif sequence_order == "sorted":
         transforms.append(partial(sort_by_field, field="expressions"))
+    elif sequence_order == "chromosomal_uce":
+        chrom_df = get_gene_chromosome_locations(species="human")
+        transforms.append(
+            partial(
+                encode_expression_as_repeats, chrom_df=chrom_df, max_length=max_length
+            )
+        )
     if sequence_dropout_factor is not None:
         if sequence_dropout_factor > 1:
             transforms.append(
