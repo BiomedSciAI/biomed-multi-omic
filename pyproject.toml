@@ -27,7 +27,7 @@ dependencies = [
   "torch",
   "rdata",
   "pytorch-lightning>=2.0.0",
-  "transformers>=4.40.0",
+  "transformers>=4.54.0",
   "omegaconf",
   "hydra-core",
   "clearml>1.13,<2",

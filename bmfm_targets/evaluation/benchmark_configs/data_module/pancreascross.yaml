@@ -1,0 +1,20 @@
+defaults:
+ - base_seq_cls
+
+_target_: bmfm_targets.datasets.pancreascross.PancreasCrossDataModule
+_partial_: true
+num_workers: 8
+mlm: false
+limit_genes: protein_coding
+shuffle: true
+transform_datasets: false
+data_dir: /dccstor/bmfm-targets/data/omics/transcriptome/scRNA/finetune/PancreasCross
+processed_name: processed_rawcount
+dataset_kwargs:
+  split_column_name: split_cross
+  label_columns:
+  - celltype
+label_column_name: celltype
+dataset_name: pancreascross
+batch_column_name: Batch
+log_normalize_transform: true

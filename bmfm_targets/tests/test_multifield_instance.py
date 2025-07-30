@@ -1,9 +1,11 @@
 import random
+from collections import Counter
 
 import numpy as np
+import pandas as pd
 from numpy.random import MT19937, RandomState, SeedSequence
 
-from bmfm_targets.tokenization.multifield_instance import MultiFieldInstance
+from bmfm_targets.tokenization import MultiFieldInstance
 from bmfm_targets.tokenization.resources import reference_data
 from bmfm_targets.training import sample_transforms
 
@@ -37,7 +39,7 @@ def test_shuffle_sort_instance():
     mfi = sample_transforms.sort_by_field(mfi_0, "expressions")
     assert mfi["genes"] == ["token4", "token3", "token1", "token2"]
     assert mfi["expressions"] == ["6", "5", "4", "1"]
-    mfi = sample_transforms.randomize(mfi_0, seed=123)
+    mfi = sample_transforms.randomize(mfi_0)
     assert mfi["genes"] != ["token4", "token3", "token1", "token2"]
     assert mfi["expressions"] != ["6", "5", "4", "1"]
 
@@ -313,3 +315,115 @@ def test_float_to_int():
             > sum(mfi_round["expressions"])
             > sum(mfi_floor["expressions"])
         )
+
+
+def test_uce_input():
+    """Verify number of genes depends on expressions."""
+    mfi = MultiFieldInstance(
+        data={"genes": ["MFSD14A", "TRMT13", "TSPY9"], "expressions": [10, 1, 1]}
+    )
+    chrom_df = pd.DataFrame(
+        data={
+            "gene_symbol": ["MFSD14A", "TRMT13", "TSPY9"],
+            "chromosome": ["1", "1", "Y"],
+            "start": [100038095, 100133215, 9487267],
+            "species": ["human", "human", "human"],
+        }
+    ).set_index("gene_symbol")
+    transformed_mfi = sample_transforms.encode_expression_as_repeats(mfi, chrom_df)
+    gene_counts = Counter(transformed_mfi["genes"])
+    assert gene_counts["MFSD14A"] >= gene_counts["TRMT13"]
+    assert gene_counts["MFSD14A"] >= gene_counts["TSPY9"]
+
+
+def test_uce_sorting_is_correctly_random():
+    """Verify gene sorting in the same chromosome."""
+    mfi = MultiFieldInstance(
+        data={"genes": ["MFSD14A", "TRMT13", "TSPY9"], "expressions": [1, 1, 1]}
+    )
+
+    chrom_df = pd.DataFrame(
+        data={
+            "gene_symbol": ["MFSD14A", "TRMT13", "TSPY9"],
+            "chromosome": ["1", "1", "Y"],
+            "start": [10003, 100133215, 9487267],
+            "species": ["human", "human", "human"],
+        }
+    ).set_index("gene_symbol")
+
+    examples = [
+        sample_transforms.encode_expression_as_repeats(mfi, chrom_df)
+        for _ in range(100)
+    ]
+    chromsome_examples = [
+        example for example in examples if "MFSD14A" in example["genes"]
+    ]
+    same_chromsome_examples = [
+        example for example in chromsome_examples if "TRMT13" in example["genes"]
+    ]
+    diff_chromsome_examples = [
+        example for example in chromsome_examples if "TSPY9" in example["genes"]
+    ]
+
+    same_chromosome_order = lambda mfi: mfi["genes"].index("MFSD14A") < mfi[
+        "genes"
+    ].index("TRMT13")
+    diff_chromsome_order = lambda mfi: mfi["genes"].index("MFSD14A") < mfi[
+        "genes"
+    ].index("TSPY9")
+    assert all(same_chromosome_order(mfi) for mfi in same_chromsome_examples)
+    assert any(diff_chromsome_order(mfi) for mfi in diff_chromsome_examples)
+    assert not all(diff_chromsome_order(mfi) for mfi in diff_chromsome_examples)
+
+
+def test_uce_sorting_is_correctly_sort_by_chromosome():
+    """Verify no chromosome group appears more than once."""
+    mfi = MultiFieldInstance(
+        data={
+            "genes": ["GENE1_chr1", "GENE2_chr1", "GENE3_chr6", "GENE4_chr7"],
+            "expressions": [2, 1, 1, 1],
+        }
+    )
+    chrom_df = pd.DataFrame(
+        data={
+            "gene_symbol": ["GENE1_chr1", "GENE2_chr1", "GENE3_chr6", "GENE4_chr7"],
+            "chromosome": ["chr1", "chr1", "chr6", "chr7"],
+            "start": [1, 10, 9999, 999],
+            "species": ["human", "human", "human", "human"],
+        }
+    ).set_index("gene_symbol")
+    examples = [
+        sample_transforms.encode_expression_as_repeats(mfi, chrom_df) for _ in range(20)
+    ]
+    # extract chroms
+    chrom_examples = [
+        [genes.split("chr")[1] for genes in example.data["genes"]]
+        for example in examples
+    ]
+    for i, chroms in enumerate(chrom_examples):
+        prev_list = []
+        prev = None
+        for chrom in chroms:
+            assert chrom not in prev_list
+            if (chrom != prev) and (i > 0):
+                # save previous elements
+                prev_list.append(prev)
+            prev = chrom
+
+
+def test_uce_undefined_chromosome_input():
+    """Verify genes which are undefined for chromosome are removed."""
+    mfi = MultiFieldInstance(
+        data={"genes": ["GENE1", "GENE2", "GENE3"], "expressions": [10, 1, 3]}
+    )
+    chrom_df = pd.DataFrame(
+        data={
+            "gene_symbol": ["GENE1", "GENE2"],
+            "chromosome": ["1", "A"],
+            "start": [100, 9999],
+            "species": ["human", "human"],
+        }
+    ).set_index("gene_symbol")
+    transformed_mfi = sample_transforms.encode_expression_as_repeats(mfi, chrom_df)
+    gene_counts = Counter(transformed_mfi["genes"])
+    assert gene_counts["GENE3"] == 0

@@ -168,16 +168,10 @@ class SCModernBertMLP(nn.Module):
 
 
 class SCModernBertRotaryEmbedding(nn.Module):
-    def __init__(
-        self,
-        config: SCModernBertConfig,
-        dim: int,
-        base: float,
-        device: torch.device | None = None,
-    ):
+    def __init__(self, config: SCModernBertConfig, device=None):
         super().__init__()
         # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
+        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
             self.rope_type = config.rope_scaling.get(
                 "rope_type", config.rope_scaling.get("type")
             )
@@ -188,9 +182,7 @@ class SCModernBertRotaryEmbedding(nn.Module):
 
         self.config = config
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-        inv_freq, self.attention_scaling = self.rope_init_fn(
-            None, device, dim=dim, base=base
-        )
+        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
@@ -407,11 +399,13 @@ class SCModernBertAttention(nn.Module):
         else:
             self.local_attention = (-1, -1)
 
-        rope_theta = config.global_rope_theta
         max_position_embeddings = config.max_position_embeddings
         if self.local_attention != (-1, -1):
-            if config.local_rope_theta is not None:
-                rope_theta = config.local_rope_theta
+            rope_theta = (
+                config.global_rope_theta
+                if config.local_rope_theta is None
+                else config.local_rope_theta
+            )
             max_position_embeddings = config.local_attention
 
         if config._attn_implementation == "flash_attention_2":
@@ -419,9 +413,7 @@ class SCModernBertAttention(nn.Module):
                 dim=self.head_dim, max_seqlen=max_position_embeddings, base=rope_theta
             )
         else:
-            self.rotary_emb = SCModernBertRotaryEmbedding(
-                config=config, dim=self.head_dim, base=rope_theta
-            )
+            self.rotary_emb = SCModernBertRotaryEmbedding(config=config)
 
         self.Wo = nn.Linear(
             config.hidden_size, config.hidden_size, bias=config.attention_bias
@@ -514,11 +506,11 @@ class SCModernBertEncoderLayer(nn.Module):
 
 
 class SCModernBertPreTrainedModel(PreTrainedModel):
-    config_class = SCModernBertConfig
+    config: SCModernBertConfig
     base_model_prefix = "scmodernbert"
     supports_gradient_checkpointing = True
     _no_split_modules = ["SCModernBertEncoderLayer"]
-    _supports_flash_attn_2 = True
+    _supports_flash_attn = True
     _supports_sdpa = True
     _supports_flex_attn = False
 
@@ -559,33 +551,26 @@ class SCModernBertPreTrainedModel(PreTrainedModel):
             if module.bias is not None:
                 module.bias.data.zero_()
 
-    @classmethod
-    def _autoset_attn_implementation(
-        cls,
-        config,
-        use_flash_attention_2: bool = False,
-        torch_dtype: torch.dtype | None = None,
-        device_map: str | dict[str, int] | None = None,
-        check_device_map: bool = True,
-    ):
-        if config._attn_implementation_internal is None:
-            config._attn_implementation_internal = "flash_attention_2"
-            try:
-                return cls._check_and_enable_flash_attn_2(
-                    config,
-                    torch_dtype=torch.float16,
-                    device_map=device_map,
-                    hard_check_only=False,
-                    check_device_map=check_device_map,
-                )
-            except (ValueError, ImportError):
-                config._attn_implementation_internal = None
-        return super()._autoset_attn_implementation(
-            config,
-            use_flash_attention_2=use_flash_attention_2,
-            torch_dtype=torch.float16,
-            device_map=device_map,
-            check_device_map=check_device_map,
+    def set_attention_implementation(self, attn_implementation: dict | str):
+        """Checks and dispatches to hhe requested attention implementation."""
+        # If the user didn't specify anything, try to use flash_attention_2 if available.
+        # Otherwise we fall back to the default SDPA -> Eager from the super() method.
+        # ModernBert's FA2 implementation correctly handles non-fp16/bf16 dtypes, we don't
+        # need the FA2 warning for non-fp16/bf16 dtypes so we set fp16 for the FA2 check.
+        requested_attn_implementation = self._check_attn_implementation(
+            attn_implementation
+        )
+        try:
+            attn_implementation = (
+                "flash_attention_2"
+                if requested_attn_implementation is None
+                and self._flash_attn_2_can_dispatch()
+                else attn_implementation
+            )
+        except (ValueError, ImportError):
+            pass
+        return super().set_attention_implementation(
+            attn_implementation=attn_implementation
         )
 
     def _maybe_set_compile(self):
