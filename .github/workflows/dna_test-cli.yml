@@ -49,7 +49,7 @@ jobs:
 
         def random_dna(length=50):
             return ''.join(random.choices('ACGT', k=length))
-        
+
         def create_a_csv_file(filename, nrows=1000):
             # Create a CSV file with random DNA sequences and labels
             with open(directory + filename, 'w', newline='') as csvfile:
@@ -74,4 +74,3 @@ jobs:
     #   run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=128 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1  task.accelerator=cpu task.precision=32
     # - name: Test MLM+Multitask inference
     #   run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=128 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1 task.accelerator=cpu task.precision=32
-    

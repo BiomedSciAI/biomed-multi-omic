@@ -15,7 +15,7 @@ for DNA sequences)
 
 ## Installation
 
-We recommend using [uv](https://github.com/astral-sh/uv) to create your environment due to it's 10-100x speed up over pip, which also can be used for installation. 
+We recommend using [uv](https://github.com/astral-sh/uv) to create your environment due to it's 10-100x speed up over pip, which also can be used for installation.
 
 Install using cloned repo:
 
