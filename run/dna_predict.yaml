@@ -11,9 +11,7 @@ data_module:
     processed_data_source: ${input_directory}
     dataset_name: ${dataset_name}
     label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
-
-
-
+  collation_strategy: multitask
 
 task:
   checkpoint: ${checkpoint}
@@ -30,5 +28,5 @@ checkpoint: null
 
 batch_size: 32
 dataset_name: coreprom
-#label_column_name: label
+label_column_name: label
 input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction
