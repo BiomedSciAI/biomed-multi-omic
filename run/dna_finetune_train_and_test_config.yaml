@@ -32,7 +32,7 @@ batch_size: 32
 dataset_name: coreprom
 label_column_name: label
 model_name: modernbert
-checkpoint_path: null
+checkpoint: null
 checkpoint_name: ""
 accelerator: gpu
 input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction

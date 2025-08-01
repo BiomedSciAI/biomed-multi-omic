@@ -14,7 +14,6 @@ data_module:
   collation_strategy: multitask
 
 task:
-  checkpoint: ${checkpoint}
   output_embeddings: true
   output_predictions: true
   default_root_dir: ${working_dir}
