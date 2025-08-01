@@ -68,10 +68,10 @@ jobs:
         echo "MY_DATA_DIR=/tmp/dna/my_dna_dataset" >> $GITHUB_ENV
         # echo "MY_DATA_FILE=/tmp/dna/my_dna_dataset/test.csv" >> $GITHUB_ENV
     - name: Test MLM+REFGENOME finetune
-      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1
+      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 task.accelerator=cpu task.precision=32 && rm -rf /tmp/dna/*
     - name: Test MLM+SNPGENOME finetune
-      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 task.accelerator=cpu task.precision=32 && rm -rf /tmp/dna/*
     - name: Test MLM+REFGENOME inference
-      run: bmfm-targets-run -cn dna_predict input_file=$MY_DATA_DIR working_dir=/tmp/dna/ data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 task.accelerator=cpu task.precision=32
+      run: bmfm-targets-run -cn dna_predict input_file=$MY_DATA_DIR working_dir=/tmp/dna/ data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 task.accelerator=cpu task.precision=32 && rm -rf /tmp/dna/*
     - name: Test MLM+SNPGENOME inference
-      run: bmfm-targets-run -cn dna_predict input_file=$MY_DATA_DIR working_dir=/tmp/dna/ data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 task.accelerator=cpu task.precision=32
+      run: bmfm-targets-run -cn dna_predict input_file=$MY_DATA_DIR working_dir=/tmp/dna/ data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 task.accelerator=cpu task.precision=32 && rm -rf /tmp/dna/*
