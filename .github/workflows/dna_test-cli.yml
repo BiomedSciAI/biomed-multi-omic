@@ -60,17 +60,18 @@ jobs:
                     label = random.randint(0, 1)
                     writer.writerow([seq, label])
 
-        create_a_csv_file("train.csv", nrows=1000)
-        create_a_csv_file("test.csv", nrows=200)
-        create_a_csv_file("dev.csv", nrows=200)
+        create_a_csv_file('train.csv', nrows=1000)
+        create_a_csv_file('test.csv', nrows=200)
+        create_a_csv_file('dev.csv', nrows=200)
         "
 
-        echo "MY_DATA_FILE=/tmp/dna/my_dna_dataset" >> $GITHUB_ENV
+        echo "MY_DATA_DIR=/tmp/dna/my_dna_dataset" >> $GITHUB_ENV
+        # echo "MY_DATA_FILE=/tmp/dna/my_dna_dataset/test.csv" >> $GITHUB_ENV
     - name: Test MLM+REFGENOME finetune
-      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_FILE checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1
+      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1
     - name: Test MLM+SNPGENOME finetune
-      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_FILE checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
-    # - name: Test MLM+RDA inference
-    #   run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=128 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1  task.accelerator=cpu task.precision=32
-    # - name: Test MLM+Multitask inference
-    #   run: bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=128 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1 task.accelerator=cpu task.precision=32
+      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+    - name: Test MLM+REFGENOME inference
+      run: bmfm-targets-run -cn dna_predict input_file=$MY_DATA_DIR working_dir=/tmp/dna/ data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 task.accelerator=cpu task.precision=32
+    - name: Test MLM+SNPGENOME inference
+      run: bmfm-targets-run -cn dna_predict input_file=$MY_DATA_DIR working_dir=/tmp/dna/ data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 task.accelerator=cpu task.precision=32
