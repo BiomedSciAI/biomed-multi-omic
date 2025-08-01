@@ -1,4 +1,4 @@
-declare -a datasets=("covid_19" "heart_atlas" "immune_all_human" "lung_atlas" "mhsp" "pbmc_10k" "cell_lines" "dc" "human_pbmc" "immune_atlas" "mca" "pancrm" "multiple_sclerosis" "myeloid" "zheng68k")
+declare -a datasets=("covid_19" "heart_atlas" "immune_all_human" "lung_atlas" "mhsp" "pbmc_10k" "cell_lines" "dc" "human_pbmc" "immune_atlas" "mca" "pancrm" "multiple_sclerosis" "myeloid" "zheng68k" "pancreascross" "hbones")
 
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
@@ -17,5 +17,5 @@ for DATASET in "${datasets[@]}"; do
 done
 
 for DATASET in "${datasets[@]}"; do
-    $PREFIX_CMD bmfm-targets-run -cd $SCRIPT_DIR -cn config data_module=$DATASET data_module.collation_strategy=multitask task=predict ~model ~fields track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+    $PREFIX_CMD bmfm-targets-run -cd $SCRIPT_DIR -cn config data_module=$DATASET data_module.collation_strategy=language_modeling task=predict ~model ~fields track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
 done

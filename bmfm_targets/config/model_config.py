@@ -269,6 +269,7 @@ class SCModernBertConfig(SCModelConfigBase):
 
     model_type = "scmodernbert"
     keys_to_ignore_at_inference = ["past_key_values"]
+    attribute_map = {"rope_theta": "global_rope_theta"}
 
     def __init__(
         self,

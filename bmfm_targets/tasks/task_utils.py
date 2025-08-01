@@ -1,6 +1,7 @@
 import inspect
 import logging
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
@@ -278,11 +279,19 @@ def train(
     task_config: config.TrainingTaskConfig,
     checkpoint_path: str | None = None,
 ):
-    if task_config.freeze_encoder:
-        logger.info("Freezing encoder")
+    if task_config.freeze_layers:
+        logger.info("Freezing layers")
+        match_str = (
+            r"\.encoder\."
+            if isinstance(task_config.freeze_layers, bool)
+            and task_config.freeze_layers is True
+            else task_config.freeze_layers
+        )
         for name, param in pl_module.model.named_parameters():
-            if ".encoder." in name:
+            if re.search(match_str, name):
                 param.requires_grad = False
+            else:
+                logger.info(f"Unfrozen layer: {name}")
 
     pl_trainer.callbacks = (
         getattr(pl_trainer, "callbacks", None) or []

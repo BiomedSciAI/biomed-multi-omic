@@ -4,21 +4,38 @@ import warnings
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import f1_score, roc_auc_score
+from scipy.stats import rankdata
 
 
-def group_is_zero_f1(group: pd.Series):
-    y_true = (group["label_expressions"] == 0).astype(int)
-    y_pred = (group["predicted_expressions"] == 0).astype(int)
-    return f1_score(y_true, y_pred, zero_division=np.nan)
+def fast_group_roc_auc_vectorized(
+    predictions: pd.DataFrame, group_col, true_col, score_col
+):
+    predictions = predictions[[group_col, true_col, score_col]].copy()
+
+    # 1 = zero, 0 = non-zero
+    predictions[true_col] = (predictions[true_col] == 0).astype(int)
+    results = {}
+
+    for g, group in predictions.groupby(group_col):
+        results[g] = mann_whitney_roc_auc(
+            group[true_col].values, group[score_col].values
+        )
+
+    return pd.Series(results)
 
 
-def group_roc_auc(group: pd.Series):
-    y_true = (group["label_expressions"] == 0).astype(int)
-    y_pred = group["logits_expressions_is_zero"]
-    if len({*y_true}) == 1:
+def mann_whitney_roc_auc(y_true, y_score):
+    # Skip groups with only one class
+    if y_true.min() == y_true.max():
         return np.nan
-    return roc_auc_score(y_true, y_pred)
+    n_pos = y_true.sum()
+    n_neg = len(y_true) - n_pos
+
+    ranks = rankdata(y_score)
+    pos_ranks = ranks[y_true == 1]
+
+    auc = (pos_ranks.sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+    return auc
 
 
 def _resolve_input_expression_column(exp_preds: pd.DataFrame) -> str:
@@ -103,13 +120,20 @@ def get_gene_level_expression_error(exp_preds: pd.DataFrame) -> pd.DataFrame:
     f1 = 2 * (precision * recall) / (precision + recall).replace(0, np.nan)
     metrics["is_zero_f1"] = f1
 
-    if "logits_expressions_is_zero" in exp_preds.columns:
+    is_zero_logits_col = next(
+        (c for c in exp_preds.columns if "logits_expressions_is_zero" in c), None
+    )
+    if is_zero_logits_col is not None:
         try:
-            metrics["is_zero_roc_auc"] = exp_preds.groupby("input_genes").apply(
-                group_roc_auc
+            metrics["is_zero_roc_auc"] = fast_group_roc_auc_vectorized(
+                exp_preds,
+                group_col="input_genes",
+                true_col="label_expressions",
+                score_col=is_zero_logits_col,
             )
-        except Exception:
-            pass
+
+        except Exception as e:
+            logging.warning(f"Failed to calculate roc_auc with error {e}")
 
     return pd.DataFrame(metrics)
 

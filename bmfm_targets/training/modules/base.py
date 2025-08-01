@@ -512,25 +512,27 @@ class BaseTrainingModule(pl.LightningModule):
         if len(self.get_supported_field_metric_keys()) == 0:
             return
 
-        gene_level_error = self.token_level_errors["genes"]
-        gene_metrics = get_gene_metrics_from_gene_errors(gene_level_error)
-        for k, v in gene_metrics.items():
-            self.logger.experiment.add_scalar(f"{split}/{k}", v, self.global_step)
-        best_genes, worst_genes = get_best_and_worst_genes(gene_level_error)
-        cl = clearml.Logger.current_logger()
-        if cl:
-            cl.report_table(
-                "Best performing common genes (top decile nonzero count, lowest avg err)",
-                series=split,
-                iteration=self.global_step,
-                table_plot=best_genes,
-            )
-            cl.report_table(
-                "Worst performing common genes (top decile nonzero count, highest avg err)",
-                series=split,
-                iteration=self.global_step,
-                table_plot=worst_genes,
-            )
+        for metric_key, gene_level_error in self.token_level_errors.items():
+            gene_metrics = get_gene_metrics_from_gene_errors(gene_level_error)
+            for k, v in gene_metrics.items():
+                self.logger.experiment.add_scalar(
+                    f"{split}/{metric_key}_{k}", v, self.global_step
+                )
+            best_genes, worst_genes = get_best_and_worst_genes(gene_level_error)
+            cl = clearml.Logger.current_logger()
+            if cl:
+                cl.report_table(
+                    f"Best performing common genes {metric_key} (top decile nonzero count, lowest avg err)",
+                    series=split,
+                    iteration=self.global_step,
+                    table_plot=best_genes,
+                )
+                cl.report_table(
+                    f"Worst performing common genes {metric_key} (top decile nonzero count, highest avg err)",
+                    series=split,
+                    iteration=self.global_step,
+                    table_plot=worst_genes,
+                )
 
     def plot_batch_predictions_for_split(self, split):
         for field_metric_key in self.get_supported_field_metric_keys(
@@ -570,8 +572,12 @@ class BaseTrainingModule(pl.LightningModule):
                 columns = field_predictions_df_columns(
                     self.model_config.fields, lt.field, self.MODELING_STRATEGY
                 )
+                include_nonmasked = lt.wced_target is None
                 preds_df = self._get_field_predictions_df(
-                    split, lt.output_key, include_nonmasked=True, columns=columns
+                    split,
+                    lt.metric_key,
+                    include_nonmasked=include_nonmasked,
+                    columns=columns,
                 )
             else:
                 preds_df = self._get_label_predictions_df(split, lt.output_key)
@@ -782,7 +788,9 @@ class BaseTrainingModule(pl.LightningModule):
             )
             self.prediction_df[metric_key] = preds_df
             logger.info(f"calculating get_gene_level_expression_error for {metric_key}")
-            self.token_level_errors["genes"] = get_gene_level_expression_error(preds_df)
+            self.token_level_errors[metric_key] = get_gene_level_expression_error(
+                preds_df
+            )
         for label_metric_key in [
             lt.metric_key for lt in self.loss_tasks if isinstance(lt, LabelLossTask)
         ]:

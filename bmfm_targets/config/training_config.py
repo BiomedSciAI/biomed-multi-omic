@@ -67,7 +67,9 @@ class TrainingTaskConfig(BaseTaskConfig):
     accelerator: str = "auto"
     callbacks: list[Any] = field(default_factory=default_callbacks)
     accumulate_grad_batches: int = 1
-    freeze_encoder: bool = False
+    freeze_layers: bool | str = False
+    # if true layers including '.encoder.' are frozen
+    # or you can set it to like '\.encoder\.|\.pooler\.|\.embeddings\.' to directly choose frozen layers
     gradient_clip_val: float | int | None = None
     num_sanity_val_steps: int = 0
     # whether to attempt to continue training using pl.Trainer.fit(..., ckpt_path=...)

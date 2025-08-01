@@ -123,8 +123,15 @@ def focal_loss(logits, labels, focal_gamma=2.0, **kwargs):
         m = torch.nn.Sigmoid()
     else:
         m = torch.nn.Softmax(dim=-1)
-    criterion = FocalLoss(gamma=focal_gamma, ignore_index=-100, **kwargs)
-    return criterion(m(logits), labels)
+
+    criterion = FocalLoss(
+        gamma=focal_gamma,
+        ignore_index=-100,
+        eps=torch.finfo(logits.dtype).eps,
+        **kwargs,
+    )
+    probs = m(logits)
+    return criterion(probs, labels)
 
 
 class TokenValueLoss(torch.nn.Module):

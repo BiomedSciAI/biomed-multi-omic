@@ -18,7 +18,7 @@ authors = [
 version = "0.15.0"
 readme = "README.md"
 # due to how PEP 440 defines version matching, prefer [incl, excl) definitions like below:
-requires-python = ">=3.10, <3.13"
+requires-python = ">=3.10, <3.14"
 dependencies = [
   "anndata>=0.10.0",
   "scanpy",
@@ -27,7 +27,7 @@ dependencies = [
   "torch",
   "rdata",
   "pytorch-lightning>=2.0.0",
-  "transformers>=4.40.0",
+  "transformers>=4.54.0",
   "omegaconf",
   "hydra-core",
   "clearml>1.13,<2",

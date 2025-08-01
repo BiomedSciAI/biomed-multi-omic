@@ -69,7 +69,7 @@ class LossTask:
         these_labels = labels[self.output_key]
         if getattr(self, "label_set", None) is not None:
             these_labels = these_labels[self.label_set]
-        if self.loss_name in ("mse", "token_mse", "is_zero_bce"):
+        if self.loss_name in ("mse", "token_mse", "is_zero_bce", "is_zero_focal"):
             model_outputs = self.get_predictions(logits)
             label_dtype = model_outputs.dtype
             gt_labels = these_labels.to(label_dtype).view(model_outputs.shape)
@@ -235,7 +235,7 @@ class FieldLossTask(LossTask):
         if loss_name in ("token_value", "cross_entropy", "focal"):
             return field.vocab_size
         # if "regression" in field.decode_modes and loss_name in (
-        if loss_name in ("token_mse", "mse", "is_zero_bce"):
+        if loss_name in ("token_mse", "mse", "is_zero_bce", "is_zero_focal"):
             return 1
 
         raise ValueError(
@@ -260,7 +260,7 @@ class FieldLossTask(LossTask):
             if self.link_function == "exp":
                 predictions = torch.exp(predictions)
 
-        elif self.loss_name in ["is_zero_bce"]:
+        elif self.loss_name in ["is_zero_bce", "is_zero_focal"]:
             # prediction for is_zero is True (aka 1) if the value is 0 and False (aka 0)
             #  if it is non-zero
             predictions = torch.where(these_logits > 0, 1, 0)
@@ -373,6 +373,12 @@ class FieldLossTask(LossTask):
             return metrics.is_zero_bce_loss(
                 request_logits.reshape(-1),
                 labels.reshape(-1),
+            )
+        elif self.loss_name in ["is_zero_focal"]:
+            return metrics.focal_loss(
+                request_logits.reshape(-1),
+                torch.where(labels == -100, labels, (labels == 0)).reshape(-1).long(),
+                focal_gamma=self.focal_gamma,
             )
 
         raise ValueError(f"Unsupported loss name: {self.loss_name}")
@@ -578,8 +584,6 @@ def get_loss_tasks(
                 f"Unable to create loss: {loss_request}. Failed with error {e}"
             )
 
-    _warn_if_multiple_losses_for_a_field(loss_tasks)
-
     return loss_tasks
 
 
@@ -657,18 +661,6 @@ def _verify_token_values_compatible_with_loss(
     ], invalid_tokenizer_message
 
 
-def _warn_if_multiple_losses_for_a_field(loss_tasks):
-    field_losses = set()
-    for task in loss_tasks:
-        if isinstance(task, FieldLossTask):
-            if task.field.field_name in field_losses:
-                logger.warning(
-                    f"Field {task.field.field_name} has multiple losses requested. "
-                    "Training will work, but metrics reporting can only account for predictions from one output."
-                )
-            field_losses.add(task.field.field_name)
-
-
 def calculate_losses(
     loss_tasks: list[LossTask],
     logits: dict[str, torch.Tensor],
@@ -724,9 +716,11 @@ def combine_partial_predictions(
 ) -> torch.Tensor:
     if len(partial_predictions) == 1:
         return [*partial_predictions.values()][0]
-    if "mse" in partial_predictions.keys() and "is_zero_bce" in partial_predictions:
+    if "mse" in partial_predictions.keys():
+        is_zero_key = [k for k in partial_predictions if "is_zero" in k][0]
+
         return torch.where(
-            partial_predictions["is_zero_bce"] == 1, 0, partial_predictions["mse"]
+            partial_predictions[is_zero_key] == 1, 0, partial_predictions["mse"]
         )
     # cross_entropy is the "default" -- if there are others present let's report
     # cross_entropy as the "prediction" even though all are used for the loss
