@@ -1,6 +1,7 @@
 defaults:
   - data_module: dna_base_seq_cls
   - task: predict
+  - label_columns: dnaeval_default
   - _self_
 
 seed:
@@ -11,12 +12,15 @@ data_module:
     processed_data_source: ${input_directory}
     dataset_name: ${dataset_name}
     label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
-  collation_strategy: multitask
+  collation_strategy: sequence_classification
 
 task:
   output_embeddings: true
   output_predictions: true
   default_root_dir: ${working_dir}
+  # losses:
+  #   - name: cross_entropy
+  #     label_column_name: ${label_column_name}
 
 accelerator: gpu
 input_file: null
