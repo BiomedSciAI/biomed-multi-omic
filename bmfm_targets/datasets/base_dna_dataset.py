@@ -78,9 +78,9 @@ class BaseDNASeqDataset(Dataset):
             self.processed_data = pd.read_csv(
                 self.processed_file, sep=",", header=0, dtype=str
             )
-            self.processed_data = self.processed_data.rename(
-                columns={self.processed_data.columns[0]: "dna_chunks"}
-            )
+        self.processed_data = self.processed_data.rename(
+            columns={self.processed_data.columns[0]: "dna_chunks"}
+        )
 
         if self.label_columns or self.regression_label_columns:
             self.labels_requested = True
