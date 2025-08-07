@@ -877,6 +877,15 @@ class DNASeqDataModule(pl.LightningDataModule):
         sequence_order: str | None = None,
         shuffle: bool = False,
         sequence_dropout_factor: int | float | None = None,
+        balancing_label_column: str | None = None,
+        mlm: bool = False,
+        change_ratio: float = 0.15,
+        mask_ratio: float = 1.0,
+        switch_ratio: float = 0.0,
+        masking_strategy: MaskingStrategy | None = None,
+        prevent_attention_to_masked: bool = False,
+        comask_across_fields: bool = False,
+        tokenize_kwargs: dict | None = None,
     ):
         """
         Construct the data module.
@@ -931,9 +940,44 @@ class DNASeqDataModule(pl.LightningDataModule):
         self.predict_dataset = None
         self.shuffle = shuffle
         self.sequence_dropout_factor = sequence_dropout_factor
+        self.balancing_label_column = balancing_label_column
+
+        if isinstance(masking_strategy, partial):
+            masking_strategy = masking_strategy(tokenizer=tokenizer)
+        self.masking_strategy = masking_strategy
+        if isinstance(self.masking_strategy, WCEDMasker):
+            self.masker = masking_strategy
+        elif mlm:
+            self.masker = Masker(
+                change_ratio=change_ratio,
+                mask_ratio=mask_ratio,
+                switch_ratio=switch_ratio,
+                tokenizer=tokenizer,
+                prevent_attention_to_masked=prevent_attention_to_masked,
+                comask_across_fields=comask_across_fields,
+                masking_strategy=masking_strategy,
+            )
+        else:
+            self.masker = None
+
+        self.stratifying_label = None
+        if self.label_columns:
+            self.stratifying_label = next(
+                (
+                    label.label_column_name
+                    for label in self.label_columns
+                    if label.is_stratification_label
+                ),
+                None,
+            )
+        self.tokenize_kwargs = tokenize_kwargs
 
     def get_trainer_callbacks(self) -> list:
         """Here datamodules can add their own callbacks to callback list for PL trainer."""
+        if self.masking_strategy and hasattr(
+            self.masking_strategy, "get_trainer_callback"
+        ):
+            return [self.masking_strategy.get_trainer_callback()]
         return []
 
     def get_dataset_instance(self) -> BaseDNASeqDataset:
@@ -1114,6 +1158,18 @@ class DNASeqDataModule(pl.LightningDataModule):
         dataset = self.get_dataset_instance()
         return [str(i) for i in dataset.get_vocab_for_field(field_name)]
 
+    @staticmethod
+    def get_balanced_weights_for_sampler(labels: np.array):
+        # create mapping from cell type label to its weight
+        unique_labels, labels_counts = np.unique(labels, return_counts=True)
+        label_to_weight = {
+            label: 1.0 / count for label, count in zip(unique_labels, labels_counts)
+        }
+        # retrieve the corresponding weight from label_to_weight
+        samples_weight = np.array([label_to_weight[label] for label in labels])
+        samples_weight = torch.from_numpy(samples_weight)
+        return samples_weight
+
     def train_dataloader(self) -> DataLoader:
         """
         Returns a DataLoader for training.
@@ -1122,12 +1178,27 @@ class DNASeqDataModule(pl.LightningDataModule):
         -------
             DataLoader: DataLoader for training
         """
+        if self.balancing_label_column is not None:
+            shuffle = False
+            labels = np.array(self.train_dataset.metadata[self.balancing_label_column])
+            samples_weight = self.get_balanced_weights_for_sampler(labels)
+            sampler = WeightedRandomSampler(
+                samples_weight, len(samples_weight), replacement=True
+            )
+
+        else:
+            sampler = None
+            shuffle = self.shuffle
+
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
+            shuffle=shuffle,
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
+            sampler=sampler,
+            persistent_workers=self.num_workers > 0,
+            pin_memory=True,
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -1138,12 +1209,21 @@ class DNASeqDataModule(pl.LightningDataModule):
         -------
             DataLoader: DataLoader for validation
         """
+        collator = self.collate_fn
+        if (
+            isinstance(self.masking_strategy, MaskingStrategy)
+            and not self.masking_strategy.use_for_validation
+        ):
+            collator.masker = deepcopy(collator.masker)
+            collator.masker.masking_strategy = None
         return DataLoader(
             self.dev_dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
+            shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
+            collate_fn=collator,
+            # persistent_workers=self.num_workers > 0,
+            # pin_memory=True,
         )
 
     def test_dataloader(self) -> DataLoader:
@@ -1193,4 +1273,6 @@ class DNASeqDataModule(pl.LightningDataModule):
             sequence_order=self.sequence_order,
             sequence_dropout_factor=self.sequence_dropout_factor,
             collation_strategy=self.collation_strategy,
+            masker=self.masker,
+            tokenize_kwargs=self.tokenize_kwargs,
         )
