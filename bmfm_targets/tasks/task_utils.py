@@ -341,7 +341,16 @@ def predict(
 
 
 def save_embeddings_results(root_dir, results):
-    embeddings_df = pd.DataFrame(results["embeddings"], index=results["cell_names"])
+    if "cell_names" in results:
+        embeddings_df = pd.DataFrame(results["embeddings"], index=results["cell_names"])
+    elif "chunk_id" in results:
+        embeddings_df = pd.DataFrame(results["embeddings"], index=results["chunk_id"])
+    else:
+        embeddings_df = pd.DataFrame(results["embeddings"])
+        logger.warning(
+            "Results must contain either 'cell_names' or 'chunk_id' to save embeddings."
+        )
+
     embeddings_df.to_csv(f"{root_dir}/embeddings.csv", header=False)
 
 

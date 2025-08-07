@@ -360,7 +360,14 @@ class BaseTrainingModule(pl.LightningModule):
             pooling_method=self.trainer_config.pooling_method,
         )
         predictions_dict["embeddings"] = embeddings.to(torch.float32).cpu().numpy()
-        predictions_dict["cell_names"] = batch["cell_names"]
+        if (
+            "cell_names" in batch
+        ):  # for RNA models only, for DNA models need works if they have chunk_id
+            predictions_dict["cell_names"] = batch["cell_names"]
+        elif (
+            "seq_id" in batch
+        ):  # for RNA models only, for DNA models need works if they have chunk_id
+            predictions_dict["seq_id"] = batch["seq_id"]
         for loss_task in filter(
             lambda x: isinstance(x, LabelLossTask), self.loss_tasks
         ):

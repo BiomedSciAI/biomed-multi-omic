@@ -13,6 +13,7 @@ data_module:
     processed_data_source: ${input_directory}
     dataset_name: ${dataset_name}
     label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
+  shuffle: false
   collation_strategy: language_modeling
 
 task:
