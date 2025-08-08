@@ -248,6 +248,9 @@ class MultiFieldCollator:
         # TODO: This is not generic, this should be addressed
         if examples[0].metadata is not None and "cell_name" in examples[0].metadata:
             batch["cell_names"] = [mfi.metadata.get("cell_name") for mfi in examples]
+        elif examples[0].metadata is not None and "seq_id" in examples[0].metadata:
+            batch["seq_ids"] = [mfi.metadata.get("seq_id") for mfi in examples]
+
         # TODO: Here we assume that the first multi-field instance of the pair is the one that contains the labels
         if (
             self.collation_strategy in ["multitask", "sequence_classification"]
@@ -339,6 +342,8 @@ class MultiFieldCollator:
             return_dict["labels"] = labels
 
         # Add metadata
-        return_dict.update({k: batch[k] for k in ["cell_names"] if k in batch})
+        return_dict.update(
+            {k: batch[k] for k in ["cell_names", "seq_ids"] if k in batch}
+        )
 
         return return_dict

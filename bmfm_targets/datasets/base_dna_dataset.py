@@ -62,12 +62,12 @@ class BaseDNASeqDataset(Dataset):
         self.label_dict = None  # will be set only if dataset has labels
         self.label_columns = label_columns
         self.regression_label_columns = regression_label_columns
-        if Path(self.processed_data_source).is_file():
+        if Path(processed_data_source).is_file():
             self.processed_file = Path(processed_data_source)
             self.processed_data = pd.read_csv(
                 self.processed_file, sep=",", header=0, dtype=str
             )
-        elif Path(self.processed_data_source).is_dir():
+        elif Path(processed_data_source).is_dir():
             if self.split is None:
                 self.processed_files = [
                     Path(processed_data_source) / f"{split}.csv"

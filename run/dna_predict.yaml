@@ -1,5 +1,4 @@
 defaults:
-  - data_module: dna_base_seq_cls
   - task: predict
   - label_columns: dnaeval_default
   - trainer: default
@@ -9,12 +8,17 @@ seed:
   seed_value: 1234
 
 data_module:
+  _partial_: true
+  num_workers: 16
+  batch_size: ${batch_size}
+  _target_: bmfm_targets.training.data_module.DNASeqDataModule
+  max_length: 32
+  shuffle: false
+  collation_strategy: language_modeling
   dataset_kwargs:
     processed_data_source: ${input_directory}
     dataset_name: ${dataset_name}
-    label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
-  shuffle: false
-  collation_strategy: language_modeling
+    label_dict_path: ${label_dict_path}
 
 task:
   output_embeddings: true
@@ -40,4 +44,5 @@ checkpoint: null
 batch_size: 32
 dataset_name: coreprom
 label_column_name: label
-input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction
+input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction/test.csv
+label_dict_path: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction/{dataset_name}_all_labels.json
