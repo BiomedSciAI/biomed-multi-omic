@@ -349,7 +349,6 @@ class BaseTrainingModule(pl.LightningModule):
             attention_mask=batch["attention_mask"],
             output_hidden_states=True,
         )
-
         return self.get_predict_step_output(batch, outputs)
 
     def get_predict_step_output(self, batch, outputs):
@@ -365,9 +364,9 @@ class BaseTrainingModule(pl.LightningModule):
         ):  # for RNA models only, for DNA models need works if they have chunk_id
             predictions_dict["cell_names"] = batch["cell_names"]
         elif (
-            "seq_id" in batch
+            "seq_ids" in batch
         ):  # for RNA models only, for DNA models need works if they have chunk_id
-            predictions_dict["seq_id"] = batch["seq_id"]
+            predictions_dict["seq_ids"] = batch["seq_ids"]
         for loss_task in filter(
             lambda x: isinstance(x, LabelLossTask), self.loss_tasks
         ):
