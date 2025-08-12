@@ -37,7 +37,6 @@ checkpoint_name: ""
 accelerator: gpu
 input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/core_promoter_prediction
 working_dir: /tmp
-output_directory: /proj/bmfm/users/sanjoy/benchmarking_test/
 max_epochs: 2
 learning_rate: 1e-5
 model_pe: 128

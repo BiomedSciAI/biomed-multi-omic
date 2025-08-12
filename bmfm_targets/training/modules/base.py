@@ -359,14 +359,11 @@ class BaseTrainingModule(pl.LightningModule):
             pooling_method=self.trainer_config.pooling_method,
         )
         predictions_dict["embeddings"] = embeddings.to(torch.float32).cpu().numpy()
-        if (
-            "cell_names" in batch
-        ):  # for RNA models only, for DNA models need works if they have chunk_id
-            predictions_dict["cell_names"] = batch["cell_names"]
-        elif (
-            "seq_ids" in batch
-        ):  # for RNA models only, for DNA models need works if they have chunk_id
-            predictions_dict["seq_ids"] = batch["seq_ids"]
+
+        for key in ["cell_names", "seq_ids"]:
+            if key in batch:
+                predictions_dict[key] = batch[key]
+
         for loss_task in filter(
             lambda x: isinstance(x, LabelLossTask), self.loss_tasks
         ):

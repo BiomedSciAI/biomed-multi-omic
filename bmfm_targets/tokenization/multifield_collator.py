@@ -246,10 +246,10 @@ class MultiFieldCollator:
         batch["mfi"] = pre_transformed_examples
 
         # TODO: This is not generic, this should be addressed
-        if examples[0].metadata is not None and "cell_name" in examples[0].metadata:
-            batch["cell_names"] = [mfi.metadata.get("cell_name") for mfi in examples]
-        elif examples[0].metadata is not None and "seq_id" in examples[0].metadata:
-            batch["seq_ids"] = [mfi.metadata.get("seq_id") for mfi in examples]
+        if examples[0].metadata is not None:
+            for key in ["cell_name", "seq_id"]:
+                if key in examples[0].metadata:
+                    batch[key + "s"] = [mfi.metadata.get(key) for mfi in examples]
 
         # TODO: Here we assume that the first multi-field instance of the pair is the one that contains the labels
         if (
