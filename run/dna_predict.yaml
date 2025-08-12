@@ -12,7 +12,7 @@ data_module:
   shuffle: false
   collation_strategy: language_modeling
   dataset_kwargs:
-    processed_data_source: ${input_file}
+    processed_data_source: "${input_directory}/${input_filename}"
     dataset_name: ${dataset_name}
     label_dict_path: "${input_directory}/{dataset_name}_all_labels.json"
 
@@ -23,7 +23,6 @@ task:
 
 
 trainer:
-  batch_size: ${batch_size}
   losses:
     - name: cross_entropy
       label_column_name: ${label_columns[0].label_column_name}
@@ -31,7 +30,7 @@ trainer:
 
 
 accelerator: gpu
-input_file: null
+input_filename: ""
 working_dir: /tmp
 checkpoint: null
 
