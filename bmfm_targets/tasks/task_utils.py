@@ -341,7 +341,11 @@ def predict(
 
 
 def save_embeddings_results(root_dir, results):
-    index_vals = results.get("cell_names") or results.get("seq_ids")
+    supported_row_names = ["cell_names", "seq_ids"]
+    index_vals = next(
+        (results.get(k) for k in supported_row_names if results.get(k) is not None),
+        None,
+    )
     embeddings_df = pd.DataFrame(results["embeddings"], index=index_vals)
     embeddings_df.to_csv(Path(root_dir) / "embeddings.csv", header=False)
     logger.info(f"Embeddings saved to {root_dir}/embeddings.csv")
