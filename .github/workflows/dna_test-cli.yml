@@ -1,0 +1,79 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Test inference and finetune CLI for DNA
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install the latest version of uv and set the python version
+      uses: astral-sh/setup-uv@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install cURL Headers (for hic-straw install/build)
+      run: sudo apt-get install libcurl4-openssl-dev
+    - name: Install package
+      run: uv pip install -q .
+    - name: Print environment
+      run: uv pip freeze
+    - name: Cache Hugging Face Transformers / Datasets
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/huggingface
+        key: hf-cache-${{ runner.os }}-${{ matrix.python-version }}
+        restore-keys: hf-cache-${{ runner.os }}-
+    - name: Create a sample CSV file with random DNA sequences and labels
+      run: |
+        python -c "
+        import random
+        import csv
+        import os
+
+        directory = '/home/runner/my_dna_dataset/'
+        os.makedirs(directory, exist_ok=True)
+
+        def random_dna(length=50):
+            return ''.join(random.choices('ACGT', k=length))
+
+        def create_a_csv_file(filename, nrows=1000):
+            # Create a CSV file with random DNA sequences and labels
+            with open(directory + filename, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['dna_chunks', 'label'])
+                for _ in range(nrows):  # adjust row count here
+                    seq = random_dna()
+                    label = random.randint(0, 1)
+                    writer.writerow([seq, label])
+
+        create_a_csv_file('train.csv', nrows=1000)
+        create_a_csv_file('test.csv', nrows=200)
+        create_a_csv_file('dev.csv', nrows=200)
+        "
+
+        echo "MY_DATA_DIR=/home/runner/my_dna_dataset" >> $GITHUB_ENV
+        #echo "MY_DATA_FILE=/home/runner/my_dna_dataset/test.csv" >> $GITHUB_ENV
+    - name: Test MLM+REFGENOME finetune
+      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
+    - name: Test MLM+SNPGENOME finetune
+      run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
+    - name: Test MLM+REFGENOME inference
+      run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR input_filename=test.csv data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
+    - name: Test MLM+REFGENOME inference on whole dataset
+      run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
+    # - name: Test MLM+SNPGENOME inference
+    #   run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_FILE data_module.collation_strategy=sequence_classification checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*

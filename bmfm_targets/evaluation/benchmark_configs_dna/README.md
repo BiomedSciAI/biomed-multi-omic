@@ -20,7 +20,7 @@ The above scripts will automatically find the best fine-tuned ckpt from the corr
 We also have a script to run the baseline modernbert on just the finetuning dataset without any checkpoint:
 
 ```bash
-bash  bmfm_targets/evaluation/benchmark_configs_dna /benchmark_zuvela_wolora_snpify_no_chk.sh
+bash  bmfm_targets/evaluation/benchmark_configs_dna/benchmark_zuvela_wolora_snpify_no_chk.sh
 ```
 
 ## Instructions

@@ -349,7 +349,6 @@ class BaseTrainingModule(pl.LightningModule):
             attention_mask=batch["attention_mask"],
             output_hidden_states=True,
         )
-
         return self.get_predict_step_output(batch, outputs)
 
     def get_predict_step_output(self, batch, outputs):
@@ -360,7 +359,11 @@ class BaseTrainingModule(pl.LightningModule):
             pooling_method=self.trainer_config.pooling_method,
         )
         predictions_dict["embeddings"] = embeddings.to(torch.float32).cpu().numpy()
-        predictions_dict["cell_names"] = batch["cell_names"]
+
+        for key in ["cell_names", "seq_ids"]:
+            if key in batch:
+                predictions_dict[key] = batch[key]
+
         for loss_task in filter(
             lambda x: isinstance(x, LabelLossTask), self.loss_tasks
         ):

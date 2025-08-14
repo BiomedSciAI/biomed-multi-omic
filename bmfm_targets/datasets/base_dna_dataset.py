@@ -62,25 +62,37 @@ class BaseDNASeqDataset(Dataset):
         self.label_dict = None  # will be set only if dataset has labels
         self.label_columns = label_columns
         self.regression_label_columns = regression_label_columns
-        if self.split is None:
-            self.processed_files = [
-                Path(processed_data_source) / f"{split}.csv"
-                for split in ["train", "dev", "test"]
-            ]
-            split_data_frames = []
-            for file in self.processed_files:
-                split_data_frames.append(
-                    pd.read_csv(file, sep=",", header=0, dtype=str)
-                )
-            self.processed_data = pd.concat(split_data_frames, ignore_index=True)
-        else:
-            self.processed_file = Path(processed_data_source) / f"{self.split}.csv"
+        if Path(processed_data_source).is_file():
+            self.processed_file = Path(processed_data_source)
             self.processed_data = pd.read_csv(
                 self.processed_file, sep=",", header=0, dtype=str
             )
-            self.processed_data = self.processed_data.rename(
-                columns={self.processed_data.columns[0]: "dna_chunks"}
+        elif Path(processed_data_source).is_dir():
+            if self.split is None:
+                self.processed_files = [
+                    Path(processed_data_source) / f"{split}.csv"
+                    for split in ["train", "dev", "test"]
+                ]
+                split_data_frames = []
+                for file in self.processed_files:
+                    split_data_frames.append(
+                        pd.read_csv(file, sep=",", header=0, dtype=str)
+                    )
+                self.processed_data = pd.concat(split_data_frames, ignore_index=True)
+            else:
+                self.processed_file = Path(processed_data_source) / f"{self.split}.csv"
+                self.processed_data = pd.read_csv(
+                    self.processed_file, sep=",", header=0, dtype=str
+                )
+        else:
+            raise FileNotFoundError(
+                f"Processed data source {processed_data_source} does not exist."
             )
+
+        # Force the first column to be named "dna_chunks"
+        self.processed_data = self.processed_data.rename(
+            columns={self.processed_data.columns[0]: "dna_chunks"}
+        )
 
         if self.label_columns or self.regression_label_columns:
             self.labels_requested = True
@@ -144,7 +156,7 @@ class BaseDNASeqDataset(Dataset):
         )
 
     def get_sample_metadata(self, idx):
-        metadata = {}
+        metadata = {"seq_id": idx}
         if self.label_columns:
             metadata.update(
                 {
