@@ -949,10 +949,6 @@ class DNASeqDataModule(pl.LightningDataModule):
 
     def get_trainer_callbacks(self) -> list:
         """Here datamodules can add their own callbacks to callback list for PL trainer."""
-        if self.masking_strategy and hasattr(
-            self.masking_strategy, "get_trainer_callback"
-        ):
-            return [self.masking_strategy.get_trainer_callback()]
         return []
 
     def get_dataset_instance(self) -> BaseDNASeqDataset:
