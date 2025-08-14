@@ -341,17 +341,10 @@ def predict(
 
 
 def save_embeddings_results(root_dir, results):
-    if "cell_names" in results:
-        embeddings_df = pd.DataFrame(results["embeddings"], index=results["cell_names"])
-    elif "seq_ids" in results:
-        embeddings_df = pd.DataFrame(results["embeddings"], index=results["seq_ids"])
-    else:
-        embeddings_df = pd.DataFrame(results["embeddings"])
-        logger.warning(
-            "Results must contain either 'cell_names' or 'seq_ids' to save embeddings."
-        )
-
-    embeddings_df.to_csv(f"{root_dir}/embeddings.csv", header=False)
+    index_vals = results.get("cell_names") or results.get("seq_ids")
+    embeddings_df = pd.DataFrame(results["embeddings"], index=index_vals)
+    embeddings_df.to_csv(Path(root_dir) / "embeddings.csv", header=False)
+    logger.info(f"Embeddings saved to {root_dir}/embeddings.csv")
 
 
 def save_prediction_results(root_dir, label_dict, results):

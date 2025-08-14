@@ -72,8 +72,8 @@ jobs:
     - name: Test MLM+SNPGENOME finetune
       run: bmfm-targets-run -cn dna_finetune_train_and_test_config working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
     - name: Test MLM+REFGENOME inference
-      run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_FILE input_filename=test.csv data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
-    - name: Test MLM+REFGENOME inference
-      run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_FILE data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
+      run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR input_filename=test.csv data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
+    - name: Test MLM+REFGENOME inference on whole dataset
+      run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_DIR data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.dna.ref.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
     # - name: Test MLM+SNPGENOME inference
     #   run: bmfm-targets-run -cn dna_predict  working_dir=/tmp/dna/ input_directory=$MY_DATA_FILE data_module.collation_strategy=sequence_classification checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1 accelerator=cpu  && rm -rf /tmp/dna/*
