@@ -1186,7 +1186,7 @@ class DNASeqDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.collator,
+            collate_fn=self.collate_fn,
             persistent_workers=self.num_workers > 0,
             pin_memory=True,
         )
