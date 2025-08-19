@@ -46,8 +46,8 @@ fields:
     kind: mlp_with_special_token_embedding
     zero_as_special_token: true
   decode_modes:
-  - regression
-  - is_zero
+    - regression
+    - is_zero
 task:
   _target_: bmfm_targets.config.TrainingTaskConfig
   default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/1pct_equal_downsample/
@@ -59,7 +59,7 @@ task:
   max_steps: -1
   tf32_mode: medium
   accumulate_grad_batches: 4
-  freeze_encoder: false
+  # freeze_encoder: false
   resume_training_from_ckpt: true
   checkpoints_every_n_train_steps: 10000
   limit_val_batches: 1024

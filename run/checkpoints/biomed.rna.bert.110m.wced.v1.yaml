@@ -14,11 +14,11 @@ fields:
     kind: mlp_with_special_token_embedding
     zero_as_special_token: true
   decode_modes:
-  wced:
-    vocab_field: genes
-    logit_outputs:
-      - mse
-      - is_zero_bce
+    wced:
+      vocab_field: genes
+      logit_outputs:
+        - mse
+        - is_zero_bce
 label_columns:
 - _target_: bmfm_targets.config.LabelColumnInfo
   label_column_name: cell_type
@@ -109,7 +109,7 @@ task:
   accelerator: gpu
   max_steps: -1
   tf32_mode: medium
-  freeze_encoder: false
+  # freeze_encoder: false
   resume_training_from_ckpt: false
   checkpoints_every_n_train_steps: 10000
   limit_val_batches: 256
