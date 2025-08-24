@@ -69,7 +69,7 @@ task:
   max_steps: -1
   tf32_mode: medium
   accumulate_grad_batches: 4
-  # freeze_encoder: false
+  freeze_layers: false
   resume_training_from_ckpt: true
   checkpoints_every_n_train_steps: 10000
   limit_val_batches: 1200
