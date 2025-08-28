@@ -38,6 +38,8 @@ fields:
   pretrained_embedding: null
   is_masked: true
   vocab_update_strategy: static
+  decode_modes:
+    - token_scores
 - _target_: bmfm_targets.config.FieldInfo
   field_name: expressions
   is_masked: true
