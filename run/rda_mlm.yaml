@@ -1,0 +1,68 @@
+defaults:
+  - data_module: base_language_modeling
+  - tokenizer: all_genes
+  - fields: rda_genes_expressions_masked
+  - trainer: default
+  - task: train
+  - model: scbert
+  - _self_
+
+seed:
+  seed_value: 1234
+
+model:
+  checkpoint: null
+label_columns: []
+data_module:
+  pad_zero_expression_strategy: batch_wise
+  num_workers: 8
+  mlm: true
+  shuffle: true
+  change_ratio: 0.3
+  mask_ratio: 0.95
+  max_length: 4096
+  sequence_order: random
+  switch_ratio: 0.0
+  batch_size: 8
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+    split_column_name: ${split_column_name}
+  limit_genes: protein_coding #could be null, protein_coding, or tokenizer
+  transform_datasets: false
+  collation_strategy: multitask
+  rda_transform: downsample
+
+task:
+  resume_training_from_ckpt: true
+  max_epochs: ${max_epochs}
+  precision: 16-mixed
+  # val_check_interval: ${val_check_interval}
+  gradient_clip_val: 0.5
+  accelerator: ${accelerator}
+  max_steps: -1
+  tf32_mode: medium
+  accumulate_grad_batches: 4
+  checkpoints_every_n_train_steps: ${checkpoints_every_n_train_steps}
+
+# Uncomment the following lines to enable ClearML tracking (requires a ClearML server)
+# track_clearml:
+#   project_name: my_project
+#   task_name: rda_mlm
+
+trainer:
+  losses:
+    - field_name: expressions
+      name: mse
+      ignore_zero: true
+    - field_name: expressions
+      name: is_zero_bce
+
+input_file: null
+working_dir: /tmp
+accelerator: gpu
+val_check_interval: 0.2
+max_epochs: 20
+checkpoints_every_n_train_steps: 10000
+checkpoint: null
+split_column_name: split_random

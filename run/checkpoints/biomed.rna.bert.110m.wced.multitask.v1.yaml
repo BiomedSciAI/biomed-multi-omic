@@ -1,0 +1,133 @@
+seed:
+  seed_value: 1234
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes
+fields:
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: genes
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: expressions
+  tokenization_strategy: continuous_value_encoder
+  encoder_kwargs:
+    kind: mlp_with_special_token_embedding
+    zero_as_special_token: true
+  decode_modes:
+    wced:
+      vocab_field: genes
+      logit_outputs:
+        - mse
+        - is_zero_bce
+label_columns:
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: cell_type
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: tissue
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: tissue_general
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: donor_id
+  gradient_reversal_coefficient: 3.0
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: suspension_type
+  gradient_reversal_coefficient: 0.8
+data_module:
+  _target_: bmfm_targets.datasets.cellxgene.CellXGeneNexusDataModule
+  _partial_: true
+  num_workers: 24
+  mlm: true
+  collation_strategy: multitask
+  shuffle: true
+  max_length: 1024
+  sequence_order: random
+  switch_ratio: 0.0
+  batch_size: 40
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  pad_zero_expression_strategy: batch_wise
+  masking_strategy:
+    _target_: bmfm_targets.training.masking.strategy.WCEDMasker
+    _partial_: true
+  dataset_kwargs:
+    # cellxgene soma location
+    uri: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/soma/
+    # cellxgene litdata index, see datasets/cellxgene/ notebooks for index creation
+    index_dir: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_nexus_index/
+    expose_zeros: all
+    raw_counts: true
+model:
+  _target_: bmfm_targets.config.SCBertConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  intermediate_size: 3072
+  hidden_act: gelu
+  hidden_size: 768
+  hidden_dropout_prob: 0.1
+  attention_probs_dropout_prob: 0.1
+  initializer_range: 0.02
+  layer_norm_eps: 1.0e-12
+  pad_token_id: 0
+  use_cache: true
+  attention: torch
+  checkpoint: null # path to warmup checkpoint, trained on wced no multitask
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 1000
+  weight_decay: 0.01
+  learning_rate: 5.0e-05
+  betas:
+  - 0.9
+  - 0.99
+  epsilon: 1.0e-08
+  lr_decay_steps: null
+  losses:
+  - label_column_name: cell_type
+    weight: 1
+    name: focal
+    focal_gamma: 2
+  - label_column_name: tissue
+    weight: 1
+    name: focal
+    focal_gamma: 2
+  - label_column_name: tissue_general
+    weight: 1
+    name: focal
+    focal_gamma: 2
+  - label_column_name: donor_id
+    weight: 0.05
+    name: focal
+    focal_gamma: 2
+  - field_name: expressions
+    name: mse
+    ignore_zero: true
+    wced_target: non_input_genes
+  - field_name: expressions
+    name: is_zero_bce
+    wced_target: non_input_genes
+  - field_name: expressions
+    name: mse
+    ignore_zero: true
+    wced_target: input_genes
+  - field_name: expressions
+    name: is_zero_bce
+    wced_target: input_genes
+  batch_prediction_behavior: null
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/wced_multigpu
+  max_epochs: 20
+  precision: 16-mixed
+  val_check_interval: 4000
+  gradient_clip_val: 0.5
+  accelerator: gpu
+  max_steps: -1
+  tf32_mode: medium
+  freeze_layers: false
+  resume_training_from_ckpt: false
+  checkpoints_every_n_train_steps: 10000
+  limit_val_batches: 256
+track_clearml:
+  project_name: bmfm-targets
+  task_name: wced.multitask.v1
+  continue_last_task: false
