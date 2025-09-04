@@ -194,7 +194,7 @@ def download_ckpt_from_huggingface(hf_repo) -> str:
 
     logger.info(f"Downloaded HF checkpoint to: {checkpoint}")
 
-    return checkpoint
+    return str(checkpoint)
 
 
 def download_tokenizer_from_huggingface(hf_repo) -> None:
