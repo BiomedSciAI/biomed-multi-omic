@@ -95,8 +95,8 @@ def get_label_map(key: str, predictions: dict, label_dict: dict) -> dict:
 
 
 def create_results_obs(results: dict, label_dict: dict | None = None) -> sc.AnnData:
-    df_embed = pd.DataFrame(index=results["cell_names"], data=results["embeddings"])
-    cell_barcodes = results["cell_names"]
+    df_embed = pd.DataFrame(index=results["cell_name"], data=results["embeddings"])
+    cell_barcodes = results["cell_name"]
     preds = {
         y: convert_ids_to_label_names(
             label_dict[f"{y.replace('_predictions', '')}"], results[f"{y}"]

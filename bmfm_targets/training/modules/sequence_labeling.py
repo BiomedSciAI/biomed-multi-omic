@@ -4,7 +4,7 @@ import clearml
 import pandas as pd
 from matplotlib import pyplot as plt
 
-from ..metrics import loss_handling, perturbation_metrics, plots
+from ..metrics import perturbation_metrics, plots
 from .base import BaseTrainingModule
 
 logger = logging.getLogger(__name__)
@@ -12,44 +12,18 @@ DEFAULT_LABEL_SMOOTHING = 0.01
 
 
 class SequenceLabelingTrainingModule(BaseTrainingModule):
-    DEFAULT_METRICS = {"pcc"}
+    DEFAULT_METRICS = {"pcc", "nonzero_confusion_matrix"}
     MODELING_STRATEGY = "sequence_labeling"
-
-    def update_metrics(self, labels, outputs, split):
-        # Needs to be updated for auc calculation
-        predictions = {}
-        gt_labels = {}
-
-        predictions = loss_handling.calculate_predictions(
-            self.loss_tasks, outputs.logits
-        )
-        for output_key in predictions:
-            gt_labels[output_key] = labels[output_key].view(
-                predictions[output_key].shape[0], -1
-            )
-
-            keep_index = gt_labels[output_key] != -100
-
-            assert (
-                keep_index.shape == predictions[output_key].shape
-            ), f"{keep_index.shape} != {predictions[output_key].shape}"
-
-            predictions[output_key] = predictions[output_key][keep_index]
-
-            assert (
-                keep_index.shape == gt_labels[output_key].shape
-            ), f"{keep_index.shape} != {gt_labels[output_key].shape}"
-
-            gt_labels[output_key] = gt_labels[output_key][keep_index].to(
-                predictions[output_key].dtype
-            )
-
-        return self.split_metrics(split)(predictions, gt_labels)
 
     def _shared_test_val_on_end(self, split: str):
         super()._shared_test_val_on_end(split)
-        preds_df = self.prediction_df["label_expressions"]
-        self.log_perturbation_specific_metrics(split, preds_df)
+        if not self.trainer_config.batch_prediction_behavior:
+            # warned already in super()._shared_test_val_on_end
+            return
+        for field_metric_key in self.get_supported_field_metric_keys():
+            preds_df = self.prediction_df[field_metric_key]
+            self.log_perturbation_specific_metrics(split, preds_df)
+            break
 
     def log_perturbation_specific_metrics(self, split, predictions_df):
         group_means = self.kwargs.get("group_means")
@@ -58,21 +32,37 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
                 "No group_means found in kwargs cannot do perturbation metrics"
             )
             return
-        perturbed_id = self.tokenizer.get_field_vocab("perturbations")["1"]
         group_expressions = perturbation_metrics.get_group_average_expressions(
-            predictions_df, perturbed_id
+            predictions_df
         )
         mean_expressions = perturbation_metrics.get_mean_expressions(
             group_means.processed_data
         )
         top20 = self.kwargs.get("top20_de")
-        perturbations = group_expressions.reset_index().perturbed_set.unique()
         agg_metrics_list = []
         agg_metrics_top20_list = []
+        (
+            real_effects,
+            pred_effects,
+            perturbations,
+            overlap_genes,
+        ) = perturbation_metrics.prepare_args_for_discrimination_score(
+            group_expressions
+        )
+        norm_ranks = perturbation_metrics.discrimination_score(
+            real_effects, pred_effects, perturbations, overlap_genes
+        )
+
         for pert in perturbations:
+            if pert == "":
+                logger.warning(
+                    "Encountered samples with no perturbation in sequence! This should not happen"
+                )
+                continue
             agg_metrics = perturbation_metrics.get_aggregated_perturbation_metrics(
                 group_expressions.loc[pert], mean_expressions, pert
             )
+            agg_metrics["discrimination_score"] = norm_ranks[pert]
             if len(perturbations) <= 10:
                 self.log_aggregate_perturbation_metrics(split, agg_metrics, pert, "")
             agg_metrics["pert"] = pert
@@ -114,6 +104,10 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
             [agg_metrics_df, mean_row], ignore_index=True
         )
 
+        logger.info(
+            f"logging table of aggregation metrics per perturbation for {split}"
+        )
+
         self.log_table(
             split, "aggregation metrics per perturbation", agg_metrics_df_with_mean
         )
@@ -141,6 +135,9 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
     def log_mean_aggregate_perturbation_metrics(
         self, agg_metrics_df, split, identifier
     ):
+        logger.info(
+            f"logging mean_aggregate_perturbation_metrics for {split},{identifier}"
+        )
         mean_agg_metrics = agg_metrics_df.drop("pert", axis=1).mean()
         for metric_name, mean_value in mean_agg_metrics.items():
             self.logger.experiment.add_scalar(
@@ -148,6 +145,9 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
             )
 
     def log_aggregate_perturbation_metrics(self, split, agg_metrics, pert, identifier):
+        logger.info(
+            f"logging aggregate_perturbation_metrics for {split},{pert},{identifier}"
+        )
         for k, v in agg_metrics.items():
             self.logger.experiment.add_scalar(
                 f"{split}/{pert}_{identifier}{k}", v, self.global_step

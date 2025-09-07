@@ -1,8 +1,10 @@
 import random
 from collections import Counter
+from itertools import chain
 
 import numpy as np
 import pandas as pd
+import pytest
 from numpy.random import MT19937, RandomState, SeedSequence
 
 from bmfm_targets.tokenization import MultiFieldInstance
@@ -429,3 +431,60 @@ def test_uce_undefined_chromosome_input():
     transformed_mfi = sample_transforms.encode_expression_as_repeats(mfi, chrom_df)
     gene_counts = Counter(transformed_mfi["genes"])
     assert gene_counts["GENE3"] == 0
+
+
+def test_limit_input_tokens():
+    """Only use the subset of genes/tokens given (mainly used for WCED)."""
+    mfi = MultiFieldInstance(
+        data={
+            "genes": [f"GENE{i}" for i in range(100)],
+            "expressions": np.random.randint(1, 100, 100).tolist(),
+        }
+    )
+
+    transformed_mfi = sample_transforms.limit_fields_to_token_list(
+        mfi=mfi, token_list=["GENE0", "GENE99"], field_name="genes"
+    )
+
+    assert len(transformed_mfi["genes"]) == 2
+
+
+@pytest.mark.parametrize("dropout_fraction", [0.1, 0.3, 0.5, 0.7])
+def test_selective_dropout(dropout_fraction):
+    """Dropout certain genes with higher probability than others."""
+    mfi = MultiFieldInstance(
+        data={
+            "genes": [f"GENE{i}" for i in range(100)],
+            "expressions": np.random.randint(1, 100, 100).tolist(),
+        }
+    )
+    dropout_weights = pd.Series(
+        index=mfi["genes"], data=[4] * 25 + [3] * 25 + [2] * 25 + [1] * 25
+    )
+
+    transformed_mfis = [
+        sample_transforms.selective_dropout(
+            mfi, dropout_weights=dropout_weights, dropout_fraction=dropout_fraction
+        )
+        for _ in range(3000)
+    ]
+
+    transformed_seq_len = np.mean([tm.seq_length for tm in transformed_mfis])
+
+    np.testing.assert_almost_equal(
+        transformed_seq_len / mfi.seq_length, 1 - dropout_fraction, decimal=1
+    )
+
+    gene_freq = sorted(
+        Counter(chain.from_iterable(tm["genes"] for tm in transformed_mfis)).items(),
+        key=lambda x: int(x[0].lstrip("GENE")),
+    )
+    assert np.mean([i[1] for i in gene_freq[:25]]) < np.mean(
+        [i[1] for i in gene_freq[25:50]]
+    )
+    assert np.mean([i[1] for i in gene_freq[25:50]]) < np.mean(
+        [i[1] for i in gene_freq[50:75]]
+    )
+    assert np.mean([i[1] for i in gene_freq[50:75]]) < np.mean(
+        [i[1] for i in gene_freq[75:]]
+    )

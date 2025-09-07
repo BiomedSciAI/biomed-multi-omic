@@ -517,6 +517,70 @@ def rda_align(
     )
 
 
+def selective_dropout(
+    mfi: MultiFieldInstance,
+    dropout_weights: pd.Series,
+    dropout_fraction: float = 0.3,
+    dropout_field: str = "genes",
+    *args,
+    **kwargs,
+) -> MultiFieldInstance:
+    """
+    Dropout terms from the MultiFieldInstance selectively by weights.
+
+    Args:
+    ----
+        mfi (MultiFieldInstance): input data
+        dropout_weights (pd.Series): indexed by `dropout_field` with values proportional
+          to the desired dropout rate, not normalized
+        dropout_fraction (float, optional): desired fraction to be dropped out. Defaults to 0.3.
+        dropout_field (str, optional): field to lookup the weights according to. Defaults to "genes".
+
+    Returns:
+    -------
+        MultiFieldInstance: mfi of length ~= mfi.seq_length*(1 - `dropout_fraction`)
+
+    """
+    random_vals = np.random.random(mfi.seq_length)
+
+    weights = dropout_weights.loc[mfi[dropout_field]]
+
+    rel_weights = weights / np.mean(weights)
+    probs = dropout_fraction * rel_weights / (1 + dropout_fraction * (rel_weights - 1))
+    keep_indices = random_vals > probs
+
+    new_data = {f: np.array(mfi[f])[keep_indices].tolist() for f in mfi.keys()}
+
+    return MultiFieldInstance(data=new_data, metadata=mfi.metadata)
+
+
+def limit_fields_to_token_list(
+    mfi: MultiFieldInstance, token_list: list, field_name: str = "genes"
+) -> MultiFieldInstance:
+    """
+    Subset the field names (by default: genes) to the token list given. This transformation is intended to
+    primarily be used during WCED such that only the inputs under the transformation and not the full cell.
+
+    Args:
+    ----
+        mfi (MultiFieldInstance): MultiFieldInstance
+        token_list (list): list of tokens to include in the mfi
+        field_name (str, optional): The field name of the MultiFieldInstance (mfi) that you want to limit.
+            Defaults to "genes".
+
+    Returns:
+    -------
+        MultiFieldInstance: MultiFieldInstance (mfi) with the `field_name` subset applied.
+    """
+    subset_mfi = {
+        f: [i for i in mfi[field_name] if i in token_list]
+        if f == field_name
+        else mfi[f]
+        for f in mfi.keys()
+    }
+    return MultiFieldInstance(data=subset_mfi, metadata=mfi.metadata)
+
+
 def pad_zero_expressed_genes(
     mfi: MultiFieldInstance,
     pad_zero_expression_strategy: dict,
@@ -708,8 +772,29 @@ def compose_transforms(
     fields_to_downcast=None,
     map_orthologs=None,
     renoise=None,
+    selective_dropout_weights=None,
+    limit_input_tokens=None,
 ):
     transforms = []
+    if limit_input_tokens is not None:
+        transforms.append(
+            partial(
+                limit_fields_to_token_list,
+                token_list=limit_input_tokens,
+                field_name="genes",
+            )
+        )
+    if selective_dropout_weights is not None:
+        assert isinstance(
+            sequence_dropout_factor, float
+        ), "selective_dropout requires a float sequence_dropout_factor"
+        transforms.append(
+            partial(
+                selective_dropout,
+                dropout_weights=selective_dropout_weights,
+                dropout_fraction=sequence_dropout_factor,
+            )
+        )
     if sequence_order == "random":
         transforms.append(randomize)
     elif sequence_order == "sorted":
@@ -721,7 +806,7 @@ def compose_transforms(
                 encode_expression_as_repeats, chrom_df=chrom_df, max_length=max_length
             )
         )
-    if sequence_dropout_factor is not None:
+    if sequence_dropout_factor is not None and selective_dropout_weights is None:
         if sequence_dropout_factor > 1:
             transforms.append(
                 partial(
@@ -847,6 +932,8 @@ def transform_inputs(
     sequence_dropout_factor,
     map_orthologs,
     renoise,
+    selective_dropout_weights,
+    limit_input_tokens,
 ):
     fields_to_downcast = [
         f.field_name
@@ -856,6 +943,7 @@ def transform_inputs(
         and f.is_input
     ]
     transforms = compose_transforms(
+        selective_dropout_weights=selective_dropout_weights,
         sequence_order=sequence_order,
         log_normalize_transform=log_normalize_transform,
         rda_transform=rda_transform,
@@ -865,6 +953,7 @@ def transform_inputs(
         fields_to_downcast=fields_to_downcast,
         map_orthologs=map_orthologs,
         renoise=renoise,
+        limit_input_tokens=limit_input_tokens,
     )
     if "perturbations" in [i.field_name for i in fields]:
         transforms.append(partial(sort_by_field, field="perturbations"))

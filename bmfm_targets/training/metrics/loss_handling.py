@@ -542,15 +542,10 @@ class LabelLossTask(LossTask):
                 loss_name = "mse"
             else:
                 loss_name = "cross_entropy"
-        return cls(
-            label_column=label_column,
-            loss_name=loss_name,
-            weight=loss_request.get("weight", 1.0),
-            ignore_zero=loss_request.get("ignore_zero", False),
-            class_weight=loss_request.get("class_weight", None),
-            focal_gamma=loss_request.get("focal_gamma", None),
-            link_function=loss_request.get("link_function"),
-        )
+        exclude_keys = ["label_column_name", "name"]
+        kwargs = {k: v for k, v in loss_request.items() if not k in exclude_keys}
+        kwargs["loss_name"] = loss_name
+        return cls(label_column=label_column, **kwargs)
 
 
 def get_loss_tasks(
@@ -675,10 +670,11 @@ def calculate_losses(
         if loss_val is None or torch.isnan(loss_val):
             continue
         # *= syntax breaks when loss_val is float and weight is long
-        loss_val = loss_task.weight * loss_val
-        total_weight += loss_task.weight
-        total_loss += loss_val
         all_losses[loss_task.loss_display_name] = loss_val
+
+        weighted_loss_val = loss_task.weight * loss_val
+        total_weight += loss_task.weight
+        total_loss += weighted_loss_val
 
     all_losses["loss"] = (
         (total_loss / total_weight)

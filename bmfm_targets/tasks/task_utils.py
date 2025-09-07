@@ -341,7 +341,7 @@ def predict(
 
 
 def save_embeddings_results(root_dir, results):
-    supported_row_names = ["cell_names", "seq_ids"]
+    supported_row_names = ["cell_name", "seq_id"]
     index_vals = next(
         (results.get(k) for k in supported_row_names if results.get(k) is not None),
         None,
@@ -365,7 +365,7 @@ def save_prediction_results(root_dir, label_dict, results):
         else:  # regression case
             str_predictions[label_column_name] = raw_predictions
 
-    pd.DataFrame(str_predictions, index=results["cell_names"]).to_csv(
+    pd.DataFrame(str_predictions, index=results["cell_name"]).to_csv(
         f"{root_dir}/predictions.csv"
     )
 
@@ -388,10 +388,10 @@ def save_logits_results(root_dir, label_dict, results):
             str_probabilities[label_column_name + "_" + key] = id_softmax[:, value]
 
     if str_logits:
-        pd.DataFrame(str_logits, index=results["cell_names"]).to_csv(
+        pd.DataFrame(str_logits, index=results["cell_name"]).to_csv(
             f"{root_dir}/logits.csv"
         )
-        pd.DataFrame(str_probabilities, index=results["cell_names"]).to_csv(
+        pd.DataFrame(str_probabilities, index=results["cell_name"]).to_csv(
             f"{root_dir}/probabilities.csv"
         )
 
@@ -446,6 +446,11 @@ def log_test_metrics(
 ):
     for log_type, metric_name, data in metrics_to_log:
         if log_type == "confusion_matrix":
+            if metric_name == "label_expressions_nonzero":
+                logger.warning(
+                    "label_expressions_nonzero logging is not supported in test tasks, see issue 982 https://github.ibm.com/BiomedSciAI-Innersource/bmfm-targets/issues/982 "
+                )
+                continue
             log_confusion_matrix_from_metrics(
                 metric_name, data, label_dict, prefix="test"
             )
@@ -478,10 +483,16 @@ def interpret_run(
 ):
     from bmfm_targets.evaluation import interpret
 
+    if task_config.checkpoint is not None and not os.path.isfile(
+        task_config.checkpoint
+    ):
+        task_config.checkpoint = download_ckpt_from_huggingface(task_config.checkpoint)
+
     if model_config is None:
         module = interpret.SequenceClassificationAttributionModule.load_from_checkpoint(
             task_config.checkpoint,
             tokenizer=data_module.tokenizer,
+            modeling_strategy=data_module.collation_strategy,
             attribute_kwargs=task_config.attribute_kwargs,
             attribute_filter=task_config.attribute_filter,
         )
@@ -490,6 +501,7 @@ def interpret_run(
             model_config,
             data_module.tokenizer,
             data_module.label_dict,
+            modeling_strategy=data_module.collation_strategy,
             attribute_kwargs=task_config.attribute_kwargs,
             attribute_filter=task_config.attribute_filter,
         )

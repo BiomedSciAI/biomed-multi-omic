@@ -5,6 +5,8 @@ from .perturbation_data_module import (
     ScperturbDataset,
     GearsDataModule,
     GearsDataset,
+    ReplogleDataModule,
+    ReplogleDataset,
 )
 
 
@@ -13,4 +15,6 @@ __all__ = [
     "ScperturbDataset",
     "GearsDataModule",
     "GearsDataset",
+    "ReplogleDataModule",
+    "ReplogleDataset",
 ]

@@ -152,10 +152,12 @@ class BasePerturbationDataset(Dataset, abc.ABC):
                 "top_non_dropout_de_20",
                 "top_non_zero_de_20",
             ]
+            limit_genes_set = set(self.limit_genes)
             for key in {*de_genes_keys} & {*data.uns_keys()}:
                 limit_de = {}
                 for pert, de_genes in data.uns[key].items():
-                    limit_de[pert] = [g for g in de_genes if g in self.limit_genes]
+                    # limit_de[pert] = [g for g in de_genes if g in self.limit_genes]
+                    limit_de[pert] = [g for g in de_genes if g in limit_genes_set]
                 data.uns[key] = limit_de
         return data
 
@@ -178,7 +180,7 @@ class BasePerturbationDataset(Dataset, abc.ABC):
         # get non-zero indices from control and perturbation cells
         nz_control_indices = control_cell_expressions.nonzero()[0]
         nz_perturb_indices = perturbed_cell_expressions.nonzero()[0]
-        perturb_genes = list(
+        perturb_genes = sorted(
             self.perturbation_cells.obs[self.perturbation_column_name]
             .iloc[index]
             .split("_")
@@ -209,5 +211,6 @@ class BasePerturbationDataset(Dataset, abc.ABC):
             metadata={
                 "cell_name": self.perturbation_cells.obs.index[index],
                 "control_cell_name": self.control_cells.obs.index[random_cc_index],
+                "perturbed_genes": "_".join(perturb_genes),
             },
         )

@@ -81,6 +81,28 @@ class TrainingTaskConfig(BaseTaskConfig):
 
 @dataclass
 class PredictTaskConfig(BaseTaskConfig):
+    """
+    Config for doing an inference/prediction run.
+
+    Inference run does not make use of any labels in the original dataset and does not
+    report any metrics.
+    To check performance on labeled data, use the TestTaskConfig.
+
+    Attributes
+    ----------
+        callbacks: list of callbacks to use during prediction
+        checkpoint: path to checkpoint to use for prediction.
+           Checkpoint contains model config and fields, and those fields will be populated
+           from the checkpoint. If None, an error will be raised.
+        output_predictions: whether to output predictions to a file. Predictions are
+          for sequence classification, including logits for each class. MLM predictions
+          are not available via this interface.
+        output_embeddings: whether to output embeddings to a file. Embeddings are output
+            as a csv file indexed with the same ids as the input data.
+        setup_stage: stage to setup the trainer for. Should be "predict". Do not modify.
+
+    """
+
     callbacks: list[Any] = field(default_factory=default_callbacks)
     checkpoint: str | None = None
     output_predictions: bool = True

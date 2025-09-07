@@ -35,6 +35,41 @@ def get_protein_coding_genes():
         return json.load(f)
 
 
+def _get_original_L1000_gene_names():
+    """
+    Read the L1000 genes from original file, parse the file to extract the list itself.
+    If the file is stored localy use it, otherwise download it.
+    """
+    local_fname = (
+        Path(__file__).parent / "GSE70138_Broad_LINCS_gene_info_2017-03-06.txt"
+    )
+    if local_fname.exists():
+        genes_df = pd.read_csv(local_fname)
+    else:
+        url = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE70138&format=file&file=GSE70138%5FBroad%5FLINCS%5Fgene%5Finfo%5F2017%2D03%2D06%2Etxt%2Egz"
+        genes_df = pd.read_csv(url, compression="gzip", delimiter="\t")
+        genes_df.to_csv(local_fname, index=False)
+
+    return genes_df[genes_df["pr_is_lm"] == 1]["pr_gene_symbol"]
+
+
+def get_L1000_genes():
+    """Loads L1000 gene list (978 genes) and map old gene names to new ones using the default gene name mapping same as in StandardizeGeneNamesTransform."""
+    genes = _get_original_L1000_gene_names()
+
+    # Load the default gene name mapping
+    file_path = (
+        Path(__file__).resolve().parents[2]
+        / "transforms"
+        / "protein_coding_gene_mapping_uppercase_hgnc_2024_08_23.json"
+    )
+
+    gene_map = json.load(file_path.open())
+    genes = genes.map(gene_map).fillna(genes)
+
+    return list(genes)
+
+
 @functools.lru_cache
 def get_gene_chromosome_locations(
     species: str = "human",
