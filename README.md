@@ -80,7 +80,7 @@ For details on how the models were trained, please refer to the [BMFM-DNA prepri
 To get embeddings for DNA sequences run:
 
 ```bash
-export INPUT_DIRECTORY=... # path to your DNA sequences files
+export INPUT_DIRECTORY=... # path to the three (train/test/dev.csv) files with DNA sequences
 bmfm-targets-run -cn dna_predict input_directory=$INPUT_DIRECTORY working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
 ```
 
