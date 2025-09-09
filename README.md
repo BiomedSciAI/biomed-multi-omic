@@ -84,7 +84,7 @@ export INPUT_DIRECTORY=... # path to your DNA sequences files
 bmfm-targets-run -cn dna_predict input_directory=$INPUT_DIRECTORY working_dir=/tmp checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
 ```
 
-For more details tutorial see DNA tutorials.
+For more details tutorial see [DNA tutorials](https://github.com/BiomedSciAI/biomed-multi-omic/tree/main/run#dna-fine-tuning).
 
 ## Package Architecture
 
