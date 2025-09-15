@@ -33,7 +33,10 @@ def default_fields() -> list[FieldInfo]:
     return [
         FieldInfo(field_name="genes", is_masked=False, vocab_update_strategy="static"),
         FieldInfo(
-            field_name="expressions", is_masked=True, vocab_update_strategy="static"
+            field_name="expressions",
+            is_masked=True,
+            vocab_update_strategy="static",
+            decode_modes={"token_scores": {}},
         ),
     ]
 
@@ -126,7 +129,10 @@ class SCBertMainConfig:
             self.model = self._instantiate_model_config(
                 self.model, self.data_module, self.fields, self.label_columns
             )
-        if isinstance(self.task, TrainingTaskConfig):
+        if (
+            isinstance(self.task, TrainingTaskConfig)
+            and self.task.enable_checkpointing is not False
+        ):
             self.add_checkpointing_callbacks()
 
     def _load_missing_configs_from_ckpt(self):

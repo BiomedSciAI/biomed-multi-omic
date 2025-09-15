@@ -103,6 +103,9 @@ class Masker:
                 batch.get(f"label_{field.field_name}", None),
             )
             labels[field.field_name] = field_labels
+            logger.debug(
+                f"uncorrected mask rate: {1 - (field_labels == -100).count_nonzero() / field_labels.flatten().shape[0]}"
+            )
 
         field_input_ids = [
             batch[field.field_name]["input_ids"] for field in input_fields
@@ -194,7 +197,7 @@ class Masker:
 
     def get_mask_probs(
         self, batch: dict[str, Mapping[str, torch.Tensor]], fields: list[FieldInfo]
-    ) -> torch.Tensor | None:
+    ) -> torch.Tensor:
         if self.masking_strategy is not None:
             mask_probs = self.masking_strategy.get_mask_probs(batch)
         else:
@@ -228,6 +231,9 @@ class Masker:
                 ineligible_list.append(already_masked)
         already_masked = torch.stack(ineligible_list, dim=-1)
         return already_masked.any(dim=-1)
+
+    def update_token_masking_probs(self, token_probs: dict[str, float]):
+        return self.masking_strategy.update_token_masking_probs(token_probs)
 
 
 def _draw_random_tokens(field_name, tokenizer, label_tensor):

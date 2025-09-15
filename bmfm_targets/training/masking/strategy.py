@@ -73,6 +73,7 @@ class MaskingStrategy:
         self.lookup_field_name = lookup_field_name
         fv = tokenizer.get_field_vocab(self.lookup_field_name)
         self.token_masking_probs = torch.ones(size=(len(fv),))
+        self.token_masking_probs.share_memory_()
         self.pattern_weights = pattern_weights
         self.use_for_validation = use_for_validation
         if self.pattern_weights:
@@ -138,16 +139,17 @@ class WCEDMasker:
         self,
         tokenizer,
         label_sets: list[str] | None = None,
-        transform_kwargs: dict | None = None,
+        lookup_field_name: str = "genes",
+        value_field_name: str = "expressions",
+        sample_transforms_kwargs: dict | None = None,
         **kwargs,
     ):
         """Initialize WCED masker with tokenizer and optional label sets."""
         self.tokenizer = tokenizer
-        self.lookup_field_name = "genes"
-        self.value_field_name = "expressions"
+        self.lookup_field_name = lookup_field_name
+        self.value_field_name = value_field_name
         self.label_sets = label_sets or ["non_input", "input", "all"]
-        self.transform_kwargs = transform_kwargs or {}
-
+        self.sample_transforms_kwargs = sample_transforms_kwargs or {}
         self.lookup_field_vocab_len = len(
             self.tokenizer.get_field_vocab(self.lookup_field_name)
         )
@@ -156,8 +158,14 @@ class WCEDMasker:
         )
 
     @property
-    def _transform_inputs_kwargs(self) -> dict:
-        """Get transformation parameters with defaults."""
+    def _sample_transforms_transform_inputs_kwargs(self) -> dict:
+        """
+        Get transformation parameters with defaults.
+
+        These are used for transforming the samples to be used for labels.
+        So limitations on length, ordering operations, and noising augmentations
+        should all be off.
+        """
         kwargs = {
             "sequence_order": None,
             "log_normalize_transform": True,
@@ -167,8 +175,10 @@ class WCEDMasker:
             "sequence_dropout_factor": None,
             "map_orthologs": None,
             "renoise": None,
+            "selective_dropout_weights": None,
+            "limit_input_tokens": None,
         }
-        kwargs.update(self.transform_kwargs)
+        kwargs.update(self.sample_transforms_kwargs)
         return kwargs
 
     def mask_inputs(
@@ -196,7 +206,7 @@ class WCEDMasker:
 
         # Transform examples and populate labels
         examples = transform_inputs(
-            batch["mfi"], fields, **self._transform_inputs_kwargs
+            batch["mfi"], fields, **self._sample_transforms_transform_inputs_kwargs
         )
         tokenized_lookup_field = self.lookup_field_tokenizer(
             [mfi[self.lookup_field_name] for mfi in examples],
@@ -223,4 +233,4 @@ class WCEDMasker:
                     input_ids,
                 )
 
-        return input_ids, {"expressions": label_tensor_dict}, attention_mask
+        return input_ids, {self.value_field_name: label_tensor_dict}, attention_mask

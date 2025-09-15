@@ -137,7 +137,7 @@ class StreamingDataModule(DataModule):
             self.dev_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
+            collate_fn=self.val_collate_fn(),
         )
         return dataloader
 
@@ -153,5 +153,5 @@ class StreamingDataModule(DataModule):
             self.test_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
+            collate_fn=self.val_collate_fn(),
         )

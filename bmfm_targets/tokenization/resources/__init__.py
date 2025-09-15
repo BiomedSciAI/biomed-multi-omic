@@ -5,6 +5,7 @@ from .reference_data import (
     get_protein_coding_genes,
     get_ortholog_genes,
     get_gene_chromosome_locations,
+    get_L1000_genes,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "get_protein_coding_genes",
     "get_ortholog_genes",
     "get_gene_chromosome_locations",
+    "get_L1000_genes",
 ]

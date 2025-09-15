@@ -162,8 +162,94 @@ def _get_label_column_idx(columns: list) -> int:
 
 
 def create_field_predictions_df(
-    predictions_list, id2gene, columns, sample_names=None, include_nonmasked=False
+    predictions_list,
+    id2gene,
+    columns,
+    sample_names=None,
+    include_nonmasked=False,
+    sample_level_metadata=None,
 ):
+    """
+    Create a structured DataFrame from field prediction results for masked field tasks.
+
+    This function processes batched model predictions for masked field prediction tasks, where "fields"
+    are typically gene expression values, gene IDs, or DNA sequence tokens. It concatenates prediction batches,
+    applies masking filters, maps token IDs to readable names, and creates a sample-indexed DataFrame
+    suitable for downstream metric calculations.
+
+    Parameters
+    ----------
+    predictions_list : list of torch.Tensor
+        List of prediction tensors from different batches.
+        These are produced by the `concat_field_loss_batch_tensors` function.
+
+    id2gene : dict
+        Mapping from token IDs to readable names. For gene expression tasks, maps gene IDs
+        to gene symbols/names. For DNA sequence tasks, maps DNA chunk IDs to token representations.
+
+    columns : list of str
+        Column names for the prediction features, typically including input IDs ('gene_id' or
+        'dna_chunks'), labels, and logits columns. Column names should match the task type
+        (e.g., 'gene_id' for gene tasks, 'dna_chunks' for DNA tasks).
+        Produced automatically by `field_predictions_df_columns`
+
+    sample_names : array-like, optional
+        Names/IDs for each sample ("cell_name" or "seq_id"). If None, uses integer indices.
+        Length should match the number of samples in predictions_list.
+
+    include_nonmasked : bool, default False
+        If False, filters out non-masked predictions (those with label value -100).
+        If True, includes all predictions. Non-masked predictions are typically not of
+        interest for masked field prediction metrics, and make the frame MUCH larger.
+
+    sample_level_metadata : dict, optional
+        Dictionary mapping metadata keys to lists of values, one value per sample.
+        Common keys include additional cell type identifiers, applied perturbations,
+        experimental conditions, etc. `sample_names` are an example of `sample_level_metadata`
+        but these are treated differently because they are the unique index of the DataFrame.
+        Other sample_level_metadata need not be unique.
+        Values are repeated for each gene/token from the same sample.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with one row per (sample, gene/token) prediction pair, indexed by sample_id.
+        Column structure matches the input `columns` with ID mappings applied:
+
+        - Input columns are preserved with readable names mapped (e.g., 'input_genes' from 'gene_id')
+        - Output columns contain ground truth and predicted values for the target field
+        - Logits columns contain raw model outputs for metric calculations
+        - Sample metadata columns are added if provided
+
+        After masking (when include_nonmasked=False), each row represents one masked prediction
+        from a sample, resulting in masking_rate*sequence_length sample, id pairs per sample
+        for MLM, or a full sequence_length for sequence labeling, or a full vocab size for WCED.
+
+        For WCED, the format is the same but the meaning is slightly different. There are no
+        inputs tracked for WCED, only the vocab index (gene_id) and the predictions/labels/logits.
+
+    Raises
+    ------
+    ValueError
+        If neither 'gene_id' nor 'dna_chunks' columns are found in the expected columns.
+
+    Warnings
+    --------
+    UserWarning
+        If more columns are provided than features in the reshaped predictions array,
+        excess columns are dropped with a warning.
+
+    Notes
+    -----
+    - The function handles both gene expression and DNA sequence prediction tasks through
+      the same interface, differentiated by column names ('gene_id' vs 'dna_chunks').
+    - Masking value -100 is used to indicate non-predicted (non-masked) positions, consistent
+      with common transformer training practices.
+    - Sample-level metadata is replicated across all genes/tokens from the same sample to
+      enable proper sample-level metric aggregation downstream.
+    - Column adjustment (adding logits_* columns) handles edge cases where model outputs
+      don't perfectly match expected column specifications.
+    """
     logging.info(f"Preparing to concat {len(predictions_list)} batches")
     predictions_array = torch.concat([*predictions_list]).to(torch.float32).numpy()
     reshaped = predictions_array.reshape(-1, predictions_array.shape[-1])
@@ -172,7 +258,11 @@ def create_field_predictions_df(
     sample_ids = np.repeat(
         sample_names if sample_names is not None else np.arange(n_samples), n_genes
     )
-
+    if sample_level_metadata is not None:
+        for key, values in sample_level_metadata.items():
+            sample_level_metadata[key] = np.repeat(
+                np.array(values, dtype=object), n_genes
+            )
     # Adjust columns to match prediction shape
     columns = list(columns)
     while len(columns) < reshaped.shape[1]:
@@ -187,6 +277,9 @@ def create_field_predictions_df(
         mask = reshaped[:, label_idx] != -100
         reshaped = reshaped[mask]
         sample_ids = sample_ids[mask]
+        if sample_level_metadata is not None:
+            for key, values in sample_level_metadata.items():
+                sample_level_metadata[key] = values[mask]
         logging.info(f"Filtered -100s, remaining shape: {reshaped.shape}")
 
     # Create DataFrame
@@ -194,18 +287,30 @@ def create_field_predictions_df(
     preds_df["sample_id"] = sample_ids
 
     # Gene ID mapping
-    if "gene_id" not in preds_df.columns:
-        raise ValueError("Expected 'gene_id' column missing")
+    if ("gene_id" not in preds_df.columns) and ("dna_chunks" not in preds_df.columns):
+        raise ValueError("Expected 'gene_id'/'dna_chunks' column missing")
 
-    preds_df["gene_id"] = preds_df["gene_id"].astype(int)
-    preds_df["input_genes"] = preds_df["gene_id"].map(id2gene)
-    preds_df = preds_df.drop(columns=["gene_id"])
+    if "gene_id" in preds_df.columns:
+        preds_df["gene_id"] = preds_df["gene_id"].astype(int)
+        preds_df["input_genes"] = preds_df["gene_id"].map(id2gene)
+        preds_df = preds_df.drop(columns=["gene_id"])
+
+    if "dna_chunks" in preds_df.columns:
+        preds_df["dna_chunks"] = preds_df["dna_chunks"].astype(int)
+        preds_df["dna_chunk_tokens"] = preds_df["dna_chunks"].map(id2gene)
+        preds_df = preds_df.drop(columns=["dna_chunks"])
 
     # Map other *_genes columns if needed
     for col in preds_df.columns:
         if "genes" in col and col != "input_genes":
             preds_df[col] = pd.to_numeric(preds_df[col], errors="coerce")
             preds_df[col] = preds_df[col].map(id2gene)
+
+    # since sample_metadata may contain "perturbed_genes" as strings
+    # it must come after the id mapping step
+    if sample_level_metadata is not None:
+        for key, values in sample_level_metadata.items():
+            preds_df[key] = values
 
     preds_df = preds_df.set_index("sample_id")
     logging.info(f"Final predictions_df shape: {preds_df.shape}")
@@ -285,20 +390,42 @@ def concat_label_loss_batch_tensors(
 
 
 def field_predictions_df_columns(fields, this_field, modeling_strategy):
+    """
+    Generate column names for prediction DataFrame based on modeling strategy and field configuration.
+
+    Used to produce the `columns` argument for `create_field_predictions_df`.
+
+    Parameters
+    ----------
+    fields : list[config.FieldInfo]
+        All fields in the model, including input fields (is_input=True) and target field.
+    this_field : FieldInfo
+        Target field being predicted, with field_name and decode_modes attributes.
+    modeling_strategy : str
+        One of 'mlm'/'multitask' (masked language modeling) or 'sequence_labeling'.
+
+    Returns
+    -------
+    list of str
+        Column names in order: input columns, output columns (predicted/label), logits columns.
+
+    Notes
+    -----
+    - Input columns map field names to dataframe column names via field_column_map
+    - WCED decode mode uses only gene_id input and custom logit outputs. These are not true
+      input fields, but behave like input fields in terms of DataFrame structure and
+      downstream metric calculations.
+    - Output columns: f'predicted_{field_name}', f'label_{field_name}'
+    - Logits columns: f'logits_{field_name}_{decode_mode}' for 1D decode modes, if logits
+      are more than 1D (e.g., token scores) they are omitted.
+    """
     one_dim_decode_modes = ["regression", "is_zero", "mvc_regression", "mvc_is_zero"]
-    logits_columns = [
-        f"logits_{this_field.field_name}_{m}"
-        for m in sorted(this_field.decode_modes)
-        if m in one_dim_decode_modes
-    ]
-    if "wced" in this_field.decode_modes:
-        logits_columns = [
-            f"logits_{this_field.field_name}_{m}"
-            for m in this_field.decode_modes["wced"].get("logit_outputs", [])
-        ]
-    input_field_names = [f.field_name for f in fields if f.is_input]
     field_column_map = {
-        "mlm": {"genes": "gene_id", "expressions": "input_expressions"},
+        "mlm": {
+            "genes": "gene_id",
+            "expressions": "input_expressions",
+            "dna_chunks": "dna_chunks",
+        },
         "sequence_labeling": {
             "genes": "gene_id",
             "expressions": "control_expressions",
@@ -307,23 +434,29 @@ def field_predictions_df_columns(fields, this_field, modeling_strategy):
     }
     field_column_map["multitask"] = field_column_map["mlm"]
 
-    # check if we are in wced mode
-    if not this_field.is_masked and this_field.is_input:
+    this_field_name = this_field.field_name
+
+    logits_columns = [
+        f"logits_{this_field_name}_{m}"
+        for m in sorted(this_field.decode_modes)
+        if m in one_dim_decode_modes
+    ]
+    if "wced" in this_field.decode_modes:
+        logits_columns = [
+            f"logits_{this_field_name}_{m}"
+            for m in this_field.decode_modes["wced"].get("logit_outputs", [])
+        ]
+
         input_columns = ["gene_id"]
     else:
+        input_field_names = [f.field_name for f in fields if f.is_input]
         input_columns = [
             field_column_map[modeling_strategy][fn] for fn in input_field_names
         ]
-    if modeling_strategy in ("mlm", "multitask"):
-        output_columns = [
-            f"predicted_{this_field.field_name}",
-            f"label_{this_field.field_name}",
-        ]
 
-    elif modeling_strategy == "sequence_labeling":
-        output_columns = ["predicted_expressions", "label_expressions"]
-    else:
-        raise ValueError("No known predictions df columns for modeling strategy")
+    if "label_" == this_field_name[:6]:
+        this_field_name = this_field_name[6:]
+    output_columns = [f"predicted_{this_field_name}", f"label_{this_field_name}"]
 
     return input_columns + output_columns + logits_columns
 
@@ -343,23 +476,29 @@ def get_gene_metrics_from_gene_errors(gene_level_err: pd.DataFrame):
 
 
 def create_label_predictions_df(
-    predictions_list, label_name, sample_names, this_label_dict
+    predictions_list, label_column_name, sample_names, this_label_dict
 ):
     preds_array = (
         torch.concat([*predictions_list]).detach().cpu().to(torch.float32).numpy()
     )
-    columns = [f"{label_name}_prediction", f"{label_name}_label"]
+    columns = [f"{label_column_name}_prediction", f"{label_column_name}_label"]
 
     if preds_array.shape[1] == 3:  # regression_task
         # usually logits and predictions are the same for regression task
         # but link_function or other steps could impact it
-        columns += [f"{label_name}_logits"]
+        columns += [f"{label_column_name}_logits"]
     elif preds_array.shape[1] > 3:  # classification task
         label_values = [
             i[0] for i in sorted(this_label_dict.items(), key=lambda x: x[1])
         ]
         columns += [f"{label_value}_logits" for label_value in label_values]
         preds_array = preds_array.astype(object)
-        preds_array[:, :2] = np.array(label_values)[preds_array[:, :2].astype(int)]
+        pred_and_gt_label_ids = preds_array[:, :2].astype(int)
+        pred_and_gt_label_ids = np.where(
+            pred_and_gt_label_ids == -100, -1, pred_and_gt_label_ids
+        )
+        label_values_w_silent = label_values + ["Silenced Label Value"]
+
+        preds_array[:, :2] = np.array(label_values_w_silent)[pred_and_gt_label_ids]
     label_preds_df = pd.DataFrame(index=sample_names, data=preds_array, columns=columns)
     return label_preds_df

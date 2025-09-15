@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,7 @@ from scipy.stats import ttest_1samp
 from transformers import PreTrainedModel
 
 from bmfm_targets.config.model_config import SCModelConfigBase
-from bmfm_targets.models import instantiate_classification_model
+from bmfm_targets.models import get_model_from_config, instantiate_classification_model
 from bmfm_targets.tokenization import MultiFieldTokenizer
 from bmfm_targets.training.metrics import (
     get_loss_tasks,
@@ -49,6 +49,8 @@ class SequenceClassificationAttributionModule(pl.LightningModule):
         label_dict: dict[str, dict[str, int]],
         attribute_kwargs: dict[str, Any] | None = None,
         attribute_filter: dict[str, Any] | None = None,
+        modeling_strategy: Literal["multitask"]
+        | Literal["sequence_classification"] = "sequence_classification",
         **kwargs,
     ):
         """
@@ -67,6 +69,7 @@ class SequenceClassificationAttributionModule(pl.LightningModule):
         self.tokenizer = tokenizer
         self.label_dict = label_dict
         self.label_output_size_dict = {i: len(k) for i, k in self.label_dict.items()}
+        self.modeling_strategy = modeling_strategy
         if "trainer_config" in kwargs:
             losses = kwargs["trainer_config"].losses
         else:
@@ -76,10 +79,16 @@ class SequenceClassificationAttributionModule(pl.LightningModule):
             losses,
             label_columns=self.model_config.label_columns,
         )
-
-        self.model = instantiate_classification_model(
-            self.model_config, self.loss_tasks
-        )
+        if self.modeling_strategy == "sequence_classification":
+            self.model = instantiate_classification_model(
+                self.model_config, self.loss_tasks
+            )
+        elif self.modeling_strategy == "multitask":
+            self.model = get_model_from_config(
+                self.model_config, modeling_strategy=self.modeling_strategy
+            )
+        else:
+            raise ValueError(f"Interpret not supported for {modeling_strategy}")
         self.train_labels = [*self.label_dict.keys()]
         self.attribute_kwargs = attribute_kwargs if attribute_kwargs is not None else {}
         self.attribute_filter = attribute_filter if attribute_filter is not None else {}
@@ -199,7 +208,7 @@ def get_sample_attribution(
     }
     input_ids = batch["input_ids"].to(model.device)
     attention_mask = batch["attention_mask"].to(model.device)
-    cell_name = batch["cell_names"][0]
+    cell_name = batch["cell_name"][0]
     logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
 
     def prediction(label_column_name, logits):

@@ -139,7 +139,7 @@ class BaseTrainingModule(pl.LightningModule):
 
         self.prediction_df = {}
         self.token_level_errors = {}
-
+        self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
         self.save_hyperparameters(ignore=["tokenizer"])
 
     def update_metrics(
@@ -179,6 +179,13 @@ class BaseTrainingModule(pl.LightningModule):
         for metric_key, task_outputs, task_labels in metric_inputs:
             if metric_key in duplicated_metric_keys:
                 task_outputs = predictions[metric_key].view(task_labels.shape)
+                if metric_key in model_outputs:
+                    continue
+            # ignore -100 labels explicitly when dealing with PCC-type outputs
+            if task_labels.shape == task_outputs.shape:
+                ignore_mask = task_labels != -100
+                task_labels = task_labels[ignore_mask]
+                task_outputs = task_outputs[ignore_mask]
             model_outputs[metric_key] = task_outputs
             gt_labels[metric_key] = task_labels
         return self.split_metrics(split)(model_outputs, gt_labels)
@@ -349,6 +356,7 @@ class BaseTrainingModule(pl.LightningModule):
             attention_mask=batch["attention_mask"],
             output_hidden_states=True,
         )
+
         return self.get_predict_step_output(batch, outputs)
 
     def get_predict_step_output(self, batch, outputs):
@@ -360,7 +368,7 @@ class BaseTrainingModule(pl.LightningModule):
         )
         predictions_dict["embeddings"] = embeddings.to(torch.float32).cpu().numpy()
 
-        for key in ["cell_names", "seq_ids"]:
+        for key in self.sample_metadata_keys:
             if key in batch:
                 predictions_dict[key] = batch[key]
 
@@ -477,12 +485,11 @@ class BaseTrainingModule(pl.LightningModule):
                 batch_tensors
             )
 
-        if "cell_names" in batch:
-            self.split_batch_predictions(split)["cell_names"].append(
-                batch["cell_names"]
-            )
+        for key in self.sample_metadata_keys:
+            if key in batch:
+                self.split_batch_predictions(split)[key].append(batch[key])
 
-    def on_test_end(self):
+    def on_test_epoch_end(self):
         self._shared_test_val_on_end("test")
 
     def on_validation_epoch_end(self) -> None:
@@ -504,8 +511,10 @@ class BaseTrainingModule(pl.LightningModule):
         self.process_batch_predictions(split)
         logger.info(f"plotting batch_predictions for split {split}")
         self.plot_batch_predictions_for_split(split)
+
         logger.info(f"logging token level errors for split {split}")
         self.log_token_level_errors_for_split(split)
+
         if self.trainer_config.batch_prediction_behavior == "dump":
             logger.info(f"dumping batch predictions {split}")
 
@@ -610,15 +619,22 @@ class BaseTrainingModule(pl.LightningModule):
         gt_label="label_expressions",
         plot_only_non_zeros=True,
         suffix="",
+        frac=1,
     ):
         if plot_only_non_zeros:
             nonzero_preds = preds_df.query(f"{predicted_label} > 0 & {gt_label} > 0")
             fig = plots.make_predictions_gt_density_plot(
-                nonzero_preds, predicted_label=predicted_label, gt_label=gt_label
+                nonzero_preds,
+                predicted_label=predicted_label,
+                gt_label=gt_label,
+                frac=frac,
             )
         else:
             fig = plots.make_predictions_gt_density_plot(
-                preds_df, predicted_label=predicted_label, gt_label=gt_label
+                preds_df,
+                predicted_label=predicted_label,
+                gt_label=gt_label,
+                frac=frac,
             )
         cl = clearml.Logger.current_logger()
         if cl:
@@ -805,41 +821,50 @@ class BaseTrainingModule(pl.LightningModule):
         self, limit_to_continuous_value_encoder=False
     ) -> set[str]:
         supported_field_names = ("label_expressions", "expressions")
-        basic_func = (
+        is_supported_filter = (
             lambda lt: isinstance(lt, FieldLossTask)
             and lt.output_key in supported_field_names
         )
         if limit_to_continuous_value_encoder:
             filter_func = (
-                lambda lt: basic_func(lt)
+                lambda lt: is_supported_filter(lt)
                 and lt.field.tokenization_strategy == "continuous_value_encoder"
             )
         else:
-            filter_func = basic_func
+            filter_func = is_supported_filter
         return {lt.metric_key for lt in filter(filter_func, self.loss_tasks)}
 
     def _get_field_predictions_df(self, split, metric_key, include_nonmasked, columns):
         predictions_list = self.split_batch_predictions(split)[metric_key]
-        id2gene = {v: k for k, v in self.tokenizer.get_field_vocab("genes").items()}
-        if "cell_names" in self.split_batch_predictions(split):
-            sample_names = list(
-                chain.from_iterable(self.split_batch_predictions(split)["cell_names"])
-            )
+        if "genes" in self.tokenizer.field_to_tokenizer_map:
+            id2gene = {v: k for k, v in self.tokenizer.get_field_vocab("genes").items()}
+        elif "dna_chunks" in self.tokenizer.field_to_tokenizer_map:
+            id2gene = {
+                v: k for k, v in self.tokenizer.get_field_vocab("dna_chunks").items()
+            }
         else:
-            sample_names = None
+            raise ValueError("Expected 'genes'/'dna_chunks' tokenizer field missing")
+        sample_level_metadata = {}
+        for key in self.sample_metadata_keys:
+            if key in self.split_batch_predictions(split):
+                sample_level_metadata[key] = list(
+                    chain.from_iterable(self.split_batch_predictions(split)[key])
+                )
+
         return create_field_predictions_df(
             predictions_list=predictions_list,
             id2gene=id2gene,
             columns=columns,
-            sample_names=sample_names,
+            sample_names=sample_level_metadata.pop("cell_name", None),
             include_nonmasked=include_nonmasked,
+            sample_level_metadata=sample_level_metadata,
         )
 
     def _get_label_predictions_df(self, split, label_name):
         predictions_list = self.split_batch_predictions(split)[label_name]
-        if "cell_names" in self.split_batch_predictions(split):
+        if "cell_name" in self.split_batch_predictions(split):
             sample_names = list(
-                chain.from_iterable(self.split_batch_predictions(split)["cell_names"])
+                chain.from_iterable(self.split_batch_predictions(split)["cell_name"])
             )
         else:
             sample_names = None

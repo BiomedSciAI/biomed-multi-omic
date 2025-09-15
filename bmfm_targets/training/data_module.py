@@ -19,6 +19,7 @@ from bmfm_targets.datasets.base_perturbation_dataset import BasePerturbationData
 from bmfm_targets.datasets.base_rna_dataset import BaseRNAExpressionDataset
 from bmfm_targets.tokenization import MultiFieldCollator, MultiFieldTokenizer
 from bmfm_targets.tokenization.resources import (
+    get_L1000_genes,
     get_ortholog_genes,
     get_protein_coding_genes,
 )
@@ -122,6 +123,7 @@ class DataModule(pl.LightningDataModule):
             Strategy to limit the genes in the dataset, by default "tokenizer".
             - "tokenizer": Uses intersection of genes in tokenizer and dataset (avoids UNKs).
             - "protein_coding": Uses only HGNC protein coding genes.
+            - "L1000": use the L1000 landmark genes
             - None: No gene filtering.
         balancing_label_column : str | None, optional
             Column to use for balancing the dataset, by default None.
@@ -550,7 +552,8 @@ class DataModule(pl.LightningDataModule):
                 )
             return None
         if limit_genes_keyword == "protein_coding":
-            return get_protein_coding_genes()
+            tokenizer_genes = [*self.tokenizer.get_field_vocab("genes")]
+            return [*{*get_protein_coding_genes()} & {*tokenizer_genes}]
         if limit_genes_keyword == "mouse_to_human_orthologs":
             return get_ortholog_genes(
                 return_mapping=False, from_species="mmusculus", to_species="hsapiens"
@@ -559,6 +562,8 @@ class DataModule(pl.LightningDataModule):
             return get_ortholog_genes(
                 return_mapping=False, from_species="hsapiens", to_species="mmusculus"
             )
+        if limit_genes_keyword == "L1000":
+            return get_L1000_genes()
         raise ValueError("Unsupported option passed for limit_genes")
 
     def get_vocab_for_field(self, field_name: str) -> list[str]:
@@ -627,22 +632,28 @@ class DataModule(pl.LightningDataModule):
         -------
             DataLoader: DataLoader for validation
         """
-        collator = self.collate_fn
-        if (
-            isinstance(self.masking_strategy, MaskingStrategy)
-            and not self.masking_strategy.use_for_validation
-        ):
-            collator.masker = deepcopy(collator.masker)
-            collator.masker.masking_strategy = None
         return DataLoader(
             self.dev_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=collator,
+            collate_fn=self.val_collate_fn(),
             persistent_workers=self.num_workers > 0,
             pin_memory=True,
         )
+
+    def val_collate_fn(self):
+        # collate_fn is a property so collator is an obj
+        collator = self.collate_fn
+        if (
+            hasattr(self.masking_strategy, "use_for_validation")
+            and not self.masking_strategy.use_for_validation
+        ):
+            logger.info("Removing masking strategy from val/test dataloader")
+            collator.masker = deepcopy(collator.masker)
+            if hasattr(collator.masker, "masking_strategy"):
+                collator.masker.masking_strategy = None
+        return collator
 
     def test_dataloader(self) -> DataLoader:
         """
@@ -657,7 +668,9 @@ class DataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
+            collate_fn=self.val_collate_fn(),
+            persistent_workers=self.num_workers > 0,
+            pin_memory=True,
         )
 
     def bootstrap_test_dataloader(self):
@@ -671,7 +684,7 @@ class DataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             sampler=sampler,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn,
+            collate_fn=self.val_collate_fn(),
         )
 
     def predict_dataloader(self) -> DataLoader:
@@ -720,6 +733,7 @@ class DataModule(pl.LightningDataModule):
             log_normalize_transform=self.log_normalize_transform,
             rda_transform=rda_transform,
             pad_zero_expression_strategy=self.pad_zero_expression_strategy,
+            sequence_dropout_factor=self.sequence_dropout_factor,
             map_orthologs=self.map_orthologs,
             tokenize_kwargs=self.tokenize_kwargs,
         )
@@ -748,20 +762,16 @@ class PerturbationDataModule(DataModule):
         collation_strategy: Literal[
             "language_modeling", "sequence_classification", "sequence_labeling"
         ] = "sequence_labeling",
-        mlm: bool = False,
-        change_ratio: float = 0.15,
-        mask_ratio: float = 1.0,
-        switch_ratio: float = 0.0,
         limit_dataset_samples: int | Mapping[str, int] | None = None,
         shuffle: bool = False,
         sequence_order: str | None = None,
         sequence_dropout_factor: int | float | None = None,
         log_normalize_transform: bool = False,
-        rda_transform: Literal["downsample"] | int | None = None,
         pad_zero_expression_strategy: str | None = None,
         balancing_label_column: str | None = None,
         perturbation_column_name: str = "perturbation",
         limit_genes: Literal["protein_coding", "tokenizer", None] = "tokenizer",
+        sequence_label_extractor: None | WCEDMasker = None,
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -779,19 +789,16 @@ class PerturbationDataModule(DataModule):
             truncation=truncation,
             pad_to_multiple_of=pad_to_multiple_of,
             collation_strategy=collation_strategy,
-            mlm=mlm,
-            change_ratio=change_ratio,
-            mask_ratio=mask_ratio,
-            switch_ratio=switch_ratio,
+            mlm=False,
             limit_dataset_samples=limit_dataset_samples,
             shuffle=shuffle,
             sequence_order=sequence_order,
             sequence_dropout_factor=sequence_dropout_factor,
             log_normalize_transform=log_normalize_transform,
-            rda_transform=rda_transform,
             pad_zero_expression_strategy=pad_zero_expression_strategy,
             balancing_label_column=balancing_label_column,
             limit_genes=limit_genes,
+            masking_strategy=sequence_label_extractor,
         )
 
         self.perturbation_column_name = perturbation_column_name
@@ -828,6 +835,9 @@ class PerturbationDataModule(DataModule):
         )
         processed_data = transformer.process_datasets()
 
+        processed_data.uns.pop(
+            "rank_genes_groups", None
+        )  # This is huge and we dont use it later in the code
         processed_data.write_h5ad(self.processed_data_file)
 
         # this process should happen only once

@@ -63,6 +63,7 @@ class MultiFieldCollator:
         map_orthologs: str | None = None,
         tokenize_kwargs: dict | None = None,
         renoise: float | None = 0.6,
+        limit_input_tokens: list | None = None,
     ):
         """
         Multifield Data collator.
@@ -111,6 +112,8 @@ class MultiFieldCollator:
         self.map_orthologs = map_orthologs
         self.tokenize_kwargs = tokenize_kwargs if tokenize_kwargs is not None else {}
         self.renoise = renoise
+        self.limit_input_tokens = limit_input_tokens
+        self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
         self.__post__init__()
 
     def __post__init__(self):
@@ -212,6 +215,10 @@ class MultiFieldCollator:
         logger.warning(f"Unknown label '{val_str}' for column '{col}', using -100.")
         return -100
 
+    @property
+    def selective_dropout_weights(self):
+        return getattr(self.masker, "selective_dropout_weights", None)
+
     def __call__(
         self,
         examples: (
@@ -245,11 +252,10 @@ class MultiFieldCollator:
         batch = self.tokenize_batch(examples, examples_pair)
         batch["mfi"] = pre_transformed_examples
 
-        # TODO: This is not generic, this should be addressed
         if examples[0].metadata is not None:
-            for key in ["cell_name", "seq_id"]:
+            for key in self.sample_metadata_keys:
                 if key in examples[0].metadata:
-                    batch[key + "s"] = [mfi.metadata.get(key) for mfi in examples]
+                    batch[key] = [mfi.metadata.get(key) for mfi in examples]
 
         # TODO: Here we assume that the first multi-field instance of the pair is the one that contains the labels
         if (
@@ -279,6 +285,8 @@ class MultiFieldCollator:
             "sequence_dropout_factor": self.sequence_dropout_factor,
             "map_orthologs": self.map_orthologs,
             "renoise": self.renoise,
+            "limit_input_tokens": self.limit_input_tokens,
+            "selective_dropout_weights": self.selective_dropout_weights,
         }
 
     def tokenize_batch(self, examples, examples_pair=None):
@@ -306,7 +314,9 @@ class MultiFieldCollator:
 
         return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
 
-        # MLM masking for language_modeling and multitask
+        # MLM masking / WCED label extraction for language_modeling, multitask
+        # and WCED sequence_labeling
+
         if self.masker is not None:
             input_ids, labels, attention_mask = self.masker.mask_inputs(
                 self.fields, batch
@@ -318,6 +328,17 @@ class MultiFieldCollator:
                     "attention_mask": attention_mask,
                 }
             )
+        # Sequence labeling labels
+        elif self.collation_strategy == "sequence_labeling":
+            special_tokens_mask = batch[self.input_field_names[0]][
+                "special_tokens_mask"
+            ].bool()
+            labels = {
+                field: batch[field]["input_ids"] for field in self.label_field_names
+            }
+            for field_labels in labels.values():
+                field_labels[special_tokens_mask] = -100
+            return_dict["labels"] = labels
 
         # Classification labels for sequence_classification and multitask
         if (
@@ -329,21 +350,9 @@ class MultiFieldCollator:
             else:
                 return_dict["labels"] = batch["label_ids"]
 
-        # Sequence labeling labels
-        if self.collation_strategy == "sequence_labeling":
-            special_tokens_mask = batch[self.input_field_names[0]][
-                "special_tokens_mask"
-            ].bool()
-            labels = {
-                field: batch[field]["input_ids"] for field in self.label_field_names
-            }
-            for field_labels in labels.values():
-                field_labels[special_tokens_mask] = -100
-            return_dict["labels"] = labels
-
         # Add metadata
         return_dict.update(
-            {k: batch[k] for k in ["cell_names", "seq_ids"] if k in batch}
+            {k: batch[k] for k in self.sample_metadata_keys if k in batch}
         )
 
         return return_dict
