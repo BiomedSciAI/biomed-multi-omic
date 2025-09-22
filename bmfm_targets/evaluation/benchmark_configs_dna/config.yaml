@@ -1,3 +1,7 @@
+hydra:
+  searchpath:
+    - file:///proj/bmfm/users/sanjoy/biomed-multi-omic_forked/biomed-multi-omic/bmfm_targets/evaluation/benchmark_configs_dna
+
 defaults:
   - fields: default
   - label_columns: dnaeval_default
@@ -20,6 +24,8 @@ track_clearml:
     - "model_${model_name}"
     - "ckpt_${checkpoint_name}"
   continue_last_task: False
+
+
 
 max_finetuning_epochs: 12
 batch_size: 32

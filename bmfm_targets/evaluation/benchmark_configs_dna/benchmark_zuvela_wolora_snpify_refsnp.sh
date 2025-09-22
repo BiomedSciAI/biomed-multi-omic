@@ -1,7 +1,7 @@
-declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
-#declare -a datasets=("promoter_dnabert2" )
-declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
-#declare -a label_column_names=("label" "label" "label")
+#declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
+declare -a datasets=("promoter_dnabert2" )
+#declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
+declare -a label_column_names=("label" "label" "label")
 
 EST_TIME=$(TZ="America/New_York" date +"%Y%m%d_%H%M")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
@@ -12,9 +12,10 @@ MODEL_PE=128
 MODEL_WD=0.01
 MODEL="modernbert" # Makesure it is passed on config.yaml as MODEL
 MODEL_NAME="modernbert_wo_lora"
-CHKPT_NAME="refsnp_v3.31"
+CHKPT_NAME="hic_concat_v1"
 
-CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'"
+CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_hic_concatenated/backup_ckpt/epoch=32-step=251244-val_loss=4.49.ckpt\'" # hi-c_concat_v1
+#"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'" # refsnp_v3.31
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=17-step=131004-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=3-step=87372-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=9-step=72810-val_loss=4.40.ckpt\'"
@@ -35,7 +36,7 @@ EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump"
 # set PREFIX_CMD to a session-manager-ccc call with the command as a variable to be parsed
 # set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-run print the resolved yaml without running the code
 PREFIX_CMD="bsub -M 30G -n 16 -W 12:00 -gpu num=1:mode=exclusive_process "
-SUFFIX_CMD="" #  +trainer.lora_config=default" #"--cfg job --resolve"
+SUFFIX_CMD="--cfg job --resolve" #  +trainer.lora_config=default" #"--cfg job --resolve"
 for i in "${!datasets[@]}"; do
     DATASET=${datasets[i]}
     LABEL_COLUMN_NAME=${label_column_names[i]}
