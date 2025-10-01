@@ -1043,7 +1043,8 @@ class LogTransform(BaseSCTransform):
             base: The base value for the logarithm. Default is natural logarithm (e).
             chunked: Whether to chunk the computation for large data. Default is False.
             chunk_size: Size of each chunk for chunked computation. Default is None.
-            add_one: Add one to value before the log operation. False value allows computation log2 with log1p method. Default is True.
+            add_one: Add one to value before the log operation aka log1p.
+                If False, log1p is called but data is input as data-1 to neutralize the effect.
         """
         self.base = base
         self.chunked = chunked

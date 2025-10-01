@@ -246,7 +246,7 @@ class BatchIntegrationCallback(pl.Callback):
         embeddings = results["embeddings"]
 
         adata_cell_names = adata_emb.obs_names.values
-        dict_cell_names = results["cell_names"]
+        dict_cell_names = results["cell_name"]
         name_to_index = {name: idx for idx, name in enumerate(dict_cell_names)}
 
         aligned_embeddings = np.array(
@@ -427,3 +427,40 @@ class BatchIntegrationCallback(pl.Callback):
             return bdata.obsm["LIGER"]
         except:
             return np.zeros((adata.n_obs, 1))
+
+
+class SavePredictionsH5ADCallback(pl.Callback):
+    def __init__(self, output_file_name=None):
+        super().__init__()
+        self.output_file_name = output_file_name
+
+    def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+        self._save_predictions_h5ad(trainer, pl_module)
+
+    def _save_predictions_h5ad(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ):
+        preds_df = pl_module.prediction_df["label_expressions"]
+        matrix = preds_df.pivot_table(
+            index=preds_df.index,
+            columns="input_genes",
+            values="predicted_expressions",
+            fill_value=0,
+        )
+        adata = sc.AnnData(
+            X=matrix.values,
+            obs=pd.DataFrame(index=matrix.index),  # samples
+            var=pd.DataFrame(index=matrix.columns),  # genes
+        )
+
+        adata.obs["target_gene"] = preds_df.groupby(preds_df.index)[
+            "perturbed_set"
+        ].first()
+
+        output_file = pathlib.Path(trainer.log_dir) / "predictions.h5ad"
+        if self.output_file_name is not None:
+            output_file = pathlib.Path(self.output_file_name)
+
+        adata.write(output_file)
+
+        print(f"Saved predictions to {output_file}")

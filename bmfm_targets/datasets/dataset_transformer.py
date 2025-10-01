@@ -376,3 +376,36 @@ class ScperturbPerturbationDatasetTransformer(PerturbationDatasetTransformer):
 
         ann_data = super()._clean_dataset(ann_data)
         return ann_data
+
+
+class ReploglePerturbationDatasetTransformer(PerturbationDatasetTransformer):
+    def _clean_dataset(self, ann_data: AnnData):
+        r"""
+        Cleans Replogle ScGPT processed perturbation dataset:
+        1) rename control perturbation to "Control"
+        2) make var_name = perturbation name.
+
+        Assumes split columns was already added (column scgpt_split).
+
+        For the pre-processing see datasets\perturbation]replogle.ipynb
+
+        Args:
+        ----
+            ann_data (sc.AnnData): AnnData object containing perturbation data
+        """
+        # rename control column
+        ann_data.obs[self.perturbation_column_name] = ann_data.obs[
+            self.perturbation_column_name
+        ].replace("non-targeting", "Control")
+
+        # set var_names to be gene_names
+        ann_data.var["ensemble_id"] = ann_data.var.index
+        ann_data.var["gene_name"] = ann_data.var["gene_name"].astype(str)
+        ann_data.var = ann_data.var.set_index("gene_name")
+        # print("Original var_names:", len(ann_data.var_names))
+
+        ann_data.var_names_make_unique()
+        # print("Original var_names:", len(ann_data.var_names))
+
+        ann_data = super()._clean_dataset(ann_data)
+        return ann_data

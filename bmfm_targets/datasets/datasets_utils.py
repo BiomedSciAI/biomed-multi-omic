@@ -116,7 +116,7 @@ def create_celltype_labels_json_file(adata, output_path, label_column_name):
 
 
 def load_and_update_all_labels_json(adata, output_path, label_column_name):
-    if Path(output_path).exists():
+    if output_path is not None and Path(output_path).exists():
         with open(output_path) as json_file:
             all_labels_dict = json.load(json_file)
             for item in all_labels_dict:
@@ -125,18 +125,15 @@ def load_and_update_all_labels_json(adata, output_path, label_column_name):
     else:
         all_labels_dict = []
 
-    try:
-        obs_tab = adata.obs
-    except:
-        obs_tab = adata
+    obs_tab = adata.obs if hasattr(adata, "obs") else adata
     unique_values = sorted(obs_tab[label_column_name].dropna().unique())
     value_to_number = {str(value): idx for idx, value in enumerate(unique_values)}
 
     new_label_dict = {"label_name": label_column_name, "label_values": value_to_number}
     all_labels_dict.append(new_label_dict)
-
-    with open(output_path, "w") as json_file:
-        json.dump(all_labels_dict, json_file, indent=4)
+    if output_path is not None:
+        with open(output_path, "w") as json_file:
+            json.dump(all_labels_dict, json_file, indent=4)
 
     return value_to_number
 

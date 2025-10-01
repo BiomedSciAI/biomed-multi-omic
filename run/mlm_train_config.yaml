@@ -13,6 +13,12 @@ seed:
 model:
   checkpoint: null
 
+trainer:
+  - field_name: expressions
+    name: mse
+    ignore_zero: true
+  - field_name: expressions
+    name: is_zero_bce
 
 data_module:
   max_length: 32

@@ -5,6 +5,9 @@ from bmfm_targets.datasets import (
     ScperturbPerturbationDatasetTransformer,
 )
 from bmfm_targets.datasets.base_perturbation_dataset import BasePerturbationDataset
+from bmfm_targets.datasets.dataset_transformer import (
+    ReploglePerturbationDatasetTransformer,
+)
 from bmfm_targets.training.data_module import PerturbationDataModule
 
 logging.basicConfig(
@@ -40,3 +43,17 @@ class GearsDataModule(PerturbationDataModule):
 
     DATASET_FACTORY = GearsDataset
     DATASET_TRANSFORMER_FACTORY = GearsPerturbationDatasetTransformer
+
+
+class ReplogleDataset(BasePerturbationDataset):
+    DATASET_NAME = "replogle"
+    source_h5ad_file_names = [
+        "/dccstor/bmfm-targets/data/omics/transcriptome/scRNA/finetune/Perturbation/replogle/k562_gwps_raw_singlecell_01_processed_with_scgpt_split.h5ad"
+    ]
+
+
+class ReplogleDataModule(PerturbationDataModule):
+    """PyTorch Lightning DataModule for perturbation datasets."""
+
+    DATASET_FACTORY = ReplogleDataset
+    DATASET_TRANSFORMER_FACTORY = ReploglePerturbationDatasetTransformer

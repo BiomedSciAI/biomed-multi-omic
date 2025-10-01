@@ -18,10 +18,13 @@ def make_predictions_gt_density_plot(
     gt_label="label_expressions",
     kind="hist",
     include_x_y_line=True,
+    frac=1,
 ):
     sb.set_context("paper")
+    sampled_df = predictions_df.sample(frac=frac, random_state=42)
+
     g = sb.jointplot(
-        data=predictions_df,
+        data=sampled_df,
         y=predicted_label,
         x=gt_label,
         height=8,
