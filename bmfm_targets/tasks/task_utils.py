@@ -341,7 +341,7 @@ def predict(
 
 
 def save_embeddings_results(root_dir, results):
-    supported_row_names = ["cell_names", "seq_ids"]
+    supported_row_names = ["cell_name", "seq_id"]
     index_vals = next(
         (results.get(k) for k in supported_row_names if results.get(k) is not None),
         None,

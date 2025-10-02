@@ -356,6 +356,7 @@ class BaseTrainingModule(pl.LightningModule):
             attention_mask=batch["attention_mask"],
             output_hidden_states=True,
         )
+
         return self.get_predict_step_output(batch, outputs)
 
     def get_predict_step_output(self, batch, outputs):
