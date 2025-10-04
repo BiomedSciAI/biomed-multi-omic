@@ -13,9 +13,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 PREFIX_CMD="bsub -J benchmark_job -R \"rusage[ngpus=1,cpu=8,mem=16GB]\" -gpu num=1:mode=exclusive_process:gmodel=TeslaV100_SXM2_32GB -o $HOME/.lsf/cluster/%J.out -e $HOME/.lsf/cluster/%J.err"
 SUFFIX_CMD="" #--cfg job --resolve"
 for DATASET in "${datasets[@]}"; do
-    $PREFIX_CMD bmfm-targets-run -cd $SCRIPT_DIR -cn config data_module=$DATASET task=train model=scbert $SUFFIX_CMD ;
+    $PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET task=train model=scbert $SUFFIX_CMD ;
 done
 
 for DATASET in "${datasets[@]}"; do
-    $PREFIX_CMD bmfm-targets-run -cd $SCRIPT_DIR -cn config data_module=$DATASET data_module.collation_strategy=language_modeling task=predict ~model ~fields track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+    $PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET data_module.collation_strategy=language_modeling task=predict ~model ~fields track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
 done
