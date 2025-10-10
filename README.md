@@ -34,7 +34,7 @@ NB - `biomed-multi-omic` depends on `hic-straw` which requires `curl`. You may n
 In addition to the base package there are additional optional dependencies which extends `biomed-multi-omic` capabilities further. These include:
 
 - `bulk_rna`: Extends modules for extracting and preprocessing bulk RNA-seq data
-- `benchmarking`: Installs additional models used benchmark `bmfm-mulit-omics` against. These include scib, scib-metrics, pyliger, scanorama and harmony-pytorch.
+- `benchmarking`: Installs additional models used benchmark `bmfm-multi-omics` against. These include scib, scib-metrics, pyliger, scanorama and harmony-pytorch.
 - `test`: Unittest suite which is recommended for development use
 
 To install optional dependencies from this GitHub repository you can run from package root:
