@@ -169,3 +169,147 @@ def make_gene_vocab(
         json.dump(special_tokens_map, f)
     with open(vocab_dir / "tokenizer_config.json", "w") as f:
         json.dump(tokenizer_config, f)
+
+
+def add_special_cls(tokenizer, added_cls_tokens, outdir):
+    """
+    Add special tokens before vocab, preserving original special token IDs.
+
+    Args:
+    ----
+        tokenizer: Original tokenizer (BertTokenizerFast/WordLevel)
+        added_cls_tokens: List of new special tokens to add
+        outdir: Directory to save modified tokenizer
+    """
+    from transformers import AutoTokenizer
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # Save original to get JSON files
+    tokenizer.save_pretrained(outdir)
+
+    # Load tokenizer.json
+    tok_path = outdir / "tokenizer.json"
+    with open(tok_path) as f:
+        tok_data = json.load(f)
+
+    # Extract original vocab and find insertion point
+    vocab = tok_data["model"]["vocab"]
+    orig_specials = set(tokenizer.all_special_tokens)
+
+    # Find first non-special token ID (insertion point)
+    insert_id = min(id for token, id in vocab.items() if token not in orig_specials)
+    n_new = len(added_cls_tokens)
+
+    # Rebuild vocab: shift non-specials, insert new specials
+    new_vocab = {}
+    for token, id in vocab.items():
+        if token in orig_specials:
+            new_vocab[token] = id  # Keep original special IDs
+        elif id < insert_id:
+            new_vocab[token] = id  # Keep tokens before insertion point
+        else:
+            new_vocab[token] = id + n_new  # Shift regular vocab
+
+    # Insert new special tokens
+    for i, token in enumerate(added_cls_tokens):
+        new_vocab[token] = insert_id + i
+
+    tok_data["model"]["vocab"] = new_vocab
+
+    # Update added_tokens to include new specials
+    added_tokens = tok_data.get("added_tokens", [])
+    existing_tokens = {t["content"] for t in added_tokens}
+
+    for i, token in enumerate(added_cls_tokens):
+        if token not in existing_tokens:
+            added_tokens.append(
+                {
+                    "id": insert_id + i,
+                    "content": token,
+                    "single_word": False,
+                    "lstrip": False,
+                    "rstrip": False,
+                    "normalized": False,
+                    "special": True,
+                }
+            )
+
+    # Sort by ID and update
+    added_tokens.sort(key=lambda x: x["id"])
+    tok_data["added_tokens"] = added_tokens
+
+    # Save modified tokenizer.json
+    with open(tok_path, "w") as f:
+        json.dump(tok_data, f, indent=2, ensure_ascii=False)
+
+    # Update special_tokens_map.json
+    special_map_path = outdir / "special_tokens_map.json"
+    if special_map_path.exists():
+        with open(special_map_path) as f:
+            special_map = json.load(f)
+
+        # Add new tokens to additional_special_tokens
+        if "additional_special_tokens" not in special_map:
+            special_map["additional_special_tokens"] = []
+
+        existing_add = set(special_map["additional_special_tokens"])
+        for token in added_cls_tokens:
+            if token not in existing_add:
+                special_map["additional_special_tokens"].append(token)
+
+        with open(special_map_path, "w") as f:
+            json.dump(special_map, f, indent=2, ensure_ascii=False)
+
+    # Update tokenizer_config.json with new vocab size and added_tokens_decoder
+    config_path = outdir / "tokenizer_config.json"
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+
+        config["vocab_size"] = len(new_vocab)
+
+        # Update added_tokens_decoder
+        if "added_tokens_decoder" not in config:
+            config["added_tokens_decoder"] = {}
+
+        for i, token in enumerate(added_cls_tokens):
+            token_id = str(insert_id + i)
+            config["added_tokens_decoder"][token_id] = {
+                "content": token,
+                "lstrip": False,
+                "normalized": False,
+                "rstrip": False,
+                "single_word": False,
+                "special": True,
+            }
+
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+
+    # Reload and properly register special tokens, then save again
+    reloaded = AutoTokenizer.from_pretrained(outdir)
+    reloaded.add_special_tokens({"additional_special_tokens": added_cls_tokens})
+    reloaded.save_pretrained(outdir)
+
+
+def create_new_mft_with_extra_cls_tokens(
+    new_tokenizer_path, initial_tokenizer_identifier="all_genes"
+):
+    from ..load import load_tokenizer
+
+    mft = load_tokenizer(initial_tokenizer_identifier)
+    special_cls_tokens = [f"[CLS_{i}]" for i in range(1, 21)]
+    special_cls_tokens += [
+        "[CLS_CELL_TYPE]",
+        "[CLS_DISEASE]",
+        "[CLS_TISSUE_TYPE]",
+        "[CLS_GENDER]",
+    ]
+
+    for k, subtok in mft.tokenizers.items():
+        new_tokenizer_path = Path(new_tokenizer_path)
+        outdir = new_tokenizer_path / "tokenizers" / k
+        outdir.mkdir(parents=True, exist_ok=True)
+        add_special_cls(subtok, special_cls_tokens, outdir)

@@ -459,6 +459,7 @@ class LabelDecoder(nn.Module):
         output_size = label_column.output_size
         cls = nn.Linear(config.hidden_size, output_size)
         cls.bias = nn.Parameter(torch.zeros(output_size))
+        self.decode_from = label_column.decode_from
         if label_column.gradient_reversal_coefficient is not None:
             self.decoder = nn.Sequential(
                 GradientReversal(label_column.gradient_reversal_coefficient), cls
@@ -528,10 +529,18 @@ class SCClassificationDecoder(nn.Module):
             label_decoder = LabelDecoder(config, label_column)
             self.label_decoders[label_column.label_column_name] = label_decoder
 
-    def forward(self, hidden_states: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self, pooled_output: torch.Tensor, sequence_output: torch.Tensor | None = None
+    ) -> dict[str, torch.Tensor]:
         label_logits = {}
         for label_decoder_name, label_decoder in self.label_decoders.items():
-            label_logits[label_decoder_name] = label_decoder(hidden_states)
+            if hasattr(label_decoder, "decode_from") and isinstance(
+                label_decoder.decode_from, int
+            ):
+                decode_from_tensor = sequence_output[:, label_decoder.decode_from, :]
+            else:
+                decode_from_tensor = pooled_output
+            label_logits[label_decoder_name] = label_decoder(decode_from_tensor)
         return label_logits
 
 
@@ -611,8 +620,10 @@ class SCMultiTaskClassificationHead(nn.Module):
         super().__init__()
         self.predictions = SCClassificationDecoder(config)
 
-    def forward(self, pooled_output: torch.Tensor) -> torch.Tensor:
-        prediction_scores = self.predictions(pooled_output)
+    def forward(
+        self, pooled_output: torch.Tensor, sequence_output: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        prediction_scores = self.predictions(pooled_output, sequence_output)
         return prediction_scores
 
 
@@ -658,7 +669,7 @@ class SCMultiTaskHead(nn.Module):
         mvc_query_embeddings: torch.Tensor | None = None,
     ):
         predictions = self.predictions(sequence_output, mvc_query_embeddings)
-        predictions.update(self.label_predictions(pooled_output))
+        predictions.update(self.label_predictions(pooled_output, sequence_output))
         return predictions
 
 

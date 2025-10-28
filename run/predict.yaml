@@ -26,6 +26,3 @@ accelerator: gpu
 input_file: null
 working_dir: /tmp
 checkpoint: null
-batch_column_name: sample
-counts_column_name: ncounts
-target_column_name: celltype

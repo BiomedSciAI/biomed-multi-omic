@@ -7,6 +7,7 @@ from bmfm_targets.tokenization import MultiFieldTokenizer
 
 GENE2VEC_VOCAB_PATH = Path(__file__).parent / "gene2vec_vocab"
 ALL_GENES_VOCAB_PATH = Path(__file__).parent / "all_genes_vocab"
+ALL_GENES_V2_VOCAB_PATH = Path(__file__).parent / "all_genes_v2_vocab"
 SNP_VOCAB_PATH = Path(__file__).parent / "snp_vocab"
 REF_VOCAB_PATH = Path(__file__).parent / "ref_vocab"
 SNP_BPE_VOCAB_PATH = SNP_VOCAB_PATH / "tokenizers/dna_chunks"
@@ -23,6 +24,11 @@ def get_gene2vec_tokenizer():
 def get_all_genes_tokenizer():
     """Load the all_genes tokenizer."""
     return MultiFieldTokenizer.from_pretrained(ALL_GENES_VOCAB_PATH)
+
+
+def get_all_genes_v2_tokenizer():
+    """Load the all_genes tokenizer."""
+    return MultiFieldTokenizer.from_pretrained(ALL_GENES_V2_VOCAB_PATH)
 
 
 def get_snp2vec_tokenizer() -> MultiFieldTokenizer:
@@ -55,7 +61,7 @@ def get_refgen2vec_BPEtokenizer() -> PreTrainedTokenizerFast:
     return ref2vec_tokenizer
 
 
-def load_tokenizer(identifier="all_genes") -> MultiFieldTokenizer:
+def load_tokenizer(identifier="all_genes", prepend_tokens=None) -> MultiFieldTokenizer:
     """
     Load a tokenizer from a pretrained model or a directory containing a tokenizer.
 
@@ -64,10 +70,22 @@ def load_tokenizer(identifier="all_genes") -> MultiFieldTokenizer:
         identifier (str, optional): name of packaged tokenizer ("gene2vec" or "all_genes"
             or path to pretrained model or tokenizer directory. Defaults to "gene2vec".
     """
+    tokenizer = _load_tokenizer_from_identifier(identifier)
+    if prepend_tokens is not None:
+        from .multifield_tokenizer import set_custom_cls_post_processor
+
+        for subtok in tokenizer.tokenizers.values():
+            set_custom_cls_post_processor(subtok, prepend_tokens)
+    return tokenizer
+
+
+def _load_tokenizer_from_identifier(identifier) -> MultiFieldTokenizer:
     if identifier == "gene2vec":
         return get_gene2vec_tokenizer()
     if identifier == "all_genes":
         return get_all_genes_tokenizer()
+    if identifier == "all_genes_v2":
+        return get_all_genes_v2_tokenizer()
     if identifier == "snp2vec":
         return get_snp2vec_tokenizer()
     if identifier == "ref2vec":

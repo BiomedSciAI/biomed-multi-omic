@@ -200,11 +200,9 @@ class SCBertMainConfig:
         checkpoint = self._get_checkpoint()
         if checkpoint:
             if os.path.isfile(checkpoint):
-                checkpoint_dir = os.path.dirname(checkpoint)
+                identifier = os.path.dirname(checkpoint)
             else:
-                checkpoint_dir = download_tokenizer_from_huggingface(checkpoint)
-            tokenizer = load_tokenizer(checkpoint_dir)
-            # switch field's update_vocab_strategy to static
+                identifier = download_tokenizer_from_huggingface(checkpoint)
             for f in self.fields:
                 if f.vocab_update_strategy == "dynamic":
                     logger.warning(
@@ -212,9 +210,10 @@ class SCBertMainConfig:
                         "Switching to static vocab update strategy as you are loading from a checkpoint."
                     )
                 f.vocab_update_strategy = "static"
-            return tokenizer
         else:
-            return load_tokenizer(self.tokenizer.identifier)
+            identifier = self.tokenizer.identifier
+
+        return load_tokenizer(identifier, self.tokenizer.prepend_tokens)
 
     def _get_checkpoint(self):
         task_ckpt = getattr(self.task, "checkpoint", None)

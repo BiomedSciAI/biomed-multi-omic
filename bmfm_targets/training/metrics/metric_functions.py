@@ -239,6 +239,8 @@ def mse_loss(logits, labels, ignore_index=-100.0, ignore_zero=False):
 
     # if summing in half precision, it can overflow
     n_valid_elements = (~ignore_mask).to(torch.float32).sum()
+    if labels.shape != logits.shape:
+        labels = labels.view(logits.shape)
     field_loss_unreduced = F.mse_loss(logits, labels.to(logits.dtype), reduction="none")
     field_masked_loss = field_loss_unreduced * (~ignore_mask)
     field_loss_sum = field_masked_loss.sum()

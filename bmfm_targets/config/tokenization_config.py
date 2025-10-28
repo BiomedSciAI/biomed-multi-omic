@@ -14,9 +14,12 @@ class TokenizerConfig:
         identifier (str) : identifier for tokenizer. Either a simple string naming a
             packaged tokenizer ('gene2vec' or 'all_genes') or a path to a directory
             containing files required to instantiate MultifieldTokenizer.
+        prepend_tokens (list(str)) : modified prepend tokens for multiple CLS-like tokens.
+            These tokens must be present in the original tokenizers vocab for special tokens
     """
 
     identifier: str = "all_genes"
+    prepend_tokens: list[str] | None = None
 
 
 @dataclass
@@ -302,6 +305,8 @@ class LabelColumnInfo:
     n_unique_values: int | None = None
     silent_label_values: list[str] | None = None
     multilabel_str_sep: str = "|"
+    label_ontology: str | None = None
+    decode_from: int | None = None
 
     def __setstate__(self, state):
         # Handle legacy field name "output_size"
