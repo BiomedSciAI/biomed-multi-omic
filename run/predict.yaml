@@ -1,6 +1,7 @@
 defaults:
   - data_module: base_seq_cls
   - task: predict
+  - trainer: default
   - _self_
 
 seed:
@@ -21,6 +22,9 @@ task:
   output_embeddings: true
   output_predictions: true
   default_root_dir: ${working_dir}
+
+trainer:
+  pooling_method: pooling_layer # set to token index for multiple cls decoding
 
 accelerator: gpu
 input_file: null

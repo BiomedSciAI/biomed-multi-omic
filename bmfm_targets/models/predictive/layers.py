@@ -294,6 +294,10 @@ def get_embeddings_from_outputs(outputs, attention_mask, pooling_method):
         last_hidden_states = outputs.hidden_states[-1]
         # use everything except CLS token
         return masked_mean(last_hidden_states[:, 1:, :], attention_mask[:, 1:])
+    elif isinstance(pooling_method, int):
+        decode_index = pooling_method
+        last_hidden_states = outputs.hidden_states[-1]
+        return last_hidden_states[:, decode_index, :]
     raise ValueError(f"Unsupported pooler type: {pooling_method}")
 
 
