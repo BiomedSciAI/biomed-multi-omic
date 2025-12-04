@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 import pytorch_lightning as pl
@@ -17,6 +17,7 @@ from bmfm_targets.datasets import DatasetTransformer, PerturbationDatasetTransfo
 from bmfm_targets.datasets.base_dna_dataset import BaseDNASeqDataset
 from bmfm_targets.datasets.base_perturbation_dataset import BasePerturbationDataset
 from bmfm_targets.datasets.base_rna_dataset import BaseRNAExpressionDataset
+from bmfm_targets.datasets.label_ontology import LabelOntology
 from bmfm_targets.tokenization import MultiFieldCollator, MultiFieldTokenizer
 from bmfm_targets.tokenization.resources import (
     get_L1000_genes,
@@ -35,6 +36,12 @@ class DataModule(pl.LightningDataModule):
     DATASET_FACTORY: type[BaseRNAExpressionDataset] = BaseRNAExpressionDataset
     DATASET_TRANSFORMER_FACTORY: type[DatasetTransformer] = DatasetTransformer
 
+    class LabelOntologyTuple(NamedTuple):
+        """Label ontology artifacts."""
+
+        label_dict: dict[str, int]
+        label_ontology: dict[str, LabelOntology]
+
     def __init__(
         self,
         tokenizer: MultiFieldTokenizer,
@@ -50,7 +57,7 @@ class DataModule(pl.LightningDataModule):
         | Literal["protein_coding"]
         | None = "tokenizer",
         balancing_label_column: str | None = None,
-        max_length: int = 512,
+        max_length: int | Literal["scheduled"] = 512,
         padding: PaddingStrategy | str | bool = "max_length",
         truncation: TruncationStrategy | bool = True,
         pad_to_multiple_of: int = 16,
@@ -71,16 +78,18 @@ class DataModule(pl.LightningDataModule):
         prevent_attention_to_masked: bool = False,
         comask_across_fields: bool = False,
         log_normalize_transform: bool = False,
+        median_normalization: bool = False,
         rda_transform: Literal["downsample"]
         | Literal["auto_align"]
         | Literal["equal"]
         | int
         | None = None,
         map_orthologs: str | None = None,
-        batch_size: int = 32,
+        batch_size: int | Literal["scheduled"] = 32,
         num_workers: int = 0,
         shuffle: bool = False,
         tokenize_kwargs: dict | None = None,
+        bootstrap_test_dataloader: bool = False,
         **kwargs,  # to enable stashing hydra config settings
     ):
         """
@@ -128,8 +137,9 @@ class DataModule(pl.LightningDataModule):
         balancing_label_column : str | None, optional
             Column to use for balancing the dataset, by default None.
             Ensures that each label from this column is equally likely to appear in training batches.
-        max_length : int, optional
+        max_length : int | "scheduled", optional
             Maximum length of input sequences, by default 512.
+            - "scheduled": then the `batch_size` will be controlled by the callback `BatchSizeScheduler`.
         padding : PaddingStrategy | str | bool, optional
             Padding strategy for input sequences, by default "max_length".
             Options: "max_length", "longest", True, False.
@@ -187,6 +197,8 @@ class DataModule(pl.LightningDataModule):
             consistent sorting. Defaults to False.
         log_normalize_transform : bool, optional
             Whether to apply log normalization to expression data, by default False.
+        median_normalization: bool, optional
+            Whether to apply median normalization to expression data, by default False.
         rda_transform : "downsample" | "auto_align" | "equal" | int | None, optional
             RNA differential abundance transformation strategy, by default None.
             - "downsample": Applies RDA downsampling augmentation strategy as described in scFoundation.
@@ -200,8 +212,11 @@ class DataModule(pl.LightningDataModule):
             Mapping genes across species by leveraging orthologs and HUGO gene symbols (external gene names).
             - "mouse_to_human": Maps mouse genes to human genes using orthologs.
             - "human_to_mouse": Maps human genes to mouse genes using orthologs.
-        batch_size : int, optional
+        batch_size : int | "scheduled", optional
             Number of samples per batch, by default 32.
+            - int: number of samples per batch.
+            - "scheduled": then the `batch_size` will be controlled by the callback `BatchSizeScheduler`.
+            - None: defaults 32.
         num_workers : int, optional
             Number of worker processes for data loading, by default 0.
             0 means data loading happens in the main process.
@@ -227,6 +242,7 @@ class DataModule(pl.LightningDataModule):
         self.shuffle = shuffle
         self.sequence_order = sequence_order
         self.log_normalize_transform = log_normalize_transform
+        self.median_normalization = median_normalization
         self.rda_transform = rda_transform
         if isinstance(pad_zero_expression_strategy, str):
             logger.warning(
@@ -275,6 +291,8 @@ class DataModule(pl.LightningDataModule):
             )
         self.map_orthologs = map_orthologs
         self.tokenize_kwargs = tokenize_kwargs
+        self.label_ontology_artifacts = self._setup_label_ontology()
+        self.bootstrap_test_dataloader = bootstrap_test_dataloader
         self.__post_init__()
 
     def __post_init__(self):
@@ -287,6 +305,30 @@ class DataModule(pl.LightningDataModule):
         ):
             return [self.masking_strategy.get_trainer_callback()]
         return []
+
+    def _setup_label_ontology(self) -> LabelOntologyTuple | None:
+        """
+        Checks all labels for label_ontology, if found, creates a dictionary with label ontologies
+        and additional label_dict from ontology for all such labels.
+        """
+        if not self.label_columns:
+            return None
+
+        columns = [i for i in self.label_columns if i.label_ontology]
+        if not columns:
+            return None
+
+        label_ontology = {
+            i.label_column_name: LabelOntology.load_ontology(i.label_ontology)
+            for i in columns
+        }
+        label_dict = {
+            label_name: ontology.get_label_dictionary()
+            for label_name, ontology in label_ontology.items()
+        }
+
+        out = DataModule.LabelOntologyTuple(label_dict, label_ontology)
+        return out
 
     def get_dataset_instance(self) -> BaseRNAExpressionDataset:
         """
@@ -328,7 +370,17 @@ class DataModule(pl.LightningDataModule):
         """
         dataset = self.get_dataset_instance()
 
-        return getattr(dataset, "label_dict", None)
+        ontology_dict = (
+            self.label_ontology_artifacts.label_ontology
+            if self.label_ontology_artifacts
+            else None
+        )
+        label_dict = getattr(dataset, "label_dict", ontology_dict)
+
+        if ontology_dict and label_dict is not ontology_dict:
+            label_dict.update(self.label_ontology_artifacts.label_dict)
+
+        return label_dict
 
     @property
     def label_output_size(self) -> dict[str, int] | None:
@@ -663,6 +715,11 @@ class DataModule(pl.LightningDataModule):
         -------
             DataLoader: DataLoader for validation
         """
+        if self.bootstrap_test_dataloader:
+            return self._bootstrap_test_dataloader()
+        return self._test_dataloader()
+
+    def _test_dataloader(self) -> DataLoader:
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
@@ -673,7 +730,7 @@ class DataModule(pl.LightningDataModule):
             pin_memory=True,
         )
 
-    def bootstrap_test_dataloader(self):
+    def _bootstrap_test_dataloader(self):
         num_samples = len(self.test_dataset)
         weights = torch.ones(num_samples)
         sampler = WeightedRandomSampler(
@@ -731,11 +788,15 @@ class DataModule(pl.LightningDataModule):
             masker=self.masker,
             sequence_order=self.sequence_order,
             log_normalize_transform=self.log_normalize_transform,
+            median_normalization=self.median_normalization,
             rda_transform=rda_transform,
             pad_zero_expression_strategy=self.pad_zero_expression_strategy,
             sequence_dropout_factor=self.sequence_dropout_factor,
             map_orthologs=self.map_orthologs,
             tokenize_kwargs=self.tokenize_kwargs,
+            label_ontology=self.label_ontology_artifacts.label_ontology
+            if self.label_ontology_artifacts
+            else None,
         )
 
 
@@ -767,6 +828,7 @@ class PerturbationDataModule(DataModule):
         sequence_order: str | None = None,
         sequence_dropout_factor: int | float | None = None,
         log_normalize_transform: bool = False,
+        median_normalization: bool = False,
         pad_zero_expression_strategy: str | None = None,
         balancing_label_column: str | None = None,
         perturbation_column_name: str = "perturbation",
@@ -795,6 +857,7 @@ class PerturbationDataModule(DataModule):
             sequence_order=sequence_order,
             sequence_dropout_factor=sequence_dropout_factor,
             log_normalize_transform=log_normalize_transform,
+            median_normalization=median_normalization,
             pad_zero_expression_strategy=pad_zero_expression_strategy,
             balancing_label_column=balancing_label_column,
             limit_genes=limit_genes,
@@ -805,6 +868,13 @@ class PerturbationDataModule(DataModule):
 
     def _prepare_dataset_kwargs(self):
         self.dataset_kwargs = super()._prepare_dataset_kwargs()
+        unsupported_kwargs = {*self.dataset_kwargs.keys()} - {
+            *self.DATASET_FACTORY.__init__.__annotations__.keys()
+        }
+        self.dataset_kwargs = {
+            k: v for k, v in self.dataset_kwargs.items() if k not in unsupported_kwargs
+        }
+        logger.warning(f"Unsupported dataset kwargs removed: {unsupported_kwargs}")
         self.dataset_kwargs["perturbation_column_name"] = self.perturbation_column_name
         return self.dataset_kwargs
 

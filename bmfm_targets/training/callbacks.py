@@ -1,4 +1,5 @@
 import logging
+import os
 import pathlib
 from typing import Any
 
@@ -12,10 +13,109 @@ from clearml.logger import Logger
 from lightning_utilities.core.rank_zero import rank_zero_only
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.utilities import types as pl_types
+from scipy.sparse import csr_matrix
 
-from bmfm_targets.datasets.datasets_utils import random_subsampling
+from bmfm_targets.datasets.datasets_utils import (
+    guess_if_raw,
+    make_group_means,
+    random_subsampling,
+)
+from bmfm_targets.training.metrics import perturbation_metrics as pm
 
 logger = logging.getLogger(__name__)
+
+
+class BatchSizeScheduler(pl.Callback):
+    def __init__(
+        self,
+        schedule: list[dict[str, int]] | None = None,
+        test_batch_size: int | None = None,
+        test_max_length: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.schedule = schedule
+        self._custom_epochs = False
+        self._schedule_expanded = False
+        self.test_batch_size = test_batch_size
+        self.test_max_length = test_max_length
+
+    def setup(self, trainer, pl_module, stage):
+        if stage == "test":
+            trainer.datamodule.max_length = self.test_max_length
+            trainer.datamodule.batch_size = self.test_batch_size
+
+    def _check_schedule(self, max_epochs: int):
+        if max_epochs < 1:
+            raise ValueError(
+                "To use batch size scheduler you must train for more than one epoch."
+            )
+
+        n_epochs_schedule = []
+        for i in range(len(self.schedule)):
+            if not self.schedule[i].get("n_epochs"):
+                self.schedule[i]["n_epochs"] = 1
+            n_epochs_schedule.append(self.schedule[i]["n_epochs"])
+        n_epochs_schedule = sum(n_epochs_schedule)
+
+        if n_epochs_schedule > len(self.schedule):
+            self._custom_epochs = True
+
+        if n_epochs_schedule != max_epochs and self._custom_epochs:
+            raise ValueError(
+                "When defining a custom schedule, you must ensure the total `n_epochs` sums to `max_epochs`."
+            )
+
+        if n_epochs_schedule > max_epochs:
+            raise ValueError(
+                "Total epochs given in the BatchSizeScheduler bigger than total epochs."
+            )
+
+    def _expand_schedule(self, epochs: int) -> None:
+        self._check_schedule(epochs)
+
+        if not self._custom_epochs and epochs > len(self.schedule):
+            q, r = divmod(epochs, len(self.schedule))
+            repeats = [q + (i < r) for i in range(len(self.schedule))]
+        else:
+            repeats = [s["n_epochs"] for s in self.schedule]
+
+        _schedule = [
+            (s["max_length"], s["batch_size"])
+            for s, r in zip(self.schedule, repeats)
+            for _ in range(r)
+        ]
+
+        self.schedule = _schedule
+        self._schedule_expanded = True
+
+    def _apply_schedule(self, trainer: pl.Trainer, schedule_idx: int) -> None:
+        max_length, batch_size = self.schedule[schedule_idx]
+        trainer.datamodule.max_length = max_length
+        trainer.datamodule.batch_size = batch_size
+
+    def on_fit_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        self._expand_schedule(trainer.max_epochs)
+        self._apply_schedule(trainer, trainer.current_epoch)
+
+    def on_train_epoch_start(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ) -> None:
+        desired_max_len, desired_batch_size = self.schedule[trainer.current_epoch]
+        actual_max_length = getattr(trainer.datamodule, "max_length", None)
+        actual_batch_size = getattr(trainer.datamodule, "batch_size", None)
+
+        if (
+            actual_max_length != desired_max_len
+            or actual_batch_size != desired_batch_size
+        ):
+            self._apply_schedule(trainer, trainer.current_epoch)
+            actual_max_length = getattr(trainer.datamodule, "max_length", None)
+            actual_batch_size = getattr(trainer.datamodule, "batch_size", None)
+
+        pl_module.log_dict(
+            {"max_length": actual_max_length, "batch_size": actual_batch_size},
+            prog_bar=False,
+        )
 
 
 class SavePretrainedModelCallback(pl.Callback):
@@ -318,30 +418,7 @@ class BatchIntegrationCallback(pl.Callback):
         the PCA into the original anndata to preserve the data integrity.
         """
         adata = adata_orig.copy()
-        x = adata.X.data
-        is_int = np.issubdtype(x.dtype, np.integer)
-
-        x_sample = x[:100_000] if x.size > 100_000 else x
-
-        max_val = x_sample.max()
-        mean_val = x_sample.mean()
-        median_val = np.median(x_sample)
-        pct_ones = np.mean(x_sample == 1)
-        pct_small_ints = np.mean(np.isin(x_sample, [1, 2, 3]))
-
-        # Scoring heuristic
-        raw_score = sum(
-            [
-                is_int,
-                max_val > 50,
-                pct_ones > 0.4,
-                mean_val < 2.5,
-                median_val <= 1,
-                pct_small_ints > 0.6,
-            ]
-        )
-
-        looks_raw = raw_score >= 4  # majority vote
+        looks_raw = guess_if_raw(adata.X.data)
 
         if looks_raw:
             logger.info("Detected raw counts — applying normalization and log1p.")
@@ -429,10 +506,103 @@ class BatchIntegrationCallback(pl.Callback):
             return np.zeros((adata.n_obs, 1))
 
 
+class SampleLevelLossCallback(pl.Callback):
+    """
+    Callback to calculate sample level loss metrics at the end of testing.
+
+    Requires trainer.batch_prediction_behavior to be set to "track" or "dump".
+
+    Works with MSE and BCE losses, currently assumes that the MSE loss ignores zero values.
+    """
+
+    def __init__(self, metric_key: str = "expressions_non_input_genes"):
+        self.metric_key = metric_key
+        self.output_file_name = None
+
+    def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        if self.metric_key not in pl_module.prediction_df:
+            logger.warning(
+                f"Metric {self.metric_key} not found in prediction_df, skipping sample level loss calculation."
+            )
+            return
+        pred_df = pl_module.prediction_df[self.metric_key].copy()
+        sample_loss_components = []
+        if "logits_expressions_mse" in pred_df.columns:
+            pred_df = pred_df.assign(
+                error=(pred_df["logits_expressions_mse"] - pred_df["label_expressions"])
+                ** 2
+            )
+            sample_mse = (
+                pred_df.query("label_expressions > 0")
+                .groupby(level=0)
+                .error.mean()
+                .rename("sample_mse")
+            )
+            sample_loss_components.append(sample_mse)
+
+        if "logits_expressions_is_zero_bce" in pred_df.columns:
+            import torch
+            from torch.nn.functional import binary_cross_entropy_with_logits
+
+            bce_loss = binary_cross_entropy_with_logits(
+                torch.tensor(pred_df["logits_expressions_is_zero_bce"].values),
+                torch.tensor(
+                    pred_df["label_expressions"].values == 0, dtype=torch.float
+                ),
+                reduction="none",
+            ).numpy()
+
+            pred_df = pred_df.assign(bce_loss=bce_loss)
+            sample_bce = (
+                pred_df.groupby(level=0).bce_loss.mean().rename("sample_is_zero_bce")
+            )
+            sample_loss_components.append(sample_bce)
+
+        if sample_loss_components:
+            sample_loss = pd.concat(sample_loss_components, axis=1)
+            sample_loss.assign(
+                sample_mean_loss=sample_loss.mean(axis=1),
+                sample_sum_loss=sample_loss.sum(axis=1),
+            )
+
+        output_file_name = pathlib.Path(trainer.log_dir) / "sample_level_loss.csv"
+
+        if self.output_file_name is not None:
+            output_file_name = pathlib.Path(self.output_file_name)
+
+        sample_loss.to_csv(output_file_name)
+
+        return super().on_test_end(trainer, pl_module)
+
+
 class SavePredictionsH5ADCallback(pl.Callback):
-    def __init__(self, output_file_name=None):
+    def __init__(
+        self,
+        output_file_name=None,
+        train_h5ad_file=None,
+        split_column_name: str | None = None,
+        perturbation_column_name="target_gene",
+        control_name: str | None = "non-targeting",
+        predictions_key: str = "label_expressions",
+    ):
         super().__init__()
         self.output_file_name = output_file_name
+        self.train_data = None
+        self.perturbation_column_name = perturbation_column_name
+        self.control_name = control_name
+        self.predictions_key = predictions_key
+        if train_h5ad_file:
+            self.train_data = sc.read_h5ad(train_h5ad_file)
+            logger.info(f"train_data size: {self.train_data.shape}")
+
+            group_means = make_group_means(
+                self.train_data, perturbation_column_name, split_column_name
+            )
+            logger.info(f"train_group_means size: {group_means.shape}")
+
+            self.grouped_ground_truth = pm.get_grouped_ground_truth(
+                group_means, remove_always_zero=False
+            )
 
     def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         self._save_predictions_h5ad(trainer, pl_module)
@@ -440,27 +610,172 @@ class SavePredictionsH5ADCallback(pl.Callback):
     def _save_predictions_h5ad(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ):
-        preds_df = pl_module.prediction_df["label_expressions"]
-        matrix = preds_df.pivot_table(
-            index=preds_df.index,
-            columns="input_genes",
-            values="predicted_expressions",
-            fill_value=0,
-        )
-        adata = sc.AnnData(
-            X=matrix.values,
-            obs=pd.DataFrame(index=matrix.index),  # samples
-            var=pd.DataFrame(index=matrix.columns),  # genes
-        )
-
-        adata.obs["target_gene"] = preds_df.groupby(preds_df.index)[
-            "perturbed_set"
-        ].first()
-
         output_file = pathlib.Path(trainer.log_dir) / "predictions.h5ad"
         if self.output_file_name is not None:
             output_file = pathlib.Path(self.output_file_name)
 
-        adata.write(output_file)
+        preds_df = pl_module.prediction_df[self.predictions_key]
+        assert isinstance(preds_df, pd.DataFrame)
+        logger.info(f"predictions_df size: {preds_df.shape}")
 
-        print(f"Saved predictions to {output_file}")
+        grouped_predictions = pm.get_grouped_predictions(
+            preds_df, self.grouped_ground_truth
+        )
+        preds_df = ensure_predicted_expressions_in_preds_df(
+            preds_df, self.grouped_ground_truth
+        )
+        adata = create_adata_from_predictions_df(
+            preds_df, grouped_predictions, self.perturbation_column_name
+        )
+        logger.info(f"anndata shape: {adata.shape}")
+        if self.train_data:
+            adata = add_control_samples(
+                adata, self.train_data, self.perturbation_column_name, self.control_name
+            )
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        adata.write(output_file)
+        logger.info(f"saved completed predictions to {output_file}")
+
+
+def ensure_predicted_expressions_in_preds_df(preds_df, grouped_ground_truth):
+    if "predicted_expressions" in preds_df.columns:
+        return preds_df
+    if "predicted_delta_baseline_expressions" in preds_df.columns:
+        avgpert = grouped_ground_truth["Average_Perturbation_Train"]
+        predictions = (
+            avgpert.loc[preds_df["input_genes"]].to_numpy()
+            + preds_df["predicted_delta_baseline_expressions"].to_numpy()
+        )
+        preds_df["predicted_expressions"] = predictions
+    return preds_df
+
+
+def create_adata_from_predictions_df(
+    preds_df, grouped_predicted_expressions, perturbation_col="target_gene"
+):
+    """
+    Create AnnData object from predictions DataFrame.
+
+    preds_df (pd.DataFrame): a long format matrix of gene predictions with columns
+    [input_genes, predicted_expressions, perturbed_genes] where index is sample ids.
+    grouped_predicted_expressions (pd.DataFrame): the mean of predicted expression for each gene in each perturbation, or baseline mean in case that gene
+    was not predicted at all in that perturbation. These values are used to infill samples in which some genes were not predicted.
+    perturbation_col (str): name of perturbation column in the dataset
+    """
+    # Get all unique samples and genes
+    all_samples = preds_df.index.unique().sort_values()
+    all_genes = (
+        grouped_predicted_expressions.index.get_level_values(1).unique().sort_values()
+    )
+    n_samples = len(all_samples)
+    n_genes = len(all_genes)
+    logger.info(
+        f"in create_adata_from_predictions_df. n_samples from perds_df: {n_samples}"
+    )
+    logger.info(f"n_genes from grouped_predicted_expressions: {n_genes}")
+
+    # Create sample to perturbation mapping
+    sample_to_pert = (
+        preds_df.reset_index()[["sample_id", "perturbed_genes"]]
+        .drop_duplicates()
+        .set_index("sample_id")["perturbed_genes"]
+    )
+
+    # Initialize dense matrix with pseudobulk values
+    # First, create a mapping of perturbation to pseudobulk expression
+    pert_to_pseudobulk = {}
+    for pert in sample_to_pert.unique():
+        pert_to_pseudobulk[pert] = grouped_predicted_expressions.loc[
+            pert, "predicted_expressions"
+        ]
+
+    # Create gene index mapping for fast lookup
+    gene_to_idx = {gene: idx for idx, gene in enumerate(all_genes)}
+    sample_to_idx = {sample: idx for idx, sample in enumerate(all_samples)}
+
+    # Initialize matrix with pseudobulk values
+    X = np.zeros((n_samples, n_genes))
+    for sample_idx, sample in enumerate(all_samples):
+        pert = sample_to_pert[sample]
+        pseudobulk = pert_to_pseudobulk[pert]
+        # Fill in pseudobulk values
+        for gene, value in pseudobulk.items():
+            if gene in gene_to_idx:
+                X[sample_idx, gene_to_idx[gene]] = value
+
+    # Overwrite with specific predictions from preds_df
+    # Vectorized approach: get all row/col indices at once
+    row_indices = [sample_to_idx[sample] for sample in preds_df.index]
+    col_indices = [gene_to_idx[gene] for gene in preds_df["input_genes"]]
+    values = preds_df["predicted_expressions"].values
+    logger.info(f"row_indices: {len(row_indices)}, col_indices {len(col_indices)}")
+
+    # Assign all values at once
+    X[row_indices, col_indices] = values
+
+    # Create AnnData object
+    adata = sc.AnnData(
+        X=X, obs=pd.DataFrame(index=all_samples), var=pd.DataFrame(index=all_genes)
+    )
+
+    adata.X = csr_matrix(adata.X)
+    # Add perturbation metadata
+    adata.obs[perturbation_col] = sample_to_pert
+    logger.info(f"generated adata size: {adata.shape}")
+
+    # Assertions
+    assert adata.shape[0] == preds_df.index.nunique()
+    assert (
+        adata.shape[1]
+        == grouped_predicted_expressions.index.get_level_values(1).unique().shape[0]
+    )
+
+    return adata
+
+
+def add_control_samples(
+    adata: sc.AnnData,
+    train_adata: sc.AnnData,
+    perturbation_column_name="target_gene",
+    control_name="non-targeting",
+) -> sc.AnnData:
+    """
+    Safely adds non-targeting control cells from train_adata to adata.
+
+    This function treats the gene order of the non-targeting control cells
+    as the "master" list. The other AnnData object (`adata`) will be
+    re-indexed to match this master gene order before concatenation.
+
+    Args:
+    ----
+        adata: The AnnData object to be conformed and used in the concatenation.
+        train_adata: The AnnData object containing the master non-targeting cells.
+
+    Returns:
+    -------
+        A new AnnData object with the combined data, with a gene order
+        matching that of the non-targeting controls.
+
+    """
+    adata_control = train_adata[
+        train_adata.obs[perturbation_column_name] == "Control"
+    ].copy()
+    adata_control.obs[perturbation_column_name] = control_name
+    # logger.warning(
+    #     f"In adata but not in adata_control: {set(adata.var_names) - set(adata_control.var_names)}"
+    # )
+    # logger.warning(
+    #     f"In adata_control but not in adata: {set(adata_control.var_names) - set(adata.var_names)}"
+    # )
+    assert {*adata.var_names} == {*adata_control.var_names}
+
+    adata = adata[:, adata_control.var_names]
+
+    adata_combined = sc.concat(
+        [adata, adata_control],
+        axis=0,
+        join="outer",  # With aligned vars, 'outer' and 'inner' are equivalent for genes
+        merge="same",
+    )
+
+    return adata_combined

@@ -14,9 +14,12 @@ class TokenizerConfig:
         identifier (str) : identifier for tokenizer. Either a simple string naming a
             packaged tokenizer ('gene2vec' or 'all_genes') or a path to a directory
             containing files required to instantiate MultifieldTokenizer.
+        prepend_tokens (list(str)) : modified prepend tokens for multiple CLS-like tokens.
+            These tokens must be present in the original tokenizers vocab for special tokens
     """
 
     identifier: str = "all_genes"
+    prepend_tokens: list[str] | None = None
 
 
 @dataclass
@@ -112,6 +115,29 @@ class PreTrainedEmbeddingConfig:
         return embedding_indices_to_freeze, pre_trained_indices_to_use
 
 
+@dataclass
+class DatastoreConfig:
+    """
+    Configuration for datastore-based features (e.g., epigenetic annotations).
+
+    Attributes
+    ----------
+    path : str
+        Path to a Parquet file produced by scripts under `datasets.epigenetics`.
+    bio_context_column_in_datastore : str
+        Name of the column identifying the biological context (e.g., biosample).
+    token_index_column : str
+        Name of the column indexing tokens (typically `gene_symbol`).
+    log1p_transform : bool
+        Whether to apply a log1p transformation to feature values when loading.
+    """
+
+    path: str
+    bio_context_column_in_datastore: str = "biosample_name"
+    token_index_column: str = "gene_symbol"
+    log1p_transform: bool = False
+
+
 @dataclass(eq=True, repr=True)
 class FieldInfo:
     """
@@ -205,6 +231,7 @@ class FieldInfo:
     tokenization_strategy: str = "tokenize"
     num_special_tokens: int = 0
     encoder_kwargs: dict | None = None
+    datastore_config: DatastoreConfig | None = None
 
     def __post_init__(self):
         if isinstance(self.decode_modes, list):
@@ -217,7 +244,13 @@ class FieldInfo:
         return bool(self.decode_modes)
 
     def update_vocab_size(self, multifield_tokenizer):
-        self.vocab_size = multifield_tokenizer.field_vocab_size(self.field_name)
+        if self.field_name in multifield_tokenizer.tokenizers:
+            self.vocab_size = multifield_tokenizer.field_vocab_size(self.field_name)
+        elif self.tokenization_strategy == "tokenize":
+            raise ValueError(
+                f"Must use a tokenizer or a continuous value encoder for field {self.field_name}."
+            )
+
         self.num_special_tokens = len(multifield_tokenizer.all_special_tokens)
 
     def to_dict(self):
@@ -249,47 +282,65 @@ class FieldInfo:
 @dataclass(eq=True, repr=True)
 class LabelColumnInfo:
     """
-    Represents configuration settings for a column in a dataset that will be used as a label during training.
+    Configuration for a dataset column used as a label during model training.
 
-    This dataclass encapsulates properties related to a label column, such as its name,
-    task type (classification or regression), and training-related parameters like stratification,
-    domain adaptation, and shared layer configurations for grouped labels.
+    This class defines metadata and training behavior for a specific label column,
+    including its task type (classification or regression), grouping, stratification,
+    and optional domain adaptation settings. It also supports multi-label and ontology-based
+    configurations.
 
-    Args:
-    ----
-        label_column_name (str): The name of the label column in the dataset.
-        task_group (Optional[str], optional): A grouping identifier for related labels.
-            If multiple label columns share the same `task_group`, an additional shared
-            layer is created to learn a common representation for these labels. Defaults to None.
-        is_stratification_label (bool, optional): If True, the label is used for stratified sampling
-            during data splitting, ensuring balanced label representation in each split.
-            Defaults to False.
-        is_regression_label (bool, optional): If True, the label is treated as a regression target;
-            otherwise, it is treated as a classification target. Defaults to False.
-        classifier_depth (int, optional): The number of layers in the classifier head for this label.
-            Must be a positive integer. Defaults to 1.
-        gradient_reversal_coefficient (Optional[float], optional): The gradient reversal coefficient for
-            domain adaptation, as described in https://arxiv.org/abs/1409.7495.
-            Must be a positive float; starting with 0.1 is recommended to avoid excessive gradient scaling.
-            Defaults to None.
-        n_unique_values (Optional[int], optional): Number of unique labels. Required for classification
-            tasks, can remain None for regression tasks.
-        silent_label_values (Optional[list]): label values to be silently overlooked during training
-            these label values will be set to -100 when passed to the model and will therefore not
-            affect training. Useful for datasets that contain "Unknown" as a label value or similar.
-            If batch_prediction_behavior is set to "dump", samples with these label values
-            will be dumped with "Silenced Label Value" in the target_label column.
-            This has no effect on the predictions generated by a predict run, where the predictions
-            will be generated based on the model's label_dict, regardless of silent labels.
-
-    Attributes:
+    Parameters
     ----------
-        output_size (int): The number of unique labels for classification tasks or 1 for regression tasks.
+    label_column_name : str
+        Name of the label column in the dataset.
+    task_group : str, optional
+        Identifier for grouping related label columns. If multiple columns share
+        the same `task_group`, a shared layer is added to learn a common representation.
+        Default is None.
+    is_stratification_label : bool, optional
+        Whether this label is used for stratified sampling during data splitting.
+        Default is False.
+    is_regression_label : bool, optional
+        Whether the label is treated as a regression target (otherwise classification).
+        Default is False.
+    is_multilabel : bool, optional
+        Whether the column contains multiple labels per sample, separated by a delimiter.
+        Default is False.
+    is_bio_context_for_datastore : bool, optional
+        Indicates whether this column defines a biological context for a datastore field.
+        Default is False.
+    classifier_depth : int, optional
+        Number of layers in the classifier head for this label. Must be positive.
+        Default is 1.
+    gradient_reversal_coefficient : float, optional
+        Coefficient for gradient reversal in domain adaptation, as described in
+        [Ganin et al. (2015)](https://arxiv.org/abs/1409.7495). A small value (e.g. 0.1)
+        is recommended to avoid excessive gradient scaling.
+        Default is None.
+    n_unique_values : int, optional
+        Number of unique label values. Required for classification tasks, ignored for regression.
+        Default is None.
+    silent_label_values : list of str, optional
+        Label values to be ignored during training. These are replaced with `-100` in model inputs
+        and excluded from loss computation. Typically used for values like `"Unknown"`.
+        Default is None.
+    multilabel_str_sep : str, optional
+        Delimiter for multi-label strings if `is_multilabel=True`. Default is `"|"`.
+    label_ontology : str, optional
+        Name of the ontology associated with this label column. Ontologies are stored in
+        subfolders under `datasets/cell_ontology`. Default is None.
 
-    Raises:
+    Attributes
+    ----------
+    output_size : int
+        The number of output units for this label — 1 for regression, or the number of unique
+        classes for classification.
+
+    Raises
     ------
-        ValueError: If `output_size` is accessed before it is set for classification tasks (i.e., not regression).
-
+    ValueError
+        If `output_size` is accessed for a classification label before `n_unique_values`
+        has been set.
     """
 
     label_column_name: str
@@ -297,14 +348,21 @@ class LabelColumnInfo:
     is_stratification_label: bool = False
     is_regression_label: bool = False
     is_multilabel: bool = False
+    is_bio_context_for_datastore: bool = False
     classifier_depth: int = 1
     gradient_reversal_coefficient: float | None = None
     n_unique_values: int | None = None
     silent_label_values: list[str] | None = None
     multilabel_str_sep: str = "|"
+    label_ontology: str | None = None
+    decode_from: int | None = None
 
     def __setstate__(self, state):
-        # Handle legacy field name "output_size"
+        """
+        Handle backward compatibility for legacy field names.
+
+        Converts legacy `"output_size"` field to `"n_unique_values"` on unpickling.
+        """
         if "output_size" in state:
             state["n_unique_values"] = state.pop("output_size")
         self.__dict__.update(state)
@@ -312,57 +370,54 @@ class LabelColumnInfo:
     @property
     def output_size(self) -> int:
         """
-        The number of unique labels for this column.
-
-        For regression tasks (`is_regression_label=True`), the output size is always 1.
-        For classification tasks, the output size is the internally stored `_output_size`
-        which must be set using `update_n_unique_values`.
+        Number of output units for this label.
 
         Returns
         -------
-            int: The number of unique labels (1 for regression, or the number of classes for classification).
+        int
+            `1` for regression labels, or the number of unique classes for classification.
 
         Raises
         ------
-            ValueError: If `output_size` is accessed before it is set for a classification task.
-
+        ValueError
+            If called before `n_unique_values` is set for a classification label.
         """
         if self.is_regression_label:
             return 1
         elif self.n_unique_values is not None:
             return self.n_unique_values
         raise ValueError(
-            "`n_unique_values` must be set, for non-regression classes. Run `update_n_unique_values` with valid label_dict!"
+            "`n_unique_values` must be set for non-regression labels. "
+            "Call `update_n_unique_values(label_dict)` first."
         )
 
-    def update_n_unique_values(self, label_dict):
+    def update_n_unique_values(self, label_dict: dict[str, list]):
         """
-        Updates the output size based on the provided label dictionary.
+        Update the number of unique labels for this column.
 
-        The `label_dict` should map label column names to lists of unique label values. This method sets the
-        output size to the length of the list corresponding to `label_column_name`.
+        Parameters
+        ----------
+        label_dict : dict[str, list]
+            Mapping of label column names to their unique label values.
+            The length of the list for this column determines `n_unique_values`.
 
-        Args:
-        ----
-            label_dict (Dict[str, List]): A dictionary where keys are label column names and values are lists
-                of unique label values.
-
-        Raises:
+        Raises
         ------
-            KeyError: If `label_column_name` is not found in `label_dict`.
+        KeyError
+            If `label_column_name` is not found in `label_dict`.
         """
         self.n_unique_values = len(label_dict[self.label_column_name])
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """
-        Converts the `LabelColumnInfo` instance to a dictionary, including the `output_size` property.
+        Convert this configuration object to a dictionary.
 
-        The resulting dictionary includes all public attributes and the computed `output_size`.
-        If `output_size` cannot be determined (e.g., not set for a classification task), it is set to None in the dictionary.
+        Includes all public attributes and the computed `output_size` value,
+        if available.
 
         Returns
         -------
-            Dict: A dictionary representation of the `LabelColumnInfo` instance.
-
+        dict
+            A dictionary representation of the configuration.
         """
         return asdict(self)

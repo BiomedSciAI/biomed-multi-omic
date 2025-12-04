@@ -4,6 +4,7 @@ Plots that are generated in the course of training.
 Generally based on the collected labels and predictions of a validation run.
 """
 
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -12,17 +13,39 @@ import seaborn as sb
 from bmfm_targets.training.metrics.metric_functions import calculate_95_ci
 
 
+def make_heatmap_plot(distances_df, x_label, y_label, title):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    im = ax.imshow(distances_df, cmap="coolwarm", aspect="auto", origin="lower")
+    plt.colorbar(im, ax=ax, label="L1 Distance")
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    if distances_df.shape[0] <= 60:  # skip labels for large data
+        ax.set_xticks(range(len(distances_df.columns)))
+        ax.set_xticklabels(distances_df.columns, rotation=45, ha="right", fontsize=8)
+        ax.set_yticks(range(len(distances_df.index)))
+        ax.set_yticklabels(distances_df.index, fontsize=8)
+    else:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    ax.set_title(title)
+    plt.tight_layout()
+    return plt.gcf()
+
+
 def make_predictions_gt_density_plot(
     predictions_df: pd.DataFrame,
     predicted_label="predicted_expressions",
     gt_label="label_expressions",
     kind="hist",
     include_x_y_line=True,
-    frac=1,
+    max_points=1_000_000,
 ):
     sb.set_context("paper")
-    sampled_df = predictions_df.sample(frac=frac, random_state=42)
-
+    if predictions_df.shape[0] > max_points:
+        sampled_df = predictions_df.sample(n=max_points, random_state=42)
+    else:
+        sampled_df = predictions_df
     g = sb.jointplot(
         data=sampled_df,
         y=predicted_label,

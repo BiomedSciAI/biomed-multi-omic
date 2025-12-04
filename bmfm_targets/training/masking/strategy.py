@@ -1,3 +1,4 @@
+import logging
 import re
 
 import torch
@@ -167,8 +168,10 @@ class WCEDMasker:
         should all be off.
         """
         kwargs = {
+            "label_columns": [],
             "sequence_order": None,
-            "log_normalize_transform": True,
+            "log_normalize_transform": None,
+            "median_normalization": None,
             "rda_transform": None,
             "pad_zero_expression_strategy": None,
             "max_length": None,
@@ -179,6 +182,13 @@ class WCEDMasker:
             "limit_input_tokens": None,
         }
         kwargs.update(self.sample_transforms_kwargs)
+        warn_if_unset_keys = ["log_normalize_transform", "median_normalization"]
+        for key in warn_if_unset_keys:
+            if kwargs[key] is None:
+                logging.warning(
+                    f"{key} is not set for WCED masker, defaulting to False"
+                )
+                kwargs[key] = False
         return kwargs
 
     def mask_inputs(

@@ -66,6 +66,10 @@ def get_model_from_config(
         scperformer,
     )
 
+    # LLaMa
+    if hasattr(model_config, "build_model"):
+        return model_config.build_model(modeling_strategy)
+
     # scbert
     if isinstance(model_config, config.SCBertConfig):
         if modeling_strategy == "mlm":
@@ -120,6 +124,15 @@ def get_base_model_from_config(model_config: config.SCModelConfigBase):
         scperformer,
     )
 
+    # LLaMa
+    # TODO Unclear why get_base_model_from_config is called only by sequence classification
+    # Why not to use get_model_from_config
+    # Also bmfm_targets/models/predictive/multitask.py:88: in post_init
+    # self.apply(self.base_model._init_weights) executed only for classification models
+    # This function should never be called anyway, init_weights should be called instead
+    if hasattr(model_config, "build_model"):
+        return model_config.build_model(strategy="sequence_classification")
+
     if isinstance(model_config, config.SCBertConfig):
         base_model = scbert.modeling_scbert.SCBertModel(
             model_config, add_pooling_layer=True
@@ -148,7 +161,7 @@ class MaskedLMOutputWithEmbeddings(SequenceClassifierOutput):
     embeddings: torch.FloatTensor | None = None
 
 
-def instantiate_classification_model(model_config, loss_tasks):
+def instantiate_classification_model(model_config, loss_tasks, device=None):
     from bmfm_targets.models.predictive import MultiTaskClassifier
 
     if loss_tasks:
@@ -157,6 +170,7 @@ def instantiate_classification_model(model_config, loss_tasks):
                 model_config.checkpoint,
                 loss_tasks=loss_tasks,
                 model_config=model_config,
+                device=device,
             )
         else:
             base_model = get_base_model_from_config(model_config)

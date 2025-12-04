@@ -7,7 +7,7 @@ import torch
 from transformers.tokenization_utils_base import PaddingStrategy, TruncationStrategy
 
 from bmfm_targets.config import FieldInfo, LabelColumnInfo
-from bmfm_targets.training.sample_transforms import transform_inputs
+from bmfm_targets.datasets.label_ontology import LabelOntology
 
 from .multifield_instance import MultiFieldInstance
 from .multifield_tokenizer import MultiFieldTokenizer
@@ -57,6 +57,7 @@ class MultiFieldCollator:
         sequence_order: str | None = None,
         sequence_dropout_factor: float | int | None = None,
         log_normalize_transform: bool = False,
+        median_normalization: bool = False,
         rda_transform: Literal["downsample", "poisson_downsample", "equal"]
         | int
         | None = None,
@@ -64,6 +65,7 @@ class MultiFieldCollator:
         tokenize_kwargs: dict | None = None,
         renoise: float | None = 0.6,
         limit_input_tokens: list | None = None,
+        label_ontology: dict[str, LabelOntology] | None = None,
     ):
         """
         Multifield Data collator.
@@ -107,12 +109,14 @@ class MultiFieldCollator:
         self.sequence_dropout_factor = sequence_dropout_factor
         self.rda_transform = rda_transform
         self.log_normalize_transform = log_normalize_transform
+        self.median_normalization = median_normalization
         self.collation_strategy = collation_strategy
         self.label_dict = label_dict
         self.map_orthologs = map_orthologs
         self.tokenize_kwargs = tokenize_kwargs if tokenize_kwargs is not None else {}
         self.renoise = renoise
         self.limit_input_tokens = limit_input_tokens
+        self.label_ontology = label_ontology
         self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
         self.__post__init__()
 
@@ -164,9 +168,7 @@ class MultiFieldCollator:
                 logger.warning(f"Label dict missing for label_column_name {col}")
             id_list = [
                 self._label_id_from_example(
-                    example,
-                    label_info,
-                    label_dict,
+                    example, label_info, label_dict, self.label_ontology
                 )
                 for example in examples
             ]
@@ -179,6 +181,7 @@ class MultiFieldCollator:
         example: MultiFieldInstance,
         label_info: LabelColumnInfo,
         single_label_dict: dict[str, int],
+        label_ontology: dict[str, LabelOntology] | None = None,
     ) -> int | float | list[float]:
         """
         Return label ID (or one-hot list) for a single example and label column.
@@ -200,6 +203,17 @@ class MultiFieldCollator:
 
         if label_info.is_regression_label:
             return val
+
+        if label_info.label_ontology:
+            ontology = label_ontology[label_info.label_column_name]
+            ont_leaves = ontology.find_leaves(val_str)
+            # allocate space for all probs + flag to handle no label case
+            # in loss
+            probs = torch.zeros(len(single_label_dict) + 1)
+            indices = [single_label_dict[i] for i in ont_leaves]
+            probs[indices] = 1.0
+            probs[-1] = bool(len(ont_leaves))
+            return probs.tolist()
 
         if label_info.is_multilabel:
             indices = {
@@ -240,6 +254,9 @@ class MultiFieldCollator:
         """
         examples_pair = None
         pre_transformed_examples = examples
+        # to avoid circular import
+        from bmfm_targets.training.sample_transforms import transform_inputs
+
         if isinstance(examples[0], MultiFieldInstance):
             examples = transform_inputs(examples, **self._transform_inputs_kwargs)
         else:
@@ -277,8 +294,10 @@ class MultiFieldCollator:
     def _transform_inputs_kwargs(self):
         return {
             "fields": self.fields,
+            "label_columns": self.label_columns,
             "sequence_order": self.sequence_order,
             "log_normalize_transform": self.log_normalize_transform,
+            "median_normalization": self.median_normalization,
             "rda_transform": self.rda_transform,
             "pad_zero_expression_strategy": self.pad_zero_expression_strategy,
             "max_length": self.max_length,

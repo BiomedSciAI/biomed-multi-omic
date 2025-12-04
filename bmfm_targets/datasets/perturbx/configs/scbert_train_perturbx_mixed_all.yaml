@@ -1,0 +1,156 @@
+defaults:
+  - base_scbert_config
+  - _self_
+
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes
+# fields are supplied outside as it is needed by both data module and model
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "genes"
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "expressions"
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: scale_adapt
+      n_sin_basis: 48
+      basis_scale: 1.5
+      trainable: true
+      zero_as_special_token: true
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "perturbations"
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "label_expressions"
+    is_input: false
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: mlp_with_special_token_embedding
+      zero_as_special_token: true
+    decode_modes:
+      - "regression"
+      - "is_zero"
+
+data_module:
+  _target_: bmfm_targets.datasets.perturbx.PerturbxDataModule
+  _partial_: true
+  padding: longest
+  num_workers: 8
+  max_length: 4096
+  sequence_order: random
+  batch_size: 20
+  collation_strategy: "sequence_labeling"
+  transform_datasets: false
+  log_normalize_transform: false
+  limit_genes: tokenizer
+  shuffle: True
+  dataset_kwargs:
+    iterate_over_all: True
+    aggregate_file_path: ${oc.env:H1_DATASET}/agg_h1.h5ad
+    dataset_pars:
+      - dataset_path: ${oc.env:REPLOGLE_DATASET}/shuffled_transformed_K562_gwps_raw_singlecell_01.h5ad
+        index_dir: ${oc.env:REPLOGLE_DATASET}/shuffled_transformed_K562_gwps_raw_singlecell_01_train
+        split: train
+      - dataset_path: ${oc.env:REPLOGLE_DATASET}/shuffled_transformed_rpe1_raw_singlecell_01.h5ad
+        index_dir: ${oc.env:REPLOGLE_DATASET}/shuffled_transformed_rpe1_raw_singlecell_01_train
+        split: train
+      - dataset_path: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_A549_Perturb_seq.h5ad
+        index_dir: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_A549_Perturb_seq_train
+        split: train
+      - dataset_path: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_BXPC3_Perturb_seq.h5ad
+        index_dir: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_BXPC3_Perturb_seq_train
+        split: train
+      - dataset_path: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_MCF7_Perturb_seq.h5ad
+        index_dir: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_MCF7_Perturb_seq_train
+        split: train
+      - dataset_path: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_HT29_Perturb_seq.h5ad
+        index_dir: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_HT29_Perturb_seq_train
+        split: train
+      - dataset_path: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_K562_Perturb_seq.h5ad
+        index_dir: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_K562_Perturb_seq_train
+        split: train
+      - dataset_path: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_HAP1_Perturb_seq.h5ad
+        index_dir: ${oc.env:JIANG_DATASET}/shuffled_transformed_Seurat_object_HAP1_Perturb_seq_train
+        split: train
+      - dataset_path: ${oc.env:NADIG_DATASET}/shuffled_transformed_GSE264667_hepg2_raw_singlecell_01.h5ad
+        index_dir: ${oc.env:NADIG_DATASET}/shuffled_transformed_GSE264667_hepg2_raw_singlecell_01_train
+        split: train
+      - dataset_path: ${oc.env:NADIG_DATASET}/shuffled_transformed_GSE264667_jurkat_raw_singlecell_01.h5ad
+        index_dir: ${oc.env:NADIG_DATASET}/shuffled_transformed_GSE264667_jurkat_raw_singlecell_01_train
+        split: train
+      - dataset_path: ${oc.env:TIAN_DATASET}/shuffled_transformed_TianKampmann2019_day7neuron.h5ad
+        index_dir: ${oc.env:TIAN_DATASET}/shuffled_transformed_TianKampmann2019_day7neuron_train
+        split: train
+      - dataset_path: ${oc.env:TIAN_DATASET}/shuffled_transformed_TianKampmann2019_iPSC.h5ad
+        index_dir: ${oc.env:TIAN_DATASET}/shuffled_transformed_TianKampmann2019_iPSC_train
+        split: train
+      - dataset_path: ${oc.env:TIAN_DATASET}/shuffled_transformed_TianKampmann2021_CRISPRi.h5ad
+        index_dir: ${oc.env:TIAN_DATASET}/shuffled_transformed_TianKampmann2021_CRISPRi_train
+        split: train
+      - dataset_path: ${oc.env:SHIFRUT_DATASET}/shuffled_transformed_GSE119450_perturbseq.h5ad
+        index_dir: ${oc.env:SHIFRUT_DATASET}/shuffled_transformed_GSE119450_perturbseq_train
+        split: train
+      - dataset_path: ${oc.env:H1_DATASET}/shuffled_transformed_h1.h5ad
+        index_dir: ${oc.env:H1_DATASET}/shuffled_transformed_h1_train
+        split: train
+      - dataset_path: ${oc.env:H1_DATASET}/shuffled_transformed_h1.h5ad
+        index_dir: ${oc.env:H1_DATASET}/shuffled_transformed_h1_dev
+        split: dev
+
+model:
+  _target_: bmfm_targets.config.SCBertConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  intermediate_size: 3072
+  hidden_act: "gelu"
+  hidden_size: 768
+  attention: torch
+  hidden_dropout_prob: 0.1
+  attention_probs_dropout_prob: 0.1
+  initializer_range: 0.02
+  layer_norm_eps: 1e-12
+  use_cache: true
+  checkpoint: null
+
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 0
+  weight_decay: 0
+  learning_rate: 1e-5
+  betas:
+    - 0.9
+    - 0.99
+  epsilon: 1.0e-8
+  lr_decay_steps: null
+  batch_prediction_behavior: track
+  losses:
+    - field_name: label_expressions
+      name: mse
+      ignore_zero: true
+     #link_function: exp # remove since we log_normalize
+    - field_name: label_expressions
+      name: is_zero_bce
+task:
+  - _target_: bmfm_targets.config.TrainingTaskConfig
+    default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/perturbation/${track_clearml.task_name}
+    max_epochs: 50
+    precision: "16-mixed"
+    val_check_interval: 0.5
+    gradient_clip_val: 0.5
+    accelerator: "gpu"
+    max_steps: -1  # -1 means no limit
+    tf32_mode: "medium" # permitted nonNone values of tf32_mode:  "highest","high","medium"
+    accumulate_grad_batches:  4
+    freeze_layers: false
+    resume_training_from_ckpt: false
+
+track_clearml:
+    project_name: "bmfm-targets/perturbation"
+    task_name: "scbert_perturbx_all_logn_10272025"
+    continue_last_task: false
+    reuse_last_task_id: false

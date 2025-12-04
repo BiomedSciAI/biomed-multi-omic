@@ -409,3 +409,25 @@ class ReploglePerturbationDatasetTransformer(PerturbationDatasetTransformer):
 
         ann_data = super()._clean_dataset(ann_data)
         return ann_data
+
+
+class VCCPerturbationDatasetTransformer(PerturbationDatasetTransformer):
+    def _clean_dataset(self, ann_data: AnnData):
+        """
+        Cleans Replogle ScGPT processed perturbation dataset:
+        1) rename control perturbation to "Control".
+
+        Assumes split columns was already added.
+        For pre-processing see vcc_preprocess_and_descstats.ipynb
+
+        Args:
+        ----
+            ann_data (sc.AnnData): AnnData object containing perturbation data
+        """
+        # rename control column
+        ann_data.obs[self.perturbation_column_name] = ann_data.obs[
+            self.perturbation_column_name
+        ].replace("non-targeting", "Control")
+
+        ann_data = super()._clean_dataset(ann_data)
+        return ann_data

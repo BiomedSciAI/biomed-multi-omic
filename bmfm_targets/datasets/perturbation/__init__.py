@@ -7,6 +7,8 @@ from .perturbation_data_module import (
     GearsDataset,
     ReplogleDataModule,
     ReplogleDataset,
+    VCCDataModule,
+    VCCDataset,
 )
 
 
@@ -17,4 +19,6 @@ __all__ = [
     "GearsDataset",
     "ReplogleDataModule",
     "ReplogleDataset",
+    "VCCDataModule",
+    "VCCDataset",
 ]

@@ -35,6 +35,15 @@ from .chromatin_profile.chromatin_profile_datamodule import (
     DNASeqChromatinProfileDataModule,
 )
 
+from .snp2trait.snp2trait_datamodule import (
+    StreamingDNASeqSnp2TraitDataset,
+    StreamingDNASeqSnp2TraitDataModule,
+    DNASeqSnp2TraitDataset,
+    DNASeqSnp2TraitDataModule,
+    StreamingDNASeqSnp2TraitWithSnpPositionDataset,
+    StreamingDNASeqSnp2TraitWithSnpPositionDataModule,
+)
+
 __all__ = [
     "DNASeqPromoterDataset",
     "DNASeqPromoterDataModule",
@@ -58,4 +67,10 @@ __all__ = [
     "StreamingDNASeqChromatinProfileDataModule",
     "DNASeqChromatinProfileDataset",
     "DNASeqChromatinProfileDataModule",
+    "StreamingDNASeqSnp2TraitDataset",
+    "StreamingDNASeqSnp2TraitDataModule",
+    "StreamingDNASeqSnp2TraitWithSnpPositionDataset",
+    "StreamingDNASeqSnp2TraitWithSnpPositionDataModule",
+    "DNASeqSnp2TraitDataset",
+    "DNASeqSnp2TraitDataModule",
 ]

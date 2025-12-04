@@ -9,10 +9,31 @@ from bmfm_targets.config import FieldInfo, LabelColumnInfo
 
 logger = logging.get_logger(__name__)
 
-PerformerKernel = Enum("PerformerKernel", ["cosh", "exp", "elu", "relu"])
-FeatureGenerationAlgorithm = Enum(
-    "FeatureGenerationAlgorithm", ["auto", "kacs", "qr", "guassian"]
+PerformerKernel = Enum(
+    "PerformerKernel", {name: name for name in ["cosh", "exp", "elu", "relu"]}, type=str
 )
+FeatureGenerationAlgorithm = Enum(
+    "FeatureGenerationAlgorithm",
+    {name: name for name in ["auto", "kacs", "qr", "guassian"]},
+    type=str,
+)
+
+
+class ModelingStrategy(str, Enum):
+    """
+    Enumeration of all  modeling strategies.
+
+    Members:
+        MLM: mask language modeling
+        SEQUENCE_CLASSIFICATION: sequence-level classification
+        SEQUENCE_LABELING: token-level labeling
+        MULTITASK: multitask learning
+    """
+
+    SEQUENCE_LABELING = "sequence_labeling"
+    MLM = "mlm"
+    MULTITASK = "multitask"
+    SEQUENCE_CLASSIFICATION = "sequence_classification"
 
 
 class SCModelConfigBase(PretrainedConfig):
@@ -28,7 +49,7 @@ class SCModelConfigBase(PretrainedConfig):
             output["label_columns"] = [fi.to_dict() for fi in self.label_columns]
         else:
             output["label_columns"] = None
-        output = {k: v.name if isinstance(v, Enum) else v for k, v in output.items()}
+        output = {k: v.value if isinstance(v, Enum) else v for k, v in output.items()}
         return output
 
     @classmethod

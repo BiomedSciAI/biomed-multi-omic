@@ -130,12 +130,14 @@ def test_run(
     pl_module = instantiate_module_from_checkpoint(
         task_config, data_module, model_config, trainer_config
     )
+
     if task_config.num_bootstrap_runs >= 1:
+        data_module.bootstrap_test_dataloader = True
         runs_list = [
             test(
                 pl_trainer,
                 pl_module,
-                data_module.bootstrap_test_dataloader(),
+                data_module,
                 task_config.checkpoint,
             )
             for _ in range(task_config.num_bootstrap_runs)
@@ -146,7 +148,7 @@ def test_run(
             test(
                 pl_trainer,
                 pl_module,
-                data_module.test_dataloader(),
+                data_module,
                 task_config.checkpoint,
             )
         ]
@@ -215,7 +217,7 @@ def instantiate_module_from_checkpoint(
             + str(task_config.checkpoint)
         )
         pl_module = pl_factory.load_from_checkpoint(
-            task_config.checkpoint, **extra_kwargs
+            task_config.checkpoint, **extra_kwargs, weights_only=False
         )
     else:
         model_config.checkpoint = task_config.checkpoint
@@ -252,8 +254,12 @@ def prepare_extra_training_module_kwargs(
     """
     module_kwargs = {"tokenizer": data_module.tokenizer}
     ds = data_module.get_dataset_instance()
+
     if hasattr(ds, "group_means"):
         module_kwargs["group_means"] = ds.group_means
+        logger.info("Training dataset contains group means ...")
+    else:
+        logger.info("Training dataset does not contains group means ...")
 
     if (
         hasattr(ds, "processed_data")
@@ -310,9 +316,16 @@ def test(
     test_dataloader: DataLoader,
     checkpoint_path: str | None = None,
 ):
-    pl_trainer.test(
-        model=pl_module, dataloaders=test_dataloader, ckpt_path=checkpoint_path
-    )
+    kwargs = {
+        "model": pl_module,
+        "dataloaders": test_dataloader,
+        "ckpt_path": checkpoint_path,
+    }
+    # handle pytorch-lightning >=2.6.0 which requires weights_only and earlier which
+    # cannot have it as an arg
+    if "weights_only" in pl_trainer.test.__annotations__:
+        kwargs["weights_only"] = False
+    pl_trainer.test(**kwargs)
     metrics = pl_module.test_metrics.compute()
     # flatten nested dict of label:metric_name:metric_value
     metrics = {
@@ -414,6 +427,7 @@ def prepare_test_metrics_for_logging(
         else:
             metrics_to_log.append(("single_value", metric_name, metric_value_list[0]))
         metric_values = [val.item() for val in metric_value_list]
+        logger.info(f"Calculating {ci_method} for CI for {metric_name}")
         mean_value, lower_ci, upper_ci = calculate_95_ci(
             metric_values, n, ci_method=ci_method
         )
@@ -449,6 +463,11 @@ def log_test_metrics(
             if metric_name == "label_expressions_nonzero":
                 logger.warning(
                     "label_expressions_nonzero logging is not supported in test tasks, see issue 982 https://github.ibm.com/BiomedSciAI-Innersource/bmfm-targets/issues/982 "
+                )
+                continue
+            elif label_dict is None:
+                logger.warning(
+                    "Logging confusion matrix with no label dict not supported from this context."
                 )
                 continue
             log_confusion_matrix_from_metrics(
@@ -495,6 +514,7 @@ def interpret_run(
             modeling_strategy=data_module.collation_strategy,
             attribute_kwargs=task_config.attribute_kwargs,
             attribute_filter=task_config.attribute_filter,
+            weights_only=False,
         )
     else:
         module = interpret.SequenceClassificationAttributionModule(

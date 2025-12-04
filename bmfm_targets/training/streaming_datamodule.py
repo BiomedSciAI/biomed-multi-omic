@@ -80,24 +80,24 @@ class StreamingDataModule(DataModule):
         if stage == "fit" or stage is None:
             # stage predict should be removed here.
             # This is a temporary fix for how the current predict dataloaders are implemented
-            self.train_dataset = self.DATASET_FACTORY(
+            self.train_dataset = self.__class__.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="train",
                 shuffle=self.shuffle,
             )
-            self.dev_dataset = self.DATASET_FACTORY(
+            self.dev_dataset = self.__class__.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 shuffle=self.shuffle,
             )
         if stage == "validate":
-            self.dev_dataset = self.DATASET_FACTORY(
+            self.dev_dataset = self.__class__.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 shuffle=self.shuffle,
             )
         if stage == "test":
-            self.test_dataset = self.DATASET_FACTORY(
+            self.test_dataset = self.__class__.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="test",
                 shuffle=self.shuffle,

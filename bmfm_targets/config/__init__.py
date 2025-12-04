@@ -23,8 +23,11 @@ from .model_config import (
     SCNystromformerConfig,
     SCModelConfigBase,
     SCModernBertConfig,
+    ModelingStrategy,
 )
 from .main_config import SCBertMainConfig, SCBertMainHydraConfigSchema
+from .dataset_config import SplitEnum
+
 
 __all__ = [
     "FieldInfo",
@@ -44,4 +47,6 @@ __all__ = [
     "TokenizerConfig",
     "PreTrainedEmbeddingConfig",
     "LoraConfigWrapper",
+    "SplitEnum",
+    "ModelingStrategy",
 ]

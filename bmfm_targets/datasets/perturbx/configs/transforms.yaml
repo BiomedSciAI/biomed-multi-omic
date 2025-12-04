@@ -1,0 +1,17 @@
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes
+
+data_module:
+  perturbation_column_name: gene
+
+transform_kwargs:
+  transforms:
+    - transform_name: NormalizeTotalTransform
+      transform_args:
+        exclude_highly_expressed: false
+        max_fraction: 0.05
+        target_sum: null # use median normalization
+    - transform_name: LogTransform
+      transform_args:
+          add_one: True

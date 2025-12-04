@@ -21,10 +21,6 @@ from bmfm_targets.config import (
 )
 from bmfm_targets.config.model_config import SCModelConfigBase
 from bmfm_targets.config.training_config import BaseTaskConfig
-from bmfm_targets.models import (
-    download_ckpt_from_huggingface,
-    download_tokenizer_from_huggingface,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +132,8 @@ class SCBertMainConfig:
             self.add_checkpointing_callbacks()
 
     def _load_missing_configs_from_ckpt(self):
+        from bmfm_targets.models import download_ckpt_from_huggingface
+
         checkpoint = self._get_checkpoint()
         if not checkpoint:
             return
@@ -188,23 +186,23 @@ class SCBertMainConfig:
     def update_label_columns(label_columns: list[LabelColumnInfo], label_dict):
         for label_column in label_columns:
             if (
-                label_column.label_column_name in label_dict
+                label_dict is not None
+                and label_column.label_column_name in label_dict
                 and label_column.n_unique_values is None
             ):
                 label_column.update_n_unique_values(label_dict)
 
     def _load_tokenizer_from_cfg(self):
         # to avoid circular import
+        from bmfm_targets.models import download_tokenizer_from_huggingface
         from bmfm_targets.tokenization import load_tokenizer
 
         checkpoint = self._get_checkpoint()
         if checkpoint:
             if os.path.isfile(checkpoint):
-                checkpoint_dir = os.path.dirname(checkpoint)
+                identifier = os.path.dirname(checkpoint)
             else:
-                checkpoint_dir = download_tokenizer_from_huggingface(checkpoint)
-            tokenizer = load_tokenizer(checkpoint_dir)
-            # switch field's update_vocab_strategy to static
+                identifier = download_tokenizer_from_huggingface(checkpoint)
             for f in self.fields:
                 if f.vocab_update_strategy == "dynamic":
                     logger.warning(
@@ -212,9 +210,10 @@ class SCBertMainConfig:
                         "Switching to static vocab update strategy as you are loading from a checkpoint."
                     )
                 f.vocab_update_strategy = "static"
-            return tokenizer
         else:
-            return load_tokenizer(self.tokenizer.identifier)
+            identifier = self.tokenizer.identifier
+
+        return load_tokenizer(identifier, self.tokenizer.prepend_tokens)
 
     def _get_checkpoint(self):
         task_ckpt = getattr(self.task, "checkpoint", None)

@@ -1,0 +1,14 @@
+[
+    {
+        "label_name": "celltype",
+        "label_values": {
+            "FC": 0,
+            "HTC": 1,
+            "HomC": 2,
+            "RegC": 3,
+            "RepC": 4,
+            "preFC": 5,
+            "preHTC": 6
+        }
+    }
+]

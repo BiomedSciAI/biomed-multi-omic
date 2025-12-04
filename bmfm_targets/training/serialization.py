@@ -6,10 +6,25 @@ import torch
 import torch.distributed
 
 
+def get_compute_device():
+    if torch.cuda.is_available():
+        distributed = ("NODE_RANK" in os.environ) and ("LOCAL_RANK" in os.environ)
+        if distributed:
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            device = torch.device(f"cuda:{local_rank}")
+        else:
+            device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    return device
+
+
 def prepare_model_dict_from_checkpoint(
     checkpoint, base_model_prefix: str | None = None
 ):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_compute_device()
     model_dict = torch.load(checkpoint, map_location=device, weights_only=False)
     # manage loading model from lightening checkpoint
     if "state_dict" in model_dict.keys():

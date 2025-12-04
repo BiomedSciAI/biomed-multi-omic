@@ -28,7 +28,7 @@ class CellXGeneNexusDataset(StreamingDataset):
         uri: (
             str | Path | None
         ) = "/dccstor/bmfm-targets/data/omics/transcriptome/scRNA/pretrain/cellxgene/soma-2023-12-15",
-        census_version: str = "2023-12-15",
+        census_version: str | None = "2023-12-15",
         experiment: str = "homo_sapiens",
         raw_counts: bool = False,
         split: str = "train",
