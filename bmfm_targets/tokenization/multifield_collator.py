@@ -347,17 +347,11 @@ class MultiFieldCollator:
                     "attention_mask": attention_mask,
                 }
             )
-        # Sequence labeling labels
-        elif self.collation_strategy == "sequence_labeling":
-            special_tokens_mask = batch[self.input_field_names[0]][
-                "special_tokens_mask"
-            ].bool()
-            labels = {
-                field: batch[field]["input_ids"] for field in self.label_field_names
-            }
-            for field_labels in labels.values():
-                field_labels[special_tokens_mask] = -100
-            return_dict["labels"] = labels
+        # Sequence labeling labels -- but don't mess with masking labels by accident
+        if self.label_field_names:
+            labels = return_dict.setdefault("labels", {})
+            for k, v in self._get_label_field_labels(batch).items():
+                labels.setdefault(k, v)
 
         # Classification labels for sequence_classification and multitask
         if (
@@ -375,3 +369,12 @@ class MultiFieldCollator:
         )
 
         return return_dict
+
+    def _get_label_field_labels(self, batch: dict):
+        special_tokens_mask = batch[self.input_field_names[0]][
+            "special_tokens_mask"
+        ].bool()
+        labels = {field: batch[field]["input_ids"] for field in self.label_field_names}
+        for field_labels in labels.values():
+            field_labels[special_tokens_mask] = -100
+        return labels
