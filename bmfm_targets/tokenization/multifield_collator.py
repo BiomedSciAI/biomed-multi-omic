@@ -363,20 +363,11 @@ class MultiFieldCollator:
                     "attention_mask": attention_mask,
                 }
             )
-        # Pack field labels if there are non-input fields (sequence labeling)
-        elif behavior["pack_field_labels"]:
-            special_tokens_mask = batch[self.input_field_names[0]][
-                "special_tokens_mask"
-            ].bool()
-            # Only include label fields that actually exist in the batch
-            labels = {
-                field: batch[field]["input_ids"]
-                for field in self.label_field_names
-                if field in batch
-            }
-            for field_labels in labels.values():
-                field_labels[special_tokens_mask] = -100
-            return_dict["labels"] = labels
+        # Sequence labeling labels -- but don't mess with masking labels by accident
+        if self.label_field_names:
+            labels = return_dict.setdefault("labels", {})
+            for k, v in self._get_label_field_labels(batch).items():
+                labels.setdefault(k, v)
 
         # Pack label_ids if we have label_columns (classification/multitask)
         if behavior["pack_label_ids"] and "label_ids" in batch:
@@ -391,3 +382,12 @@ class MultiFieldCollator:
         )
 
         return return_dict
+
+    def _get_label_field_labels(self, batch: dict):
+        special_tokens_mask = batch[self.input_field_names[0]][
+            "special_tokens_mask"
+        ].bool()
+        labels = {field: batch[field]["input_ids"] for field in self.label_field_names}
+        for field_labels in labels.values():
+            field_labels[special_tokens_mask] = -100
+        return labels
