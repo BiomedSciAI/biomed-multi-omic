@@ -620,22 +620,20 @@ def update_task_from_trainer(task: DictConfig, trainer: pl.Trainer):
     If running testing after training directly from the same yaml, then the checkpoint need to be saved in a
     clean directory and be passed to the test tasks.
     """
-    if config.TestTaskConfig.__name__ in task._target_:
-        if task.checkpoint == "last":
-            lasts = [
-                x.last_model_path
-                for x in trainer.checkpoint_callbacks
-                if x.last_model_path
-            ]
-            assert len(lasts) == 1
-            task.checkpoint = lasts[0]
-        elif task.checkpoint == "best":
-            bests = [
-                x.best_model_path
-                for x in trainer.checkpoint_callbacks
-                if x.best_model_path
-            ]
-            assert len(bests) == 1
-            task.checkpoint = bests[0]
+    if not hasattr(task, "checkpoint"):
+        return task
+
+    if task.checkpoint == "last":
+        lasts = [
+            x.last_model_path for x in trainer.checkpoint_callbacks if x.last_model_path
+        ]
+        assert len(lasts) == 1
+        task.checkpoint = lasts[0]
+    elif task.checkpoint == "best":
+        bests = [
+            x.best_model_path for x in trainer.checkpoint_callbacks if x.best_model_path
+        ]
+        assert len(bests) == 1
+        task.checkpoint = bests[0]
 
     return task

@@ -18,7 +18,6 @@ data_module:
   max_length: 1024
   dataset_kwargs:
     processed_data_source: ${input_file}
-    label_dict_path: ${working_dir}/labels.json
     split_column_name: ${split_column_name}
   limit_genes: protein_coding #could be null, protein_coding, or tokenizer
   transform_datasets: false
