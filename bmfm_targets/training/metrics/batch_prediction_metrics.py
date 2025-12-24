@@ -251,8 +251,16 @@ def create_field_predictions_df(
       don't perfectly match expected column specifications.
     """
     logging.info(f"Preparing to concat {len(predictions_list)} batches")
+    if sample_names is not None:
+        logging.info(f"received {len(sample_names)} sample names")
+        assert len(sample_names) == len(
+            {*sample_names}
+        ), "Sample names must be unique. Did you accidentally set task_config.n_bootstrap_runs >=1?"
     predictions_array = torch.concat([*predictions_list]).to(torch.float32).numpy()
     reshaped = predictions_array.reshape(-1, predictions_array.shape[-1])
+    logging.info(
+        f"predictions_array shape:{predictions_array.shape}, reshaped shape: {reshaped.shape}"
+    )
 
     n_samples, n_genes = predictions_array.shape[:2]
     sample_ids = np.repeat(
@@ -260,6 +268,9 @@ def create_field_predictions_df(
     )
     if sample_level_metadata is not None:
         for key, values in sample_level_metadata.items():
+            logging.info(f"sample_level_metadata {key}: {len(values)} values")
+            logging.debug(pd.Series(values).value_counts())
+
             sample_level_metadata[key] = np.repeat(
                 np.array(values, dtype=object), n_genes
             )
@@ -313,7 +324,9 @@ def create_field_predictions_df(
             preds_df[key] = values
 
     preds_df = preds_df.set_index("sample_id")
-    logging.info(f"Final predictions_df shape: {preds_df.shape}")
+    logging.info(
+        f"Final predictions_df shape: {preds_df.shape}, num cells: {preds_df.index.nunique()}, num unique genes {preds_df['input_genes'].nunique()}"
+    )
     return preds_df
 
 
@@ -451,7 +464,7 @@ def field_predictions_df_columns(fields, this_field, modeling_strategy):
     else:
         input_field_names = [f.field_name for f in fields if f.is_input]
         input_columns = [
-            field_column_map[modeling_strategy][fn] for fn in input_field_names
+            field_column_map[modeling_strategy].get(fn, fn) for fn in input_field_names
         ]
 
     if "label_" == this_field_name[:6]:

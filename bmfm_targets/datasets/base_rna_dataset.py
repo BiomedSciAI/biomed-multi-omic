@@ -1,7 +1,9 @@
 import logging
 from collections.abc import Callable
+from functools import lru_cache
 from typing import Literal
 
+import numexpr as ne
 import numpy as np
 import scanpy as sc
 import scipy
@@ -24,12 +26,90 @@ except ImportError:
     from anndata.experimental import CSRDataset as SparseDataset
 
 
-def multifield_instance_wrapper(genes, expressions, metadata):
+def multifield_instance_wrapper(genes, expressions, metadata, **kwargs):
+    data = {
+        "genes": list(genes),
+        "expressions": list(expressions),
+    }
+    return MultiFieldInstance(metadata=metadata, data=data)
+
+
+@lru_cache(maxsize=1)
+def _log_once(msg):
+    logger.info(msg)
+
+
+def parse_perturb(expr: str, max_val: float):
+    """
+    Parse perturbation expression with `max` variable.
+
+    Args:
+    ----
+        expr (str): expression that may include an operation involving `max`, e.g. "max * 0.5" or "max - 2"
+        max_val (float): the max value to substitute for `max`
+
+    Returns:
+    -------
+        float: the evaluated expression
+
+    """
+    return ne.evaluate(expr, local_dict={"MAX": max_val}).item()
+
+
+def in_silico_perturbation_wrapper(
+    genes,
+    expressions,
+    metadata,
+    **kwargs,
+):
+    """
+    Output wrapper that applies a fixed in-silico perturbation to all samples.
+
+    Args:
+    ----
+        genes (list[str]): genes in sample
+        expressions (list[float]): expressions in sample
+        metadata (dict): metadata for sample
+        **kwargs: must contain:
+            perturbations (dict): dict of gene name to perturbation expression that is
+            either a fixed value like "0" or an expression containing "max",
+            e.g. "max * 0.5" or "max - 2"
+            dataset_obj (BaseRNAExpressionDataset): the dataset object requesting the output
+              used to get max gene expression
+
+
+    Returns:
+    -------
+        MultiFieldInstance: a multifield instance with the same data as usual, but with
+            insilico perturbations applied
+
+    """
+    perturbations = kwargs["perturbations"]
+    dataset_obj = kwargs["dataset_obj"]
+
+    evaluated = {
+        # eval expression string containing "max" like "max * 2"
+        g: parse_perturb(str(expr).upper(), dataset_obj.max_gene_expression(g))
+        for g, expr in perturbations.items()
+    }
+
+    _log_once(f"perturbing genes with {evaluated}")
+
+    new_genes, new_expressions = zip(
+        *[(g, float(evaluated.get(g, e))) for g, e in zip(genes, expressions)]
+    )
+
+    # not only for rewriting expression, perturbation field is needed arranging to make perturbed genes at first selected in collation window
+    # if perturbed value is 0 (knock down) and original value is 0, is it correct to change the position in collation window?
+
+    perturb_field = ["1" if g in perturbations else "0" for g in new_genes]
+
     return MultiFieldInstance(
         metadata=metadata,
         data={
-            "genes": list(genes),
-            "expressions": list(expressions),
+            "genes": list(new_genes),
+            "expressions": list(new_expressions),
+            "perturbations": perturb_field,
         },
     )
 
@@ -143,7 +223,9 @@ class BaseRNAExpressionDataset(Dataset):
 
         self.processed_data = self.filter_data(self.processed_data)
         if self.sort_genes_var is not None:
-            self.processed_data = self.sort_data(self.processed_data)
+            self.processed_data = self.sort_by_var_column(
+                self.processed_data, self.sort_genes_var
+            )
 
         self.metadata = self.processed_data.obs
         self.binned_data = self.processed_data.X
@@ -172,6 +254,10 @@ class BaseRNAExpressionDataset(Dataset):
             return np.max(self.binned_data.group["data"])
         else:
             return np.max(self.binned_data.data)
+
+    @lru_cache
+    def max_gene_expression(self, gene):
+        return np.max(self.processed_data[:, gene].X[:, 0])
 
     def max_counts(self, max_length: int | None = None):
         if isinstance(self.binned_data, SparseDataset):
@@ -222,11 +308,17 @@ class BaseRNAExpressionDataset(Dataset):
     def get_genes_and_expressions(self, idx):
         return self.all_genes, self.binned_data[idx].toarray().tolist()[0]
 
-    def sort_data(self, data: AnnData):
-        if self.sort_genes_var not in data.var.columns:
-            raise ValueError(f"{self.sort_genes_var} not in data vars")
-        ordering = data.var[self.sort_genes_var].values
+    @staticmethod
+    def sort_by_var_column(data: AnnData, sort_by: str, ascending=False):
+        if sort_by not in data.var.columns:
+            raise ValueError(f"{sort_by} not in data vars")
+        ordering = data.var[sort_by].values
         order_indices = ordering.argsort()
+        if not ascending:
+            logger.warning(
+                f"Behavior has changed, sorting genes by {sort_by} descending."
+            )
+            order_indices = order_indices[::-1]
         data = data[:, order_indices]
         return data
 
@@ -322,7 +414,7 @@ class BaseRNAExpressionDataset(Dataset):
 
         metadata = self.get_sample_metadata(idx)
 
-        return self.output_wrapper(genes, expressions, metadata)
+        return self.output_wrapper(genes, expressions, metadata, dataset_obj=self)
 
     def __getitem__(
         self, idx: int | slice

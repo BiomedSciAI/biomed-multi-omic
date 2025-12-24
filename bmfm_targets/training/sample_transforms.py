@@ -16,13 +16,58 @@ import scipy.stats as stats
 import torch
 from transformers.utils import logging
 
+from bmfm_targets.datasets.epigenetic import EpigeneticDatastore
 from bmfm_targets.tokenization import MultiFieldInstance
 from bmfm_targets.tokenization.resources import (
     get_gene_chromosome_locations,
+    get_gene_medians,
     get_ortholog_genes,
 )
 
 logger = logging.get_logger(__name__)
+
+
+def median_transform(
+    mfi: MultiFieldInstance,
+    median_value_df: pd.DataFrame,
+    *args,
+    **kwargs,
+) -> MultiFieldInstance:
+    """
+    Normalize gene expression with the median gene values of geneformer.
+
+    Parameter
+    ----------
+    mfi : MultiFieldInstance
+        Contains 'genes' and 'expressions' from a single cell.
+    median_value_df: pd.DataFrame
+        Contains gene_symbol and corresponding median values provided by geneformer.
+
+    Returns
+    -------
+    MultiFieldInstance
+        Contains filtered 'genes' available on median_value_df and corresponding median normalized 'expressions'.
+    """
+    gene_ids = pd.Series(mfi["genes"])
+    expr_values = pd.Series(mfi["expressions"])
+
+    keep_mask = gene_ids.isin(median_value_df.index)
+    gene_ids = gene_ids[keep_mask]
+    expr_values = expr_values[keep_mask]
+
+    norm_factors = median_value_df.reindex(gene_ids).to_numpy()
+    norm_factors = np.ravel(norm_factors)
+    expr_values = expr_values.to_numpy() / norm_factors
+
+    updated_data = {}
+    for field, vals in mfi.data.items():
+        if field == "genes":
+            updated_data[field] = gene_ids.tolist()
+        elif field == "expressions":
+            updated_data[field] = expr_values.tolist()
+        else:
+            updated_data[field] = vals
+    return MultiFieldInstance(data=updated_data, metadata=mfi.metadata)
 
 
 def encode_expression_as_repeats(
@@ -62,13 +107,13 @@ def encode_expression_as_repeats(
     """
     gene_ids = np.array(mfi["genes"])
     expr_values = np.array(mfi["expressions"])
-    weights = np.log1p(expr_values)
     if max_length is None:
         max_length = gene_ids.shape[0]
-    is_in_chrom_df = np.isin(gene_ids, chrom_df.index)
+    chrom_gene_set = set(chrom_df.index)
+    is_in_chrom_df = np.array([gene in chrom_gene_set for gene in gene_ids])
     filtered_genes = gene_ids[is_in_chrom_df]
-    filtered_weights = weights[is_in_chrom_df]
     filtered_exprs = expr_values[is_in_chrom_df]
+    filtered_weights = np.log1p(filtered_exprs)
 
     sampling_probs = filtered_weights / filtered_weights.sum()
     rng = np.random.default_rng(kwargs.get("seed"))
@@ -181,8 +226,10 @@ def sort_by_field(
             reverse=reverse,
         )
     sorted_data = {}
-    for field, values in mfi.data.items():
-        sorted_data[field] = [values[i] for i in sorted_indices]
+
+    for field_, values in mfi.data.items():
+        sorted_data[field_] = [values[i] for i in sorted_indices]
+
     return MultiFieldInstance(data=sorted_data, metadata=mfi.metadata)
 
 
@@ -364,7 +411,7 @@ def log_normalize(
     """
     if max_length is not None:
         for key, val in mfi.data.items():
-            mfi.data[key] = val[: max_length - 2]
+            mfi.data[key] = val[:max_length]
     expressions = np.array([float(value) for value in mfi.data["expressions"]])
     expressions_sum = sum(expressions) + 1
     expressions = np.log1p((expressions / expressions_sum) * normalized_sum)
@@ -378,6 +425,34 @@ def log_normalize(
 
     return MultiFieldInstance(
         data=updated_data,
+        metadata=mfi.metadata,
+    )
+
+
+def truncate_sequence(
+    mfi: MultiFieldInstance,
+    max_length: int | None,
+    *args,
+    **kwargs,
+) -> MultiFieldInstance:
+    """
+
+    Implement truncation.
+
+    ----
+        max_length (int): max length of the sequence
+
+    Returns
+    -------
+        MultiFieldInstance: Truncated MutifieldInstance
+
+    """
+    if max_length is not None:
+        for key, val in mfi.data.items():
+            mfi.data[key] = val[:max_length]
+
+    return MultiFieldInstance(
+        data=mfi.data,
         metadata=mfi.metadata,
     )
 
@@ -673,6 +748,7 @@ def _batchwise_pad_zero_expressed_genes(
         field: list(itemgetter(*ordered_indices)(values))
         for field, values in mfi.data.items()
     }
+
     return MultiFieldInstance(data=updated_data, metadata=mfi.metadata)
 
 
@@ -762,9 +838,48 @@ def downcast_numeric_fields(
     return MultiFieldInstance(data=data, metadata=mfi.metadata)
 
 
+def inject_datastore_field(
+    mfi: MultiFieldInstance,
+    datastore: "EpigeneticDatastore",
+    field_name: str,
+    bio_context_column_in_dataset: str = "datastore_lookup_value",
+    **kwargs,
+) -> MultiFieldInstance:
+    """
+    Injects a datastore feature as an additional field in a MultiFieldInstance.
+
+    Args:
+    ----
+        mfi: MultiFieldInstance with `metadata` containing the context column
+             and a 'genes' field with relevant gene symbols.
+        field_name: Name of the feature in the datastore to inject.
+        datastore: EpigeneticDatastore object.
+        bio_context_column_in_dataset: Metadata key in `mfi` that contains the context ID
+            for looking up values in the datastore. Expecting values such as "cell_line",
+            "cell_type", or other variations. Defaults to "datastore_lookup_value".
+
+    Returns:
+    -------
+        Updated MultiFieldInstance with new field added.
+    """
+    # Look up the context ID using the dataset column name stored in the datastore
+    biosample_name = mfi.metadata[bio_context_column_in_dataset]
+    genes = mfi["genes"]
+
+    # Fetch values aligned to genes
+    values = datastore.get_values(biosample_name, genes, field_name)
+    # Inject into MFI
+    data = mfi.data.copy()
+    data[field_name] = values
+    return MultiFieldInstance(data=data, metadata=mfi.metadata)
+
+
 def compose_transforms(
+    fields,
+    label_columns,
     sequence_order=None,
     log_normalize_transform=False,
+    median_normalization=False,
     rda_transform=None,
     pad_zero_expression_strategy=None,
     max_length=None,
@@ -776,12 +891,35 @@ def compose_transforms(
     limit_input_tokens=None,
 ):
     transforms = []
+    if median_normalization:
+        median_df = get_gene_medians()
+        transforms.append(partial(median_transform, median_value_df=median_df))
     if limit_input_tokens is not None:
         transforms.append(
             partial(
                 limit_fields_to_token_list,
                 token_list=limit_input_tokens,
                 field_name="genes",
+            )
+        )
+    datastore_fields = [f for f in fields if f.datastore_config is not None]
+
+    for f in datastore_fields:
+        bio_context_column_in_dataset = [
+            l for l in label_columns if l.is_bio_context_for_datastore
+        ]
+        assert (
+            len(bio_context_column_in_dataset) == 1
+        ), "Must have exactly 1 bio_context_column_in_dataset"
+        datastore = EpigeneticDatastore.from_config(f)
+        transforms.append(
+            partial(
+                inject_datastore_field,
+                datastore=datastore,
+                field_name=f.field_name,
+                bio_context_column_in_dataset=bio_context_column_in_dataset[
+                    0
+                ].label_column_name,
             )
         )
     if selective_dropout_weights is not None:
@@ -800,12 +938,23 @@ def compose_transforms(
     elif sequence_order == "sorted":
         transforms.append(partial(sort_by_field, field="expressions"))
     elif sequence_order == "chromosomal_uce":
+        if "perturbations" in [i.field_name for i in fields]:
+            logger.warning(
+                "Warning: Perturbed genes may have been truncated by gene ordering by chromosomal_uce"
+            )
         chrom_df = get_gene_chromosome_locations(species="human")
         transforms.append(
             partial(
                 encode_expression_as_repeats, chrom_df=chrom_df, max_length=max_length
             )
         )
+    # ensure perturbed samples are included even if they are low (don't get truncated)
+    if "perturbations" in [i.field_name for i in fields]:
+        transforms.append(partial(sort_by_field, field="perturbations"))
+
+    if max_length is not None:
+        transforms.append(partial(truncate_sequence, max_length=max_length))
+
     if sequence_dropout_factor is not None and selective_dropout_weights is None:
         if sequence_dropout_factor > 1:
             transforms.append(
@@ -824,6 +973,13 @@ def compose_transforms(
             )
 
     if pad_zero_expression_strategy is not None:
+        if (
+            "perturbations" in [i.field_name for i in fields]
+            and pad_zero_expression_strategy["strategy"] == "random"
+        ):
+            logger.warning(
+                "Warning: Perturbed genes may have been excluded by pad zero expression with random strategy"
+            )
         transforms.append(
             partial(
                 pad_zero_expressed_genes,
@@ -831,6 +987,10 @@ def compose_transforms(
                 max_length=max_length,
             )
         )
+
+        # ensure perturbed samples are included even if they are zero (don't get truncated)
+        if "perturbations" in [i.field_name for i in fields]:
+            transforms.append(partial(sort_by_field, field="perturbations"))
 
     if log_normalize_transform:
         transforms.append(partial(log_normalize, max_length=max_length))
@@ -924,8 +1084,10 @@ def get_genes_expressed_in_batch(examples):
 def transform_inputs(
     examples,
     fields,
+    label_columns,
     sequence_order,
     log_normalize_transform,
+    median_normalization,
     rda_transform,
     pad_zero_expression_strategy,
     max_length,
@@ -943,9 +1105,12 @@ def transform_inputs(
         and f.is_input
     ]
     transforms = compose_transforms(
+        fields,
+        label_columns,
         selective_dropout_weights=selective_dropout_weights,
         sequence_order=sequence_order,
         log_normalize_transform=log_normalize_transform,
+        median_normalization=median_normalization,
         rda_transform=rda_transform,
         pad_zero_expression_strategy=pad_zero_expression_strategy,
         max_length=max_length,
@@ -955,8 +1120,6 @@ def transform_inputs(
         renoise=renoise,
         limit_input_tokens=limit_input_tokens,
     )
-    if "perturbations" in [i.field_name for i in fields]:
-        transforms.append(partial(sort_by_field, field="perturbations"))
     if len(transforms) > 0:
         combined_func = reduce(
             lambda f, g: lambda x, *a, **k: g(f(x, *a, **k), *a, **k),

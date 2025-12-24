@@ -10,6 +10,7 @@ from .dataset_transformer import (
     ScperturbPerturbationDatasetTransformer,
     GearsPerturbationDatasetTransformer,
     ReploglePerturbationDatasetTransformer,
+    VCCPerturbationDatasetTransformer,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "ScperturbPerturbationDatasetTransformer",
     "GearsPerturbationDatasetTransformer",
     "ReploglePerturbationDatasetTransformer",
+    "VCCPerturbationDatasetTransformer",
 ]

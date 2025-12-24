@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import scanpy as sc
+from scipy import sparse as ss
 from sklearn.model_selection import StratifiedShuffleSplit
 
 logger = logging.getLogger(__name__)
@@ -546,7 +547,7 @@ def add_gene_ranking(
 
 
 def add_non_zero_non_dropout_de_gene_ranking(
-    adata, perturbation_column_name="perturbation"
+    adata, perturbation_column_name="perturbation", control_label="Control"
 ):
     """
     Based on GEARS
@@ -567,7 +568,7 @@ def add_non_zero_non_dropout_de_gene_ranking(
     mean_expression = np.array(list(perturbation2mean_expression.values())).reshape(
         len(adata.obs[perturbation_column_name].unique()), adata.X.toarray().shape[1]
     )
-    ctrl = mean_expression[np.where(pert_list == "Control")[0]]
+    ctrl = mean_expression[np.where(pert_list == control_label)[0]]
 
     gene_id2idx = dict(zip(adata.var.index.values, range(len(adata.var))))
     gene_idx2id = dict(zip(range(len(adata.var)), adata.var.index.values))
@@ -694,3 +695,138 @@ def equal_samples_per_set_downsample(
     )
 
     return final_df
+
+
+def guess_if_raw(x: np.ndarray, threshold=4):
+    """
+    Guess if data from a sample is raw or lognormalized.
+
+    Args:
+    ----
+        x (np.ndarray): the X.data component of an anndata object
+        threshold (int, optional): threshold. Defaults to 4.
+
+    Returns:
+    -------
+        bool: if heuristic flags data as raw
+
+    """
+    is_int = np.issubdtype(x.dtype, np.integer)
+
+    x_sample = x[:100_000] if x.size > 100_000 else x
+
+    max_val = x_sample.max()
+    mean_val = x_sample.mean()
+    median_val = np.median(x_sample)
+    pct_ones = np.mean(x_sample == 1)
+    pct_small_ints = np.mean(np.isin(x_sample, [1, 2, 3]))
+
+    # Scoring heuristic
+    raw_score = sum(
+        [
+            is_int,
+            max_val > 50,
+            pct_ones > 0.4,
+            mean_val < 2.5,
+            median_val <= 1,
+            pct_small_ints > 0.6,
+        ]
+    )
+
+    return raw_score >= threshold
+
+
+def make_group_means(
+    ad: sc.AnnData,
+    perturbation_column_name: str,
+    split_column_name: str,
+    exp_before_mean: bool = False,
+    *,
+    train_split_label: str = "train",
+    control_label: str = "Control",
+) -> sc.AnnData:
+    """
+    Compute per-perturbation pseudobulk means and append a train-average row.
+
+    Aggregates single-cell expression data by perturbation group, producing
+    one pseudobulk per perturbation plus an "Average_Perturbation_Train" row
+    representing the mean of all non-control training perturbations.
+
+    Parameters
+    ----------
+    ad : sc.AnnData
+        Input single-cell data. Must contain `perturbation_column_name` and
+        `split_column_name` in `.obs`.
+    perturbation_column_name : str
+        Column in `.obs` defining perturbation groups (e.g., "target_gene").
+    split_column_name : str
+        Column in `.obs` defining dataset split (e.g., "train", "test").
+    exp_before_mean : bool, default False
+        If True, compute unbiased means for log1p-normalized data via
+        log1p(mean(expm1(X))). Use when `.X` is log1p-transformed.
+    train_split_label : str, default "train"
+        Label identifying training split in `.obs[split_column_name]`.
+    control_label : str, default "Control"
+        Perturbation label to exclude from train average computation.
+
+    Returns
+    -------
+    sc.AnnData
+        Rows are per-perturbation pseudobulks plus final "Average_Perturbation_Train"
+        row (if training data exists). `.var` and `.uns` copied from input.
+
+    Examples
+    --------
+    >>> # Standard usage with raw counts
+    >>> agg = make_group_means(adata, "target_gene", "split")
+
+    >>> # With log1p-normalized data (unbiased means)
+    >>> agg = make_group_means(adata, "target_gene", "split", exp_before_mean=True)
+    """
+
+    def _mean(X):
+        """Compute mean with optional log-bias correction."""
+        X = X.toarray() if ss.issparse(X) else np.asarray(X)
+        return np.log1p(np.expm1(X).mean(0)) if exp_before_mean else X.mean(0)
+
+    def _pseudobulk(adata, group_col):
+        grouped = adata.obs.groupby(group_col, sort=False, observed=True)
+        indices = grouped.indices  # dict: group_name -> np.ndarray of positions
+        group_names = list(indices.keys())
+        if not group_names:
+            raise ValueError(f"No groups found in {group_col}")
+
+        means = [_mean(adata.X[pos]) for pos in indices.values()]
+        return np.vstack(means), group_names
+
+    # Compute all per-perturbation pseudobulks
+    X_means, group_names = _pseudobulk(ad, perturbation_column_name)
+
+    agg = sc.AnnData(
+        X=ss.csr_matrix(X_means),
+        obs=pd.DataFrame(index=pd.Index(group_names, name=perturbation_column_name)),
+        var=ad.var.copy(deep=True),
+        uns=dict(ad.uns.items()),
+    )
+
+    # Identify train perturbations (excluding control)
+    train_perts = ad.obs.loc[
+        (ad.obs[split_column_name] == train_split_label)
+        & (ad.obs[perturbation_column_name] != control_label),
+        perturbation_column_name,
+    ].unique()
+
+    if len(train_perts) == 0:
+        return agg
+
+    # Average the pseudobulks for train perturbations
+    idx = [i for i, name in enumerate(group_names) if name in train_perts]
+    avg_vec = X_means[idx].mean(0, keepdims=True)
+
+    avg_row = sc.AnnData(
+        X=ss.csr_matrix(avg_vec),
+        obs=pd.DataFrame(index=pd.Index(["Average_Perturbation_Train"])),
+        var=agg.var.copy(deep=True),
+    )
+
+    return sc.concat([agg, avg_row], axis=0, join="outer", merge="first")

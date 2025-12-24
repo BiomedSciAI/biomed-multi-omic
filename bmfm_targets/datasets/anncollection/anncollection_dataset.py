@@ -336,7 +336,7 @@ class AnnDataItemLoaderWithLabels(AnnDataItemLoader):
         return metadata, genes, expressions
 
 
-def get_ann_collection(input_dir, join_obs="inner"):
+def get_ann_collection(input_dir: list[str] | list[Path] | str, join_obs="inner"):
     """Getting AnnCollection instance from the h5ad files in the directory."""
     """
     Args:

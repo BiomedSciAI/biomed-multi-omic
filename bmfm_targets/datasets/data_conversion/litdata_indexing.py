@@ -1,6 +1,7 @@
 import json
 import os
 from collections.abc import Iterable
+from typing import Any
 
 from bmfm_targets.datasets.data_conversion.serializers import IndexSerializer
 
@@ -58,6 +59,7 @@ def create_litdata_index(
     n_full_files: int,
     last_file_size: int,
     label_dict: dict[str, int],
+    custom_config: dict[str, Any],
 ):
     chunks = []
     for i in range(n_full_files):
@@ -90,6 +92,8 @@ def create_litdata_index(
     if label_dict:
         config["tiledb"]["label_dict"] = label_dict
 
+    if custom_config:
+        config.update(custom_config)
     specs = {"chunks": chunks, "config": config}
 
     with open(os.path.join(output_dir, "index.json"), "w") as file:
@@ -101,8 +105,9 @@ def build_index(
     index: Iterable,
     label_dict: dict[str, int] | None = None,
     chunk_size: int = 5000,
+    custom_config: dict[str, Any] = None,
 ):
     n_full_files, last_file_size = create_chunk_index(output_dir, index, chunk_size)
     create_litdata_index(
-        output_dir, chunk_size, n_full_files, last_file_size, label_dict
+        output_dir, chunk_size, n_full_files, last_file_size, label_dict, custom_config
     )

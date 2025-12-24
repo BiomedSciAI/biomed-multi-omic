@@ -16,8 +16,6 @@ from anndata import AnnData
 from rnanorm import TPM
 from scipy.sparse import csr_matrix
 
-from bmfm_targets.tokenization import load_tokenizer
-
 logger = logging.getLogger(__name__)
 
 
@@ -384,6 +382,8 @@ class KeepVocabGenesTransform(KeepGenesTransform):
         ----
             vocab_identifier: name of packaged tokenizer ("gene2vec" or "all_genes")
         """
+        from bmfm_targets.tokenization import load_tokenizer  # to avoid circular import
+
         self.genes_to_keep = load_tokenizer(vocab_identifier).get_field_vocab("genes")
 
 
@@ -1139,6 +1139,8 @@ class HighlyVariableGenesTransform(BaseSCTransform):
         span: float = 0.3,
         n_bins: int = 20,
         flavor: str = "seurat",
+        subset: bool = True,
+        batch_key: str | None = None,
     ):
         """
         Initialize the HighlyVariableGenesTransform class.
@@ -1152,8 +1154,60 @@ class HighlyVariableGenesTransform(BaseSCTransform):
             max_mean: Maximum gene mean threshold.
             span: Span parameter for the seurat flavor.
             n_bins: Number of bins for the seurat flavor.
-            flavor: Flavor of the highly variable gene selection method.
+            flavor : {'seurat', 'seurat_v3', 'cell_ranger', 'pearson_residuals'}, optional
+                The method used to identify highly variable genes.
+                Each flavor assumes a specific form of preprocessing:
+
+                - **'seurat'**
+                Based on Seurat v2's variance stabilization approach.
+                Use this flavor **only with log-transformed data** (e.g. after `sc.pp.log1p`), typically
+                computed from library-size normalized counts (via `sc.pp.normalize_total`).
+                Raw counts should *not* be passed directly.
+
+                - **'seurat_v3'**
+                Implements Seurat v3's mean-variance relationship model.
+                Expects **raw count data** (unnormalized integer counts).
+                The function internally normalizes and log-transforms the data before computing
+                variance residuals.
+                Do *not* pre-log or pre-normalize before calling.
+
+                - **'cell_ranger'**
+                Emulates the approach used by the Cell Ranger pipeline.
+                Use **raw counts** as input (integer UMI counts).
+                The function automatically applies total-count normalization and log transformation.
+
+                - **'pearson_residuals'**
+                Designed for **raw count data**, using Pearson residuals from a negative binomial model
+                fitted per gene.
+                Do *not* normalize or log-transform in advance, as the method models count variance
+                explicitly.
+
             subset: Whether to subset the data based on highly variable genes.
+            batch_key : str, optional
+                Column in `adata.obs` that identifies batch membership (e.g. sequencing run, plate, donor, or perturbation group).
+                When provided, highly variable genes are computed **separately within each batch**, then aggregated across batches.
+                This can help control for technical variation but must be used carefully:
+
+                - **Good idea:**
+                When batches represent *technical replicates* (e.g. sequencing runs, plates, donors)
+                and each contains a comparable mix of biological conditions.
+                Batch-aware HVG selection helps avoid picking genes variable only due to batch effects.
+
+                - **Bad idea:**
+                When batches are *biologically distinct conditions*, such as different **perturbations**, **cell types**,
+                or **time points**.
+                In perturbation datasets where each batch corresponds to a unique treatment or perturbation,
+                using `batch_key` can suppress truly condition-specific variability—resulting in under-selection
+                of relevant response genes.
+                In such cases, prefer running HVG selection on the **unbatched data** or **within each perturbation subset** separately.
+
+        Notes:
+        -----
+        Choosing the correct flavor depends on the preprocessing stage of your AnnData object:
+            - If you've already normalized and log-transformed your data → use `'seurat'`.
+            - If you're starting from raw counts and want the modern default → use `'seurat_v3'`.
+            - For Cell Ranger-style variance estimates → use `'cell_ranger'`.
+            - For NB residual-based HVG selection → use `'pearson_residuals'`.
         """
         self.n_top_genes = n_top_genes
         self.min_disp = min_disp
@@ -1163,6 +1217,8 @@ class HighlyVariableGenesTransform(BaseSCTransform):
         self.span = span
         self.n_bins = n_bins
         self.flavor = flavor
+        self.subset = subset
+        self.batch_key = batch_key
 
     def __call__(self, adata: AnnData) -> Mapping[str, AnnData]:
         """
@@ -1200,8 +1256,9 @@ class HighlyVariableGenesTransform(BaseSCTransform):
                 span=self.span,
                 n_bins=self.n_bins,
                 flavor=self.flavor,
-                subset=True,
+                subset=self.subset,
                 check_values=True,
+                batch_key=self.batch_key,
             )
             logger.info(f"adata shape after = {adata.to_df().shape}")
 

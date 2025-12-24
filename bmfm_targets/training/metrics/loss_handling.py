@@ -10,10 +10,13 @@ from bmfm_targets.training import metrics
 logger = logging.getLogger(__name__)
 
 
-def lookup_wced_output_index(loss_name: str, field: FieldInfo) -> int:
+def lookup_wced_output_index(loss_name: str, field: FieldInfo) -> int | None:
     for name, kwargs in field.decode_modes.items():
         if name == "wced":
-            return kwargs["logit_outputs"].index(loss_name)
+            if len(kwargs["logit_outputs"]) > 1:
+                return kwargs["logit_outputs"].index(loss_name)
+            else:
+                return None
     raise ValueError("No WCED decoder found for field!")
 
 
@@ -69,7 +72,13 @@ class LossTask:
         these_labels = labels[self.output_key]
         if getattr(self, "label_set", None) is not None:
             these_labels = these_labels[self.label_set]
-        if self.loss_name in ("mse", "token_mse", "is_zero_bce", "is_zero_focal"):
+        if self.loss_name in (
+            "mse",
+            "token_mse",
+            "is_zero_bce",
+            "is_zero_focal",
+            "mae",
+        ):
             model_outputs = self.get_predictions(logits)
             label_dtype = model_outputs.dtype
             gt_labels = these_labels.to(label_dtype).view(model_outputs.shape)
@@ -129,6 +138,7 @@ class FieldLossTask(LossTask):
         token_values: list[float] | None = None,
         loss_group: str | None = None,
         wced_target: str | None = None,
+        shrinkage: float = 0.0,
     ):
         """
         Initialize a FieldLossTask.
@@ -156,6 +166,7 @@ class FieldLossTask(LossTask):
         self.token_values = token_values
         self.decoder_key = decoder_key
         self.loss_group = loss_group
+        self.shrinkage = shrinkage
 
         # only used for wced
         self.decode_token_index = None
@@ -235,7 +246,7 @@ class FieldLossTask(LossTask):
         if loss_name in ("token_value", "cross_entropy", "focal"):
             return field.vocab_size
         # if "regression" in field.decode_modes and loss_name in (
-        if loss_name in ("token_mse", "mse", "is_zero_bce", "is_zero_focal"):
+        if loss_name in ("token_mse", "mse", "is_zero_bce", "is_zero_focal", "mae"):
             return 1
 
         raise ValueError(
@@ -255,7 +266,7 @@ class FieldLossTask(LossTask):
             predictions = torch.round(predictions)
             predictions = torch.clip(predictions, 0, self.field.vocab_size - 1)
 
-        elif self.loss_name in ["mse"]:
+        elif self.loss_name in ["mse", "mae"]:
             predictions = these_logits
             if self.link_function == "exp":
                 predictions = torch.exp(predictions)
@@ -298,7 +309,7 @@ class FieldLossTask(LossTask):
         """
         if self.loss_name in ("cross_entropy", "focal", "token_value"):
             return "_token_scores"
-        elif self.loss_name in ("token_mse", "mse"):
+        elif self.loss_name in ("token_mse", "mse", "mae"):
             return "_regression"
         elif self.loss_name in ("is_zero_bce"):
             return "_is_zero"
@@ -342,6 +353,18 @@ class FieldLossTask(LossTask):
                 request_logits.squeeze(),
                 labels,
                 ignore_zero=self.ignore_zero,
+                shrinkage=self.shrinkage,
+            )
+
+        if self.loss_name in ("mae"):
+            if self.link_function == "exp":
+                request_logits = torch.exp(request_logits)
+
+            return metrics.mae_loss(
+                request_logits.squeeze(),
+                labels,
+                ignore_zero=self.ignore_zero,
+                shrinkage=self.shrinkage,
             )
 
         elif self.loss_name == "cross_entropy":
@@ -464,6 +487,17 @@ class LabelLossTask(LossTask):
     def logit_key(self):
         return self.label_column.label_column_name
 
+    def extract_metric_inputs(
+        self, logits: dict[str, torch.Tensor], labels: dict[str, torch.Tensor]
+    ) -> tuple[str, torch.Tensor, torch.Tensor]:
+        if self.loss_name != "hce":
+            return super().extract_metric_inputs(logits, labels)
+        logit_key = self.logit_key
+        logits, labels = adapt_hce_prediction_and_labels_to_metrics_entries(
+            logits[logit_key], labels[logit_key]
+        )
+        return self.logit_key, logits, labels
+
     def get_predictions(self, logits: dict[str, torch.Tensor]):
         logit_key = self.logit_key
         if logits[logit_key].shape[1] == 1:
@@ -495,7 +529,7 @@ class LabelLossTask(LossTask):
         """
         if self.loss_name in ("cross_entropy", "focal", "BCEWithLogitsLoss"):
             return "_classification"
-        elif self.loss_name == "mse":
+        elif self.loss_name in ("mse", "mae"):
             return "_regression"
         else:
             raise ValueError("Unsupported loss name: " + self.loss_name)
@@ -664,7 +698,6 @@ def calculate_losses(
     """Calculates the losses across multiple tasks."""
     all_losses = {}
     total_weight, total_loss = 0, 0
-
     for loss_task in loss_tasks:
         loss_val = loss_task.calculate_loss(logits, labels)
         if loss_val is None or torch.isnan(loss_val):
@@ -718,6 +751,13 @@ def combine_partial_predictions(
         return torch.where(
             partial_predictions[is_zero_key] == 1, 0, partial_predictions["mse"]
         )
+    if "mae" in partial_predictions.keys():
+        is_zero_key = [k for k in partial_predictions if "is_zero" in k][0]
+
+        return torch.where(
+            partial_predictions[is_zero_key] == 1, 0, partial_predictions["mae"]
+        )
+
     # cross_entropy is the "default" -- if there are others present let's report
     # cross_entropy as the "prediction" even though all are used for the loss
     for loss_name in [
@@ -733,3 +773,28 @@ def combine_partial_predictions(
     raise ValueError(
         f"Received non-commensurate partial predictions: {partial_predictions.keys()}"
     )
+
+
+def adapt_hce_prediction_and_labels_to_metrics_entries(
+    logits: torch.Tensor, labels: torch.Tensor
+) -> torch.Tensor:
+    """
+    Finds prediction label with argmax and replaces a set of target labels with a single target label.
+    If predicted label in a set of target labels, set target label equal to predicted label.
+    Otherwise, set random label from the set of target labels to target label.
+    If flag is zero, set target label to -100.
+    """
+    labels = labels.clone().detach()
+    flag = labels[..., -1].to(torch.bool)
+    labels = labels[..., :-1]
+    pred = torch.argmax(logits, dim=1)
+    mask_value_at_pred = (
+        torch.gather(input=labels, dim=1, index=pred[..., None])
+        .squeeze(1)
+        .to(torch.bool)
+    )
+    labels[~flag, 0] = 1.0
+    new_labels = torch.multinomial(labels, 1).squeeze(1)
+    new_labels[mask_value_at_pred] = pred[mask_value_at_pred]
+    new_labels[~flag] = -100
+    return logits, new_labels

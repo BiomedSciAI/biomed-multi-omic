@@ -5,13 +5,17 @@ logger = logging.getLogger(__name__)
 from functools import partial
 
 import torch
-import torch.utils.checkpoint
 from torch import Tensor, nn
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 
 from bmfm_targets.config import FieldInfo, LabelColumnInfo, SCModelConfigBase
 from bmfm_targets.training.metrics import masked_mean
+
+from ..model_utils import (
+    MaskedLMOutputWithEmbeddings,
+    SequenceClassifierOutputWithEmbeddings,
+)
 
 
 class SCEmbeddingsLayer(nn.Module):
@@ -283,17 +287,47 @@ def set_grad_to_zero(grads, indices):
     grads.data[indices] *= 0
 
 
-def get_embeddings_from_outputs(outputs, attention_mask, pooling_method):
+def get_embeddings_from_outputs(
+    outputs: SequenceClassifierOutputWithEmbeddings | MaskedLMOutputWithEmbeddings,
+    attention_mask: torch.Tensor,
+    pooling_method: str | int,
+) -> torch.Tensor:
+    """
+    Get embeddings from model outputs based on requested pooling method.
+
+    Args:
+    ----
+        outputs (SequenceClassifierOutputWithEmbeddings | MaskedLMOutputWithEmbeddings): model output from __call__
+        attention_mask (torch.Tensor): attention_mask for mean pooling so that only real tokens contribute
+        pooling_method (str | int): requested pooling method, if integer the embedding will be the
+            token vector at that position in the sequence
+
+    Raises:
+    ------
+        ValueError: if invalid pooling method requested
+
+    Returns:
+    -------
+        torch.Tensor: embeddings for the batch generally of shape (batch_size, hidden_size)
+
+    """
     if pooling_method == "pooling_layer":
         return outputs.embeddings
     if pooling_method == "first_token":
+        assert outputs.hidden_states is not None
         last_hidden_states = outputs.hidden_states[-1]
         # use CLS token only
         return last_hidden_states[:, 0, :]
     if pooling_method == "mean_pooling":
+        assert outputs.hidden_states is not None
         last_hidden_states = outputs.hidden_states[-1]
         # use everything except CLS token
         return masked_mean(last_hidden_states[:, 1:, :], attention_mask[:, 1:])
+    elif isinstance(pooling_method, int):
+        decode_index = pooling_method
+        assert outputs.hidden_states is not None
+        last_hidden_states = outputs.hidden_states[-1]
+        return last_hidden_states[:, decode_index, :]
     raise ValueError(f"Unsupported pooler type: {pooling_method}")
 
 
@@ -459,6 +493,7 @@ class LabelDecoder(nn.Module):
         output_size = label_column.output_size
         cls = nn.Linear(config.hidden_size, output_size)
         cls.bias = nn.Parameter(torch.zeros(output_size))
+        self.decode_from = label_column.decode_from
         if label_column.gradient_reversal_coefficient is not None:
             self.decoder = nn.Sequential(
                 GradientReversal(label_column.gradient_reversal_coefficient), cls
@@ -528,10 +563,18 @@ class SCClassificationDecoder(nn.Module):
             label_decoder = LabelDecoder(config, label_column)
             self.label_decoders[label_column.label_column_name] = label_decoder
 
-    def forward(self, hidden_states: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self, pooled_output: torch.Tensor, sequence_output: torch.Tensor | None = None
+    ) -> dict[str, torch.Tensor]:
         label_logits = {}
         for label_decoder_name, label_decoder in self.label_decoders.items():
-            label_logits[label_decoder_name] = label_decoder(hidden_states)
+            if hasattr(label_decoder, "decode_from") and isinstance(
+                label_decoder.decode_from, int
+            ):
+                decode_from_tensor = sequence_output[:, label_decoder.decode_from, :]
+            else:
+                decode_from_tensor = pooled_output
+            label_logits[label_decoder_name] = label_decoder(decode_from_tensor)
         return label_logits
 
 
@@ -611,8 +654,10 @@ class SCMultiTaskClassificationHead(nn.Module):
         super().__init__()
         self.predictions = SCClassificationDecoder(config)
 
-    def forward(self, pooled_output: torch.Tensor) -> torch.Tensor:
-        prediction_scores = self.predictions(pooled_output)
+    def forward(
+        self, pooled_output: torch.Tensor, sequence_output: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        prediction_scores = self.predictions(pooled_output, sequence_output)
         return prediction_scores
 
 
@@ -658,7 +703,7 @@ class SCMultiTaskHead(nn.Module):
         mvc_query_embeddings: torch.Tensor | None = None,
     ):
         predictions = self.predictions(sequence_output, mvc_query_embeddings)
-        predictions.update(self.label_predictions(pooled_output))
+        predictions.update(self.label_predictions(pooled_output, sequence_output))
         return predictions
 
 

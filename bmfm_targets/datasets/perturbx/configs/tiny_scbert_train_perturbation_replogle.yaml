@@ -1,0 +1,125 @@
+defaults:
+  - base_scbert_config
+  - _self_
+
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes
+# fields are supplied outside as it is needed by both data module and model
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "genes"
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "expressions"
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: scale_adapt
+      n_sin_basis: 48
+      basis_scale: 1.5
+      trainable: true
+      zero_as_special_token: true
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "perturbations"
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "label_expressions"
+    is_input: false
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: mlp_with_special_token_embedding
+      zero_as_special_token: true
+    decode_modes:
+      - "regression"
+      - "is_zero"
+
+data_module:
+  _target_: bmfm_targets.datasets.perturbx.PerturbxDataModule
+  _partial_: true
+  padding: longest
+  num_workers: 0
+  max_length: 4096
+  sequence_order: sorted
+  batch_size: 2
+  collation_strategy: "sequence_labeling"
+  transform_datasets: false
+  log_normalize_transform: false
+  limit_genes: tokenizer
+  dataset_kwargs:
+    iterate_over_all: True
+    dataset_pars:
+      - dataset_path: ${oc.env:PERTURBX_DATASET}/shuffled_replogle.h5ad
+        index_dir: ${oc.env:PERTURBX_DATASET}/shuffled_replogle_train
+        split: train
+      - dataset_path: ${oc.env:PERTURBX_DATASET}/shuffled_replogle.h5ad
+        index_dir: ${oc.env:PERTURBX_DATASET}/shuffled_replogle_dev
+        split: dev
+    transforms:
+      - transform_name: NormalizeTotalTransform
+        transform_args:
+          exclude_highly_expressed: false
+          max_fraction: 0.05
+          target_sum: null # use median normalization
+      - transform_name: LogTransform
+        transform_args:
+           add_one: True
+
+model:
+  _target_: bmfm_targets.config.SCBertConfig
+  _partial_: true
+  num_hidden_layers: 2
+  num_attention_heads: 16
+  intermediate_size: 128
+  hidden_act: "gelu"
+  hidden_size: 128
+  attention: torch
+  hidden_dropout_prob: 0.1
+  attention_probs_dropout_prob: 0.1
+  initializer_range: 0.02
+  layer_norm_eps: 1e-12
+  use_cache: true
+  checkpoint: null
+
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 0
+  weight_decay: 0
+  learning_rate: 5.0e-6
+  betas:
+    - 0.9
+    - 0.99
+  epsilon: 1.0e-8
+  lr_decay_steps: null
+  #batch_prediction_behavior: track
+  losses:
+    - field_name: label_expressions
+      name: mse
+      ignore_zero: true
+     #link_function: exp # remove since we log_normalize
+    - field_name: label_expressions
+      name: is_zero_bce
+task:
+  - _target_: bmfm_targets.config.TrainingTaskConfig
+    default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/perturbation/${track_clearml.task_name}/09022025a
+    max_epochs: 50
+    val_check_interval: 0.5
+    gradient_clip_val: 0.5
+    max_steps: -1  # -1 means no limit
+    accumulate_grad_batches:  4
+    freeze_layers: false
+    resume_training_from_ckpt: false
+  - _target_: bmfm_targets.config.TestTaskConfig
+    default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/perturbation/${track_clearml.task_name}/09022025a
+    checkpoint: best
+    num_bootstrap_runs: 1
+    callbacks:
+        - _target_: bmfm_targets.training.callbacks.SavePredictionsH5ADCallback
+          output_file_name: "${oc.env:BMFM_TARGETS_TRAINING_DIR}/perturbation/${track_clearml.task_name}/09022025a/predictions.h5ad"
+
+track_clearml:
+    project_name: "bmfm-targets/perturbation"
+    task_name: "tiny_scbert_perturbation_replogle"
+    continue_last_task: false
+    reuse_last_task_id: false

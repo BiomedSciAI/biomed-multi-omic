@@ -20,7 +20,7 @@ The above scripts will automatically find the best fine-tuned ckpt from the corr
 We also have a script to run the baseline modernbert on just the finetuning dataset without any checkpoint:
 
 ```bash
-bash  bmfm_targets/evaluation/benchmark_configs_dna/benchmark_zuvela_wolora_snpify_no_chk.sh
+bash  bmfm_targets/evaluation/benchmark_configs_dna /benchmark_zuvela_wolora_snpify_no_chk.sh
 ```
 
 ## Instructions
@@ -38,7 +38,7 @@ In `benchmark_<train|test>_run.sh` choose a way to launch your job by modifying 
 
 ### Key Configuration Details
 
-- The benchmarks run sequence classification (train and test) and embedding generation, using the main entry point for the scRNA foundation model, `bmfm-targets-run`.
+- The benchmarks run sequence classification (train and test) and embedding generation, using the main entry point for the scRNA foundation model, `bmfm-targets-scbert`.
 - For the predict task, we are assuming the model was trained with MLM and therefore require `data_module.collation_strategy=language_modeling`. We also remove the model settings `~model` so that everything is loaded from the ckpt.
 - The logs will be saved on <repo_dir>/../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
 - Tasks will be created in ClearML `bmfm-targets/evaluation_dna/{checkpoint_name}/${DATASET}ft` and ` bmfm-targets/evaluation/{checkpoint_name}/${DATASET}zero_shot`
@@ -59,8 +59,8 @@ Users need to modify this list manually to include new datasets.
 The settings are constructed hierarchically and set in [hydra's override grammar](https://hydra.cc/docs/advanced/override_grammar/basic/). TLDR you can override whatever you want in the final `config.yaml` or by modifying the overrides in the `benchmark_run` script.
 
 The basic settings are in
-[base_seq_cls.yaml](./data_module/base_seq_cls.yaml)
-which are updated/overwritten per dataset in files such as [coreprom](./data_module/coreprom.yaml).
+[base_seq_cls.yaml](bmfm_targets/evaluation/benchmark_configs/data_module/base_seq_cls.yaml)
+which are updated/overwritten per dataset in files such as [coreprom](bmfm-targets/bmfm_targets/evaluation/benchmark_configs_dna/data_module/coreprom.yaml).
 
 If you need to change something that affects all of the datasets it should go either in `base_seq_cls` if it should be permanent and most importantly, in a dataset-specific file if it affects that dataset only. That is where things like dataset specific transforms and splits should go.
 
@@ -83,7 +83,7 @@ Some checkpoints require continuous values, some discrete, sometimes you will wa
 The benchmark has been tested with the prefix_cmd set to:
 
 ```bash
-bsub -M 30G -n 16 -W 6:00 -gpu num=1:mode=exclusive_process
+jbsub -q x86_6h -cores 8+1 -mem 16g
 ```
 
 This setup assumes GPU availability. Users may need to modify `prefix_cmd` to specify a GPU queue if necessary.
@@ -97,4 +97,4 @@ Training cannot be resumed directly from `benchmark_run.sh`, but `session-manage
 ### Expected Runtime
 
 - Prediction runs are fast, 5-10 min.
-- Training runs can take several hours, depending on how many epochs are requested. The number of epochs used for fine-tuning is set in [`config.yaml`](./config.yaml) file field `max_finetuning_epochs`.
+- Training runs can take several hours, depending on how many epochs are requested. The number of epochs used for fine-tuning is set in `bmfm_targets/evaluation/benchmark_configs/task/train.yaml` where it is interpolated from the `config.yaml` file field `max_finetuning_epochs`.

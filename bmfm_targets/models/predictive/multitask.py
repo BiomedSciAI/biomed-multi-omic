@@ -40,7 +40,9 @@ class ClassificationHead(nn.Module):
 
 
 class MultiTaskClassifier(nn.Module):
-    def __init__(self, base_model: PreTrainedModel, loss_tasks: list[LabelLossTask]):
+    def __init__(
+        self, base_model: PreTrainedModel, loss_tasks: list[LabelLossTask], config=None
+    ):
         """
         A classifier with multiple classification heads.
 
@@ -61,7 +63,9 @@ class MultiTaskClassifier(nn.Module):
         super().__init__()
         self.base_model_prefix = "base_model"
         self.base_model = base_model
-        self.config: bmfm_targets.config.SCModelConfigBase = base_model.config
+        self.config: bmfm_targets.config.SCModelConfigBase = (
+            base_model.config if config is None else config
+        )
         self.shared_latents = nn.ModuleDict()
         self.dropout = nn.Dropout(self.config.classifier_dropout)
         self.loss_tasks = loss_tasks
@@ -115,6 +119,7 @@ class MultiTaskClassifier(nn.Module):
         ckpt_path: str,
         loss_tasks: list[LabelLossTask] | None = None,
         model_config: bmfm_targets.config.SCModelConfigBase | None = None,
+        device=None,
     ):
         """
         Load MultiTask model from chekpoint.
@@ -149,7 +154,11 @@ class MultiTaskClassifier(nn.Module):
 
         """
         logger.info("Loading model from checkpoint " + str(ckpt_path))
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = (
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if device is None
+            else device
+        )
         ckpt_dict = torch.load(ckpt_path, map_location=device, weights_only=False)
 
         # manage loading model from lightning checkpoint
@@ -169,13 +178,16 @@ class MultiTaskClassifier(nn.Module):
 
             state_dict[mt_key_name] = state_dict.pop(key)
 
-        base_model = getattr(seq_cls_model, model_config.model_type)
+        if hasattr(seq_cls_model, "get_base_model"):
+            base_model = seq_cls_model.get_base_model()
+        else:
+            base_model = getattr(seq_cls_model, model_config.model_type)
 
         # TODO: I dont understand this logic. Please take a look at this. If losses is none then load losses from checkpoint? why?
         if loss_tasks is None:
             loss_tasks = ckpt_dict["hyper_parameters"]["trainer_config"].losses
 
-        mt = cls(base_model, loss_tasks)
+        mt = cls(base_model, loss_tasks, model_config)
 
         key_report = mt.load_state_dict(state_dict, strict=False)
         logger.info(f"Loading complete. {len(state_dict)} layers in ckpt.")

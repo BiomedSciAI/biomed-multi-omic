@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 from tokenizers import Tokenizer
+from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.models.bert import BertTokenizerFast
 from transformers.tokenization_utils_base import (
@@ -503,7 +504,7 @@ class MultiFieldTokenizer:
         return tokenizer.get_vocab()
 
     def field_vocab_size(self, name):
-        return self.get_field_tokenizer(name).vocab_size
+        return len(self.get_field_tokenizer(name))
 
     def get_field_tokenizer(
         self, field: str
@@ -616,6 +617,8 @@ class MultiFieldTokenizer:
                 not castable to numbers
 
         """
+        if field not in self.tokenizers:
+            return None
         field_tokens = self.get_field_vocab(field)
 
         def num(t):
@@ -650,3 +653,30 @@ class MultiFieldTokenizer:
 
             for i, j in product(special_token_ids, repeat=2):
                 assert i == j
+
+
+def set_custom_cls_post_processor(
+    subtok: PreTrainedTokenizerFast, cls_tokens: list[str]
+):
+    """
+    Set a post-processor that prepends custom CLS tokens to every sequence.
+
+    Modifies tokenizer in-place.
+
+    Args:
+    ----
+      tokenizer: the subtokenizer (not multifield tokenizer) must be "Fast"
+      cls_tokens: the list of CLS-like tokens to include must already be present in the vocab
+
+    """
+    sep = subtok.sep_token or "[SEP]"
+    cls_section = " ".join(cls_tokens)
+
+    # single sequence: CLS_1 CLS_2 ... $A SEP
+    single_template = f"{cls_section} $A {sep}"
+    # pair sequence: CLS_1 CLS_2 ... $A SEP $B SEP
+    pair_template = f"{cls_section} $A {sep} $B {sep}"
+    specials = list(zip(subtok.all_special_tokens, subtok.all_special_ids))
+    subtok.backend_tokenizer.post_processor = TemplateProcessing(
+        single=single_template, pair=pair_template, special_tokens=specials
+    )  # pyright: ignore[reportAttributeAccessIssue]

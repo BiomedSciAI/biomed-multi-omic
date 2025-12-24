@@ -1,8 +1,11 @@
 import functools
 import json
+import pickle
 from pathlib import Path
 
+import cellxgene_census
 import pandas as pd
+from huggingface_hub import hf_hub_download
 
 ABBRV_TAXA_NAMES = {
     "homo_sapiens": "hsapiens",
@@ -89,6 +92,64 @@ def get_gene_chromosome_locations(
     chroms_df = pd.read_csv(fname, index_col="gene_symbol")
 
     return chroms_df
+
+
+def get_median_from_geneformer(aggregate_transcripts: str | None = None):
+    """
+    Get median values for the gene expressions provided by geneformer: https://huggingface.co/ctheodoris/Geneformer/blob/main/geneformer/gene_median_dictionary_gc104M.pkl
+    and maps ENSG_ID to gene symbol using cellxgene_census.
+
+    Returns
+    -------
+    pd.DataFrame: Gene_symbol and corresponding medians.
+    """
+    repo_id = "ctheodoris/Geneformer"
+    filename = "geneformer/gene_median_dictionary_gc104M.pkl"
+
+    median_file = hf_hub_download(repo_id=repo_id, filename=filename)
+
+    with open(median_file, "rb") as f:
+        ensg_median = pickle.load(f)
+
+    with cellxgene_census.open_soma(census_version="latest") as census:
+        human = census["census_data"]["homo_sapiens"]
+        gene_data = human.ms["RNA"].var.read().concat().to_pandas()
+
+    ensg_gene_name = gene_data[["feature_id", "feature_name"]]
+    ensg_to_symbol = dict(
+        zip(ensg_gene_name["feature_id"], ensg_gene_name["feature_name"])
+    )
+    converted_data = [
+        {"gene_symbol": ensg_to_symbol.get(ensg, None), "value": val}
+        for ensg, val in ensg_median.items()
+        if ensg_to_symbol.get(ensg) is not None
+    ]
+    gene_symbol_median = pd.DataFrame(converted_data)
+    gene_symbol_median = gene_symbol_median.set_index("gene_symbol")
+
+    if aggregate_transcripts == "max":
+        gene_symbol_median = gene_symbol_median.groupby(level=0).max()
+    elif aggregate_transcripts == "sum":
+        gene_symbol_median = gene_symbol_median.groupby(level=0).sum()
+    else:
+        raise NotImplementedError(
+            "Aggregation method not implemented. Choose sum or max."
+        )
+
+    return gene_symbol_median
+
+
+@functools.lru_cache
+def get_gene_medians():
+    """Read the file containing gene_symbol and corresponding medians. If the file is available locally use it otherwise download it."""
+    fname = Path(__file__).parent / "geneName_median_cellxgene.tsv"
+
+    if fname.exists():
+        gene_medians = pd.read_csv(fname, sep="\t", index_col="gene_symbol")
+    else:
+        gene_medians = get_median_from_geneformer(aggregate_transcripts="max")
+
+    return gene_medians
 
 
 def get_ortholog_genes(

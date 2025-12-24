@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import scipy.stats as stats
 import torch
@@ -134,6 +136,56 @@ def focal_loss(logits, labels, focal_gamma=2.0, **kwargs):
     return criterion(probs, labels)
 
 
+def weighted_logsumexp(x, weights, dim=None, keepdim=False):
+    """
+    Numerically stable log-sum-exp implementation with weights.
+
+    Args:
+    ----
+        x (Tensor): Input tensor.
+        dim (int or tuple of ints, optional): Dimension(s) to reduce.
+        keepdim (bool): Whether to keep reduced dimensions.
+
+    Returns:
+    -------
+        Tensor: log(sum(exp(x))).
+    """
+    max_x, _ = (
+        torch.max(x, dim=dim, keepdim=True) if dim is not None else (torch.max(x), None)
+    )
+    stable_x = x - max_x if dim is not None else x - max_x
+    sum_exp = torch.sum(
+        weights * torch.exp(stable_x), dim=dim, keepdim=True if keepdim else False
+    )
+    out = torch.log(sum_exp) + (max_x if keepdim or dim is None else max_x.squeeze(dim))
+    return out
+
+
+def hce_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """
+    Hierarchical cross-entropy loss.
+
+    Args:
+    ----
+    labels (torch.Tensor): A tensor containing 0s and 1s, where 1 indicates a
+        selected label. The last element serves as a flag:
+        - 0 if all values are 0
+        - 1 otherwise
+    logits (torch.Tensor): logits of predictions
+    """
+    flag = labels[..., -1]
+    labels = labels[..., :-1]
+    labels = labels - flag[..., None] + 1.0  # Set all 1 if flag is 0 to avoid NANs
+    loss = -torch.mean(
+        (
+            weighted_logsumexp(x=logits, weights=labels, dim=-1)
+            - torch.logsumexp(logits, dim=-1)
+        )
+        * flag
+    )
+    return loss
+
+
 class TokenValueLoss(torch.nn.Module):
     """
     Calculated the difference between a token's *value* and the predicted logits.
@@ -191,10 +243,14 @@ def classification_loss(
 ):
     if labels is None:
         return None
+    if loss_name == "hce":
+        return hce_loss(logits, labels)
     if problem_type is None:
         problem_type = deduce_problem_type(labels, output_size)
     if problem_type == "regression" and loss_name == "mse":
         loss = mse_loss(logits.squeeze(), labels, ignore_zero=ignore_zero)
+    elif problem_type == "regression" and loss_name == "mae":
+        loss = mae_loss(logits.squeeze(), labels, ignore_zero=ignore_zero)
     elif problem_type == "single_label_classification":
         if loss_name == "focal":
             loss = focal_loss(
@@ -231,19 +287,81 @@ def deduce_problem_type(labels: torch.Tensor, output_size: int):
     return problem_type
 
 
-def mse_loss(logits, labels, ignore_index=-100.0, ignore_zero=False):
+def mse_loss(logits, labels, ignore_index=-100.0, ignore_zero=False, shrinkage=0.0):
+    """
+    MSE loss with optional L2 shrinkage towards zero prediction.
+
+    Args:
+    ----
+        shrinkage: L2 penalty weight on predictions (Ridge-style). Encourages predicting zero.
+    """
+    if labels.shape != logits.shape:
+        labels = labels.view(logits.shape)
+
     if ignore_zero:
         ignore_mask = (labels == ignore_index) | (labels == 0.0)
     else:
         ignore_mask = labels == ignore_index
 
-    # if summing in half precision, it can overflow
-    n_valid_elements = (~ignore_mask).to(torch.float32).sum()
-    field_loss_unreduced = F.mse_loss(logits, labels.to(logits.dtype), reduction="none")
-    field_masked_loss = field_loss_unreduced * (~ignore_mask)
-    field_loss_sum = field_masked_loss.sum()
+    valid_mask = ~ignore_mask
+    n_valid = valid_mask.sum()
 
-    return field_loss_sum / (n_valid_elements + 1e-6)
+    # Main loss
+    loss_unreduced = F.mse_loss(logits, labels.to(logits.dtype), reduction="none")
+    loss = (loss_unreduced * valid_mask).sum() / (n_valid + 1e-6)
+
+    # L2 shrinkage on predictions (encourages zero)
+    if shrinkage > 0:
+        shrink_loss = (logits.pow(2) * valid_mask).sum() / (n_valid + 1e-6)
+        loss = loss + shrinkage * shrink_loss
+
+    return loss
+
+
+def mae_loss(
+    logits,
+    labels,
+    ignore_index=-100.0,
+    ignore_zero=False,
+    shrinkage=0.0,
+    soft_threshold=0.0,
+):
+    """
+    MAE loss with optional shrinkage.
+
+    Args:
+    ----
+        shrinkage: L1 penalty weight on predictions (Lasso-style). Encourages predicting zero.
+        soft_threshold: Soft thresholding on residuals before computing loss.
+                       Treats small deviations as zero. Good for your deviation prediction use case.
+    """
+    if labels.shape != logits.shape:
+        labels = labels.view(logits.shape)
+
+    if ignore_zero:
+        ignore_mask = (labels == ignore_index) | (labels == 0.0)
+    else:
+        ignore_mask = labels == ignore_index
+
+    valid_mask = ~ignore_mask
+    n_valid = valid_mask.to(torch.float64).sum()
+
+    # Compute residuals
+    residuals = logits - labels.to(logits.dtype)
+
+    # Optional soft thresholding (dampens small deviations)
+    if soft_threshold > 0:
+        residuals = torch.sign(residuals) * F.relu(residuals.abs() - soft_threshold)
+
+    # Main loss
+    loss = (residuals.abs() * valid_mask).sum() / (n_valid + 1e-6)
+
+    # L1 shrinkage on predictions (encourages zero)
+    if shrinkage > 0:
+        shrink_loss = (logits.abs() * valid_mask).sum() / (n_valid + 1e-6)
+        loss = loss + shrinkage * shrink_loss
+
+    return loss
 
 
 def is_zero_bce_loss(logits: torch.Tensor, labels: torch.Tensor, ignore_index=-100):
@@ -370,7 +488,8 @@ def calculate_95_ci(data, n, ci_method="bootstrap_quantiles"):
         upper_bound = ci[1]
     elif ci_method == "binomial":
         if np.max(data) > 1 or np.min(data) < 0:
-            raise ValueError("Binomial based CI's are meant to be used for proportions")
+            logging.warning("Binomial based CI's are meant to be used for proportions")
+            return mean, np.nan, np.nan
         ci_length = 1.96 * np.sqrt((mean * (1 - mean)) / n)
         lower_bound = mean - ci_length
         upper_bound = mean + ci_length

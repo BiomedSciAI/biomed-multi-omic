@@ -35,6 +35,8 @@ def convert_files(file_path, tokenizer, serializer, data_source="dnaseq_base"):
         data = Parquet2LitDatasetInsulation(file_path, tokenizer, serializer)
     elif data_source == "chromatin":
         data = Parquet2LitDatasetChromatinProfile(file_path, tokenizer, serializer)
+    elif data_source == "snp2trait":
+        data = Parquet2LitDatasetSnp2Trait(file_path, tokenizer, serializer)
     elif data_source == "dnaseq_base":
         data = Parquet2LitDataset(file_path, tokenizer, serializer)
     else:
@@ -187,6 +189,30 @@ class Parquet2LitDatasetChromatinProfile(Parquet2LitDataset):
                 yield tuple(to_return_fncs)
 
 
+class Parquet2LitDatasetSnp2Trait(Parquet2LitDataset):
+    """Dataset class to read a parquet file and yield a pair of tokenized DNA sequences with 2000 class labels for diseases or traits."""
+
+    header = ["dna_chunks", "combined_snp2trait_labels"]
+
+    def __iter__(self):
+        for batch in self.data.iter_batches(
+            batch_size=1000,
+            use_threads=False,
+            columns=self.header,
+        ):
+            df_dna_snp2trait = batch.to_pandas()
+            df_dna_snp2trait = df_dna_snp2trait.astype(str)
+            assert df_dna_snp2trait.shape[1] == 2
+            for i in range(len(df_dna_snp2trait)):
+                dna_chunk = df_dna_snp2trait.iloc[i, 0]
+                tokens = self.tokenizer.tokenize(dna_chunk)
+                to_return_fncs = [self.serializer.serialize(tokens)] + [
+                    self.serializer.serialize([str(df_dna_snp2trait.iloc[i, col_ind])])
+                    for col_ind in range(1, df_dna_snp2trait.shape[1])
+                ]
+                yield tuple(to_return_fncs)
+
+
 def convert_parquet_to_litdata(
     input_dir,
     output_dir,
@@ -314,6 +340,13 @@ def get_args():
         default=False,
     )
     parser.add_argument(
+        "--snp2trait",
+        help="if the dataset is SNP2Trait dataset",
+        action=argparse.BooleanOptionalAction,
+        required=False,
+        default=False,
+    )
+    parser.add_argument(
         "--splits",
         help="if the input dir has internal splits",
         action=argparse.BooleanOptionalAction,
@@ -341,6 +374,8 @@ if __name__ == "__main__":
         data_source = "insulation"
     elif args.chromatin:
         data_source = "chromatin"
+    elif args.snp2trait:
+        data_source = "snp2trait"
     else:
         data_source = "dnaseq_base"
 

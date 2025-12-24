@@ -156,7 +156,7 @@ class BaseDNASeqDataset(Dataset):
         )
 
     def get_sample_metadata(self, idx):
-        metadata = {"seq_id": idx}
+        metadata = {"seq_id": str(idx)}
         if self.label_columns:
             metadata.update(
                 {

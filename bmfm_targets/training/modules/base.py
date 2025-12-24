@@ -115,7 +115,7 @@ class BaseTrainingModule(pl.LightningModule):
         self.initialize_metrics(metric_requests)
         if self.MODELING_STRATEGY == "sequence_classification":
             self.model = instantiate_classification_model(
-                self.model_config, self.loss_tasks
+                self.model_config, self.loss_tasks, self.device
             )
         else:
             self.model = get_model_from_config(
@@ -473,11 +473,21 @@ class BaseTrainingModule(pl.LightningModule):
                     batch_size=batch_size,
                 )
 
+    def get_prediction_active_keys(self, label_task_only=False):
+        """Returns a list of keys to save batch predictions."""
+        active_keys = {
+            loss_task.metric_key: loss_task
+            for loss_task in self.loss_tasks
+            if loss_task.loss_name != "hce"
+            and (not label_task_only or isinstance(loss_task, LabelLossTask))
+        }
+        return active_keys
+
     def record_batch_predictions(self, batch, outputs, split):
         predictions = metrics.calculate_predictions(self.loss_tasks, outputs.logits)
         # predictions are on the level of the field, not the loss task
         # each field/label gets all the logits combined for the tracking code
-        active_keys = {loss_task.metric_key: loss_task for loss_task in self.loss_tasks}
+        active_keys = self.get_prediction_active_keys()
         for _, loss_task in active_keys.items():
             batch_tensors = loss_task.concat_batch_tensors(batch, outputs, predictions)
             batch_tensors = batch_tensors.detach().cpu()
@@ -527,9 +537,10 @@ class BaseTrainingModule(pl.LightningModule):
         for metric_key, gene_level_error in self.token_level_errors.items():
             gene_metrics = get_gene_metrics_from_gene_errors(gene_level_error)
             for k, v in gene_metrics.items():
-                self.logger.experiment.add_scalar(
-                    f"{split}/{metric_key}_{k}", v, self.global_step
-                )
+                if hasattr(self.logger.experiment, "add_scalar"):
+                    self.logger.experiment.add_scalar(
+                        f"{split}/{metric_key}_{k}", v, self.global_step
+                    )
             best_genes, worst_genes = get_best_and_worst_genes(gene_level_error)
             cl = clearml.Logger.current_logger()
             if cl:
@@ -551,8 +562,26 @@ class BaseTrainingModule(pl.LightningModule):
             limit_to_continuous_value_encoder=True
         ):
             preds_df = self.prediction_df[field_metric_key]
+            if "delta_" in field_metric_key:
+                field = [
+                    f.field for f in self.loss_tasks if f.metric_key == field_metric_key
+                ][0]
+                gt_label = f"label_{field.field_name}"
+                predicted_label = f"predicted_{field.field_name}"
+                plot_only_non_zeros = False
+            else:
+                gt_label = "label_expressions"
+                predicted_label = "predicted_expressions"
+                plot_only_non_zeros = True
+
+            logger.info(f"creating density plot for split {split}")
             self.create_and_log_predictions_density_plot(
-                split, preds_df, suffix=field_metric_key
+                split,
+                preds_df,
+                suffix=field_metric_key,
+                gt_label=gt_label,
+                predicted_label=predicted_label,
+                plot_only_non_zeros=plot_only_non_zeros,
             )
         for label_task in filter(
             lambda x: isinstance(x, LabelLossTask), self.loss_tasks
@@ -562,6 +591,7 @@ class BaseTrainingModule(pl.LightningModule):
                 if label_task.label_column.is_regression_label:
                     gt_label = label_task.metric_key + "_label"
                     predicted_label = label_task.metric_key + "_prediction"
+                    logger.info(f"creating density plot for {split}, {predicted_label}")
                     self.create_and_log_predictions_density_plot(
                         split,
                         preds_df,
@@ -571,6 +601,10 @@ class BaseTrainingModule(pl.LightningModule):
                         plot_only_non_zeros=False,
                     )
                 else:
+                    logger.info(
+                        f"creating accuracy by target for {split}, {label_task.output_key}"
+                    )
+
                     self.create_and_log_accuracy_by_targets_w_ci(
                         split,
                         preds_df,
@@ -578,7 +612,7 @@ class BaseTrainingModule(pl.LightningModule):
                     )
 
     def dump_batch_predictions(self, split):
-        active_keys = {loss_task.metric_key: loss_task for loss_task in self.loss_tasks}
+        active_keys = self.get_prediction_active_keys()
         for output_key, lt in active_keys.items():
             if isinstance(lt, FieldLossTask):
                 columns = field_predictions_df_columns(
@@ -619,22 +653,22 @@ class BaseTrainingModule(pl.LightningModule):
         gt_label="label_expressions",
         plot_only_non_zeros=True,
         suffix="",
-        frac=1,
     ):
         if plot_only_non_zeros:
-            nonzero_preds = preds_df.query(f"{predicted_label} > 0 & {gt_label} > 0")
+            mask = preds_df[gt_label] > 0
+            mask &= preds_df[predicted_label] > 0
+            nonzero_preds = preds_df[mask]
+            logger.info(f"computed mask, new shape: {nonzero_preds.shape}")
             fig = plots.make_predictions_gt_density_plot(
                 nonzero_preds,
                 predicted_label=predicted_label,
                 gt_label=gt_label,
-                frac=frac,
             )
         else:
             fig = plots.make_predictions_gt_density_plot(
                 preds_df,
                 predicted_label=predicted_label,
                 gt_label=gt_label,
-                frac=frac,
             )
         cl = clearml.Logger.current_logger()
         if cl:
@@ -807,12 +841,15 @@ class BaseTrainingModule(pl.LightningModule):
             )
             self.prediction_df[metric_key] = preds_df
             logger.info(f"calculating get_gene_level_expression_error for {metric_key}")
-            self.token_level_errors[metric_key] = get_gene_level_expression_error(
-                preds_df
-            )
-        for label_metric_key in [
-            lt.metric_key for lt in self.loss_tasks if isinstance(lt, LabelLossTask)
-        ]:
+            try:
+                self.token_level_errors[metric_key] = get_gene_level_expression_error(
+                    preds_df
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Unable to calculate gene level errors for {metric_key} due to {e}"
+                )
+        for label_metric_key in self.get_prediction_active_keys(label_task_only=True):
             self.prediction_df[label_metric_key] = self._get_label_predictions_df(
                 split, label_metric_key
             )
@@ -820,10 +857,8 @@ class BaseTrainingModule(pl.LightningModule):
     def get_supported_field_metric_keys(
         self, limit_to_continuous_value_encoder=False
     ) -> set[str]:
-        supported_field_names = ("label_expressions", "expressions")
         is_supported_filter = (
-            lambda lt: isinstance(lt, FieldLossTask)
-            and lt.output_key in supported_field_names
+            lambda lt: isinstance(lt, FieldLossTask) and "expressions" in lt.output_key
         )
         if limit_to_continuous_value_encoder:
             filter_func = (
@@ -900,7 +935,12 @@ def get_weight_decay_groups(weight_decay, model):
                 # random note: because named_modules and named_parameters are recursive
                 # we will see the same tensors p many many times. but doing it this way
                 # allows us to know which parent module any tensor p belongs to...
-                if pn.endswith("bias") or pn.endswith("basis"):
+                if (
+                    pn.endswith("bias")
+                    or pn.endswith("basis")
+                    or pn.endswith("scale")
+                    or pn.endswith("aux_tokens")
+                ):
                     # all biases will not be decayed
                     no_decay.add(fpn)
                 if "lora_magnitude_vector" in pn:

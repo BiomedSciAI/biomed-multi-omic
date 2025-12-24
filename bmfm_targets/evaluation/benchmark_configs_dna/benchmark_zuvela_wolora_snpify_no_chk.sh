@@ -34,7 +34,7 @@ EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_val_chk0.1_
 # set PREFIX_CMD to "echo " and the commands will be printed (check that the bash vars are correct or to dump to a file for future running)
 # set PREFIX_CMD to "jbsub -q x86_6h -cores 8+1 -mem 50g" or similar to submit on CCC
 # set PREFIX_CMD to a session-manager-ccc call with the command as a variable to be parsed
-# set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-run print the resolved yaml without running the code
+# set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-scbert print the resolved yaml without running the code
 PREFIX_CMD="bsub -M 30G -n 16 -W 6:00 -gpu num=1:mode=exclusive_process "
 SUFFIX_CMD="" #  +trainer.lora_config=default" #"--cfg job --resolve"
 for i in "${!datasets[@]}"; do
@@ -51,7 +51,7 @@ for i in "${!datasets[@]}"; do
                 mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
                 $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/trian$EST_TIME.out \
                     -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-                    "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                    "bash -c \"bmfm-targets-scbert -cd $SCRIPT_DIR -cn config \
                     batch_size=$BS \
                     tokenizer=$TOKENIZER \
                     data_module=$DATASET task=train model=$MODEL\
@@ -65,7 +65,7 @@ for i in "${!datasets[@]}"; do
                     output_directory=$OUTPUT_DIR \
                     extra_tag=$EXTRA_TAG \
                     $SUFFIX_CMD\"" ;
-                #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET_WITH_FOLD fold=$fold label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+                #$PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET_WITH_FOLD fold=$fold label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
             done
         done
     elif [ "$DATASET" == "mpra" ]; then
@@ -74,7 +74,7 @@ for i in "${!datasets[@]}"; do
             mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
             $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
                 -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-                "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                "bash -c \"bmfm-targets-scbert -cd $SCRIPT_DIR -cn config \
                 label_columns=$DATASET \
                 batch_size=$BS \
                 tokenizer=$TOKENIZER \
@@ -91,13 +91,13 @@ for i in "${!datasets[@]}"; do
                 extra_tag=$EXTRA_TAG \
                 max_finetuning_epochs=20 \
                 $SUFFIX_CMD\"" ;
-            #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+            #$PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
         done
     elif [ "$DATASET" == "drosophila_enhancer" ]; then
         mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
         $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
             -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-            "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+            "bash -c \"bmfm-targets-scbert -cd $SCRIPT_DIR -cn config \
             label_columns=$DATASET \
             batch_size=$BS \
             tokenizer=$TOKENIZER \
@@ -112,7 +112,7 @@ for i in "${!datasets[@]}"; do
             output_directory=$OUTPUT_DIR \
             extra_tag=$EXTRA_TAG \
             $SUFFIX_CMD\"";
-        #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+        #$PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
     elif [[ "$DATASET" == "promoter_dnabert2" || "$DATASET" == "coreprom" || "$DATASET" == "splice"  ]]; then
         for version in  "snpified_v1" ; do
             for type in  "snp_genome"; do
@@ -120,7 +120,7 @@ for i in "${!datasets[@]}"; do
                 mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
                 $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
                     -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-                    "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                    "bash -c \"bmfm-targets-scbert -cd $SCRIPT_DIR -cn config \
                     tokenizer=$TOKENIZER \
                     batch_size=$BS \
                     data_module=$DATASET task=train model=$MODEL\
@@ -142,7 +142,7 @@ for i in "${!datasets[@]}"; do
         mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
         $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
             -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-            "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+            "bash -c \"bmfm-targets-scbert -cd $SCRIPT_DIR -cn config \
             tokenizer=$TOKENIZER \
             batch_size=$BS \
             data_module=$DATASET task=train model=$MODEL\
@@ -156,6 +156,6 @@ for i in "${!datasets[@]}"; do
             output_directory=$OUTPUT_DIR \
             extra_tag=$EXTRA_TAG \
             $SUFFIX_CMD\"";
-        #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+        #$PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
     fi
 done

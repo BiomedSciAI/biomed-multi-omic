@@ -199,7 +199,7 @@ class TrainerConfig:
 
     """
 
-    batch_size: int = 64
+    batch_size: int | str = 64
     betas: tuple[float, float] = (0.9, 0.99)
     epsilon: float = 1e-8
     learning_rate: float = 1e-4
@@ -208,7 +208,7 @@ class TrainerConfig:
     warmup_steps: int = 0
     weight_decay: float | None = None
     metrics: list[dict] | None = None
-    pooling_method: str = "pooling_layer"
+    pooling_method: str | int = "pooling_layer"
     batch_prediction_behavior: str | int | None = None
     lora_config: Any = None
 
@@ -216,6 +216,8 @@ class TrainerConfig:
         if isinstance(self.lora_config, str):
             if self.lora_config == "default":
                 return LoraConfigWrapper()
+            elif self.lora_config == "llama":
+                return LoraConfigWrapper(target_modules=["c_attn", "proj"])
             else:
                 raise ValueError(
                     f"Unknown string value for lora_config: {self.lora_config}"
