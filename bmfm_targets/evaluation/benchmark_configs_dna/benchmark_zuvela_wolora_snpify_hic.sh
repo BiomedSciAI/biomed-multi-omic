@@ -1,7 +1,7 @@
-declare -a datasets=("tf" "coreprom" "covid" "splice"  "promoter_dnabert2" "mpra" )
-declare -a datasets=("mpra")
+declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
+#declare -a datasets=("mpra" )
 declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
-declare -a label_column_names=("mean_value")
+#declare -a label_column_names=("mean_value")
 
 EST_TIME=$(TZ="America/New_York" date +"%Y%m%d_%H%M")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
@@ -11,10 +11,11 @@ LEARNING_RATE=0.0001
 MODEL_PE=128
 MODEL_WD=0.01
 MODEL="modernbert" # Makesure it is passed on config.yaml as MODEL
-MODEL_NAME="modernbert_wo_lora"
-CHKPT_NAME="chkpt_no"
+MODEL_NAME="modernbert" # by default is wo_lora...
+CHKPT_NAME="hic_3Cells_v4.5"  #"genome_hic_hepg2_multi_v3.5" # Used for naming output directory and clearml project
 
-CHKPT_REF=null
+CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/old_ref_snp_hic_3celllines/backup_ckpt/epoch=5-step=119340-val_loss=4.43.ckpt\'"
+#"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=18-step=138282-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=17-step=131004-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=3-step=87372-val_loss=4.40.ckpt\'"
@@ -24,7 +25,7 @@ CHKPT_REF=null
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=78612-val_loss=5.23.ckpt\'"
 #CHKPT_MODERNBERT_REF="/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=69877-val_loss=5.27.ckpt"
 OUTPUT_DIR="/proj/bmfm/users/sanjoy/benchmarking/"
-EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_val_chk0.1_batch_dump" # This can be used for saving benchmarking and also clearml logging
+EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump" # This can be used for saving benchmarking and also clearml logging
 
 # project_name: "bmfm-targets/evaluate_dna/${model_name}_${CHKPT_NAME}${extra_tag}"
 # default_root_dir: "${output_directory}/${model_name}_${CHKPT_NAME}${extra_tag}/${dataset_name}"
@@ -35,7 +36,7 @@ EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_val_chk0.1_
 # set PREFIX_CMD to "jbsub -q x86_6h -cores 8+1 -mem 50g" or similar to submit on CCC
 # set PREFIX_CMD to a session-manager-ccc call with the command as a variable to be parsed
 # set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-run print the resolved yaml without running the code
-PREFIX_CMD="bsub -M 50G -n 12 -W 24:00 -gpu num=1:mode=exclusive_process "
+PREFIX_CMD="bsub -M 30G -n 16 -W 12:00 -gpu num=1:mode=exclusive_process "
 SUFFIX_CMD="" #  +trainer.lora_config=default" #"--cfg job --resolve"
 for i in "${!datasets[@]}"; do
     DATASET=${datasets[i]}
@@ -54,7 +55,7 @@ for i in "${!datasets[@]}"; do
                     "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
                     batch_size=$BS \
                     tokenizer=$TOKENIZER \
-                    data_module=$DATASET task=train model=$MODEL\
+                    data_module=$DATASET task=train model=$MODEL \
                     dataset_name=$DATASET_NAME fold="${fold}/${version}" label_column_name=$LABEL_COLUMN_NAME \
                     model_name=$MODEL_NAME \
                     model_pe=$MODEL_PE \
@@ -64,33 +65,40 @@ for i in "${!datasets[@]}"; do
                     learning_rate=$LEARNING_RATE \
                     output_directory=$OUTPUT_DIR \
                     extra_tag=$EXTRA_TAG \
+                    max_finetuning_epochs=8 \
                     $SUFFIX_CMD\"" ;
                 #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET_WITH_FOLD fold=$fold label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
             done
         done
     elif [ "$DATASET" == "mpra" ]; then
-        for fold in "WTC11_refsnp"; do
-            DATASET_NAME=${DATASET}_${fold}
-            mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
-            $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
-                -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-                "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
-                label_columns=$DATASET \
-                batch_size=$BS \
-                tokenizer=$TOKENIZER \
-                data_module=$DATASET  trainer=regression task=train model=$MODEL\
-                max_finetuning_epochs=1 \
-                dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
-                model_name=$MODEL_NAME \
-                model_pe=$MODEL_PE \
-                model_wd=$MODEL_WD \
-                checkpoint_path=$CHKPT_REF \
-                checkpoint_name=$CHKPT_NAME \
-                learning_rate=$LEARNING_RATE \
-                output_directory=$OUTPUT_DIR \
-                extra_tag=$EXTRA_TAG \
-                $SUFFIX_CMD\"" ;
-            #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+        for cell_line in "K562" "HepG2" "WTC11"; do
+            for data_type in "original_trimmed" "biallelic_200" "refsnp"; do
+                fold="${cell_line}_${data_type}"
+                DATASET_NAME=${DATASET}_${fold}
+                mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
+                CMD_STR=" bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                    label_columns=$DATASET \
+                    batch_size=$BS \
+                    tokenizer=$TOKENIZER \
+                    data_module=$DATASET  trainer=regression task=train model=$MODEL\
+                    max_finetuning_epochs=15 \
+                    dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
+                    model_name=$MODEL_NAME \
+                    model_pe=$MODEL_PE \
+                    model_wd=$MODEL_WD \
+                    checkpoint_path=$CHKPT_REF \
+                    checkpoint_name=$CHKPT_NAME \
+                    learning_rate=$LEARNING_RATE \
+                    output_directory=$OUTPUT_DIR \
+                    extra_tag=$EXTRA_TAG "
+                if [ "$data_type" == "refsnp" ]; then
+                    CMD_STR+=" data_module.max_length=640  "
+                fi
+                echo $CMD_STR
+                $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
+                    -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
+                    "bash -c \"${CMD_STR} $SUFFIX_CMD \"";
+            done
         done
     elif [ "$DATASET" == "drosophila_enhancer" ]; then
         mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
@@ -113,13 +121,11 @@ for i in "${!datasets[@]}"; do
             $SUFFIX_CMD\"";
         #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
     elif [[ "$DATASET" == "promoter_dnabert2" || "$DATASET" == "coreprom" || "$DATASET" == "splice"  ]]; then
-        for version in  "snpified_v1" ; do
-            for type in  "snp_genome"; do
+        for version in "snpified_v1" "snpified_v2" "snpified_v3" ; do
+            for type in "ref_genome" "snp_genome" "refsnp_genome"; do
                 DATASET_NAME="${DATASET}_${version}_${type}"
                 mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
-                $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
-                    -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-                    "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                CMD_STR=" bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
                     tokenizer=$TOKENIZER \
                     batch_size=$BS \
                     data_module=$DATASET task=train model=$MODEL\
@@ -132,8 +138,15 @@ for i in "${!datasets[@]}"; do
                     learning_rate=$LEARNING_RATE \
                     output_directory=$OUTPUT_DIR \
                     extra_tag=$EXTRA_TAG \
-                    max_finetuning_epochs=1 \
-                    $SUFFIX_CMD\"" ;
+                    max_finetuning_epochs=8 \
+                    $SUFFIX_CMD "
+                if [ "$type" == "refsnp_genome" ]; then
+                    CMD_STR+=" data_module.max_len=1024  "
+                fi
+                echo $CMD_STR
+                $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
+                    -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
+                    "bash -c \"${CMD_STR} $SUFFIX_CMD \"";
             done
         done
 
@@ -154,6 +167,7 @@ for i in "${!datasets[@]}"; do
             learning_rate=$LEARNING_RATE \
             output_directory=$OUTPUT_DIR \
             extra_tag=$EXTRA_TAG \
+            max_finetuning_epochs=15 \
             $SUFFIX_CMD\"";
         #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
     fi

@@ -1,7 +1,7 @@
 declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
-#declare -a datasets=("promoter_dnabert2" )
+declare -a datasets=("mpra" )
 declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
-#declare -a label_column_names=("label" "label" "label")
+declare -a label_column_names=("mean_value")
 
 EST_TIME=$(TZ="America/New_York" date +"%Y%m%d_%H%M")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
@@ -12,9 +12,11 @@ MODEL_PE=128
 MODEL_WD=0.01
 MODEL="modernbert" # Makesure it is passed on config.yaml as MODEL
 MODEL_NAME="modernbert_wo_lora"
-CHKPT_NAME="refsnp_v3.31"
+CHKPT_NAME="refsnp_v3.5"
 
-CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'"
+CHKPT_REF="ibm-research/biomed.dna.snp.modernbert.113m"
+#"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=18-step=138282-val_loss=4.40.ckpt\'"
+#"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=17-step=131004-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=3-step=87372-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=9-step=72810-val_loss=4.40.ckpt\'"
@@ -34,7 +36,7 @@ EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump"
 # set PREFIX_CMD to "jbsub -q x86_6h -cores 8+1 -mem 50g" or similar to submit on CCC
 # set PREFIX_CMD to a session-manager-ccc call with the command as a variable to be parsed
 # set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-run print the resolved yaml without running the code
-PREFIX_CMD="bsub -M 30G -n 16 -W 12:00 -gpu num=1:mode=exclusive_process "
+PREFIX_CMD="bsub -M 50G -n 16 -W 24:00 -gpu num=1:mode=exclusive_process "
 SUFFIX_CMD="" #  +trainer.lora_config=default" #"--cfg job --resolve"
 for i in "${!datasets[@]}"; do
     DATASET=${datasets[i]}
@@ -69,7 +71,7 @@ for i in "${!datasets[@]}"; do
             done
         done
     elif [ "$DATASET" == "mpra" ]; then
-        for fold in "K562_original" "K562_biallelic_200"; do
+        for fold in "K562_original_trimmed" "HepG2_original_trimmed" "WTC11_original_trimmed"; do
             DATASET_NAME=${DATASET}_${fold}
             mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
             $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
@@ -79,7 +81,7 @@ for i in "${!datasets[@]}"; do
                 batch_size=$BS \
                 tokenizer=$TOKENIZER \
                 data_module=$DATASET  trainer=regression task=train model=$MODEL\
-                max_finetuning_epochs=25 \
+                max_finetuning_epochs=30 \
                 dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
                 model_name=$MODEL_NAME \
                 model_pe=$MODEL_PE \
@@ -114,7 +116,7 @@ for i in "${!datasets[@]}"; do
         #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
     elif [[ "$DATASET" == "promoter_dnabert2" || "$DATASET" == "coreprom" || "$DATASET" == "splice"  ]]; then
         for version in "snpified_v1" "snpified_v2" "snpified_v3" ; do
-            for type in  "ref_genome" "snp_genome"; do
+            for type in "snp_genome" "refsnp_genome"; do
                 DATASET_NAME="${DATASET}_${version}_${type}"
                 mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
                 $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
@@ -132,7 +134,7 @@ for i in "${!datasets[@]}"; do
                     learning_rate=$LEARNING_RATE \
                     output_directory=$OUTPUT_DIR \
                     extra_tag=$EXTRA_TAG \
-                    max_finetuning_epochs=5 \
+                    max_finetuning_epochs=15 \
                     $SUFFIX_CMD\"" ;
             done
         done

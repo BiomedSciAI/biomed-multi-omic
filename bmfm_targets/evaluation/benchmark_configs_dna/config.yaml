@@ -21,7 +21,7 @@ track_clearml:
     - "ckpt_${checkpoint_name}"
   continue_last_task: False
 
-max_finetuning_epochs: 12
+max_finetuning_epochs: 15
 batch_size: 32
 dataset_name: "" # do not modify, set by script, it should contain fold name within
 fold: "" # This is for some dataset which has multiple folds...
