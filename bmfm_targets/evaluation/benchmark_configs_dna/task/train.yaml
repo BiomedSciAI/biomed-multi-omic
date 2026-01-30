@@ -2,7 +2,7 @@
   default_root_dir: "${output_directory}/${model_name}_${checkpoint_name}${extra_tag}/${dataset_name}"
   max_epochs: ${max_finetuning_epochs}
   precision: 32
-  val_check_interval: 0.5
+  val_check_interval: 0.1
   accelerator: "gpu"
   gradient_clip_val: 0.5
   max_steps: -1  # -1 means no limit
