@@ -1,5 +1,5 @@
 declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
-declare -a datasets=("mpra" )
+declare -a datasets=("snv_TeWhey" )
 declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
 declare -a label_column_names=("mean_value")
 
@@ -138,7 +138,33 @@ for i in "${!datasets[@]}"; do
                     $SUFFIX_CMD\"" ;
             done
         done
-
+    elif [ "$DATASET" == "snv_TeWhey" ]; then
+        SPLIT_TYPE="split_Gosai_chrwise"
+        INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/snv_mpra_Tewhey/${SPLIT_TYPE}"
+        for fold in "K562" "HepG2"; do
+            DATASET_NAME=${DATASET}_${SPLIT_TYPE}_${fold}
+            LABEL_COLUMN_NAME="${fold}_label"
+            mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
+            $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
+                -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
+                "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                label_columns=mpra \
+                batch_size=$BS \
+                tokenizer=$TOKENIZER \
+                data_module=$DATASET  trainer=regression task=train model=$MODEL\
+                max_finetuning_epochs=15 \
+                dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
+                model_name=$MODEL_NAME \
+                model_pe=$MODEL_PE \
+                model_wd=$MODEL_WD \
+                checkpoint_path=$CHKPT_REF \
+                checkpoint_name=$CHKPT_NAME \
+                learning_rate=$LEARNING_RATE \
+                input_directory=$INPUT_DIR \
+                output_directory=$OUTPUT_DIR \
+                extra_tag=$EXTRA_TAG \
+                $SUFFIX_CMD\"" ;
+        done
     else
         mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
         $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \

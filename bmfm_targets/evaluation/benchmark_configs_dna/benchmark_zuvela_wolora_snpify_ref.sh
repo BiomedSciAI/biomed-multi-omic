@@ -71,7 +71,7 @@ for i in "${!datasets[@]}"; do
             done
         done
     elif [[ "$DATASET" == 'epigenetic_marks' ]]; then
-        for fold in "H3" "H3K14ac"; do
+        for fold in "H3" "H3K14ac" "H3K36me3"; do
             #for version in "ref_genome" "snp_genome"; do
                 DATASET_NAME="${DATASET}_${fold}"
                 #rm -rf $OUTPUT_DIR/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
