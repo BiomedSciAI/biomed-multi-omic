@@ -13,12 +13,32 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 # run on v100
 # PREFIX_CMD="bsub -J benchmark_job -R \"rusage[ngpus=1,cpu=8,mem=16GB]\" -gpu num=1:mode=exclusive_process:gmodel=TeslaV100_SXM2_32GB -o $HOME/.lsf/cluster/%J.out -e $HOME/.lsf/cluster/%J.err"
 # run on a100
-PREFIX_CMD="bsub -J benchmark_job -R \"rusage[ngpus=1,cpu=8,mem=16GB]\" -gpu num=1:mode=exclusive_process:gmodel=NVIDIAA100_SXM4_80GB -o $HOME/.lsf/cluster/%J.out -e $HOME/.lsf/cluster/%J.err"
+# zuvela
+PREFIX_CMD=(
+  bsub
+  -o "$HOME/.lsf/cluster/%J.out"
+  -e "$HOME/.lsf/cluster/%J.err"
+  -n 8
+  -R 'select[ngpus>=1] span[hosts=1]'
+  -M 20G
+  -gpu 'num=1:mode=exclusive_process'
+)
+
+# ccc
+PREFIX_CMD=(
+  bsub
+  -J benchmark_job
+  -R 'rusage[ngpus=1,cpu=8,mem=16GB]'
+  -gpu 'num=1:mode=exclusive_process:gmodel=NVIDIAA100_SXM4_80GB'
+  -o "$HOME/.lsf/cluster/%J.out"
+  -e "$HOME/.lsf/cluster/%J.err"
+)
+
 SUFFIX_CMD="" #--cfg job --resolve"
 for DATASET in "${datasets[@]}"; do
-    $PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET task=train model=scbert $SUFFIX_CMD ;
+    "${PREFIX_CMD[@]}" bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET task=train $SUFFIX_CMD ;
 done
 
 for DATASET in "${datasets[@]}"; do
-$PREFIX_CMD bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET data_module.collation_strategy=language_modeling task=predict ~model ~fields track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
+    "${PREFIX_CMD[@]}" bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET task=predict ~model ~tokenizer ~trainer.losses ~fields track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
 done

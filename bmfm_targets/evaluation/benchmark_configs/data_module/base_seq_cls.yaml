@@ -4,7 +4,7 @@ collation_strategy: "sequence_classification"
 batch_size: 20
 max_length: 512
 shuffle: true
-sequence_order: "random"
+sequence_order: sorted
 # for interpolation only
 counts_column_name: null
 batch_column_name: null

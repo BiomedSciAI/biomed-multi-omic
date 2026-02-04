@@ -8,13 +8,13 @@ mlm: false
 limit_genes: protein_coding
 shuffle: true
 transform_datasets: false
-data_dir: /dccstor/bmfm-targets/data/omics/transcriptome/scRNA/finetune/hBones
-processed_name: processed_rawcount
+# this dataset comes preprocessed must not double log it
+log_normalize_transform: false
 dataset_kwargs:
+  processed_data_source: ${oc.env:BMFM_TARGETS_HBONES_DATA}/h5ad/hbones.h5ad
   split_column_name: split_cross
   label_columns:
   - celltype
 label_column_name: celltype
 dataset_name: hbones
 batch_column_name: donor #batch
-log_normalize_transform: true

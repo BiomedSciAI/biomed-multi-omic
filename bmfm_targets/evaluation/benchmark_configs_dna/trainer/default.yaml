@@ -1,5 +1,4 @@
 _target_: bmfm_targets.config.TrainerConfig
-batch_size: ${data_module.batch_size}
 warmup_steps: 1000
 weight_decay: ${model_wd}
 learning_rate: ${learning_rate}

@@ -5,23 +5,25 @@ _target_: bmfm_targets.training.data_module.DataModule
 transform_datasets: false
 processed_name: processed_pass_through
 limit_genes: protein_coding
+collation_strategy: multitask
 log_normalize_transform: true
 dataset_kwargs:
-  label_dict_path: ${data_module.data_dir}/labels.json
+  processed_data_source: ${data_module.data_dir}/h5ad/original.h5ad
+  split_column_name: split_batch
   expose_zeros: null
-transform_kwargs:
-    source_h5ad_file_name: ${data_module.data_dir}/h5ad/original.h5ad
-    transforms:
-      - transform_name: RenameGenesTransform
-        transform_args:
-          gene_map: null
-      - transform_name: KeepGenesTransform
-        transform_args:
-          genes_to_keep: null
-      - transform_name: QcMetricsTransform
-        transform_args:
-          pct_counts_mt: null
-          total_counts_iqr_scale: 1.5
+# transform_kwargs:
+#     source_h5ad_file_name: ${data_module.data_dir}/h5ad/original.h5ad
+#     transforms: []
+      # - transform_name: RenameGenesTransform
+      #   transform_args:
+      #     gene_map: null
+      # - transform_name: KeepGenesTransform
+      #   transform_args:
+      #     genes_to_keep: null
+      # - transform_name: QcMetricsTransform
+      #   transform_args:
+      #     pct_counts_mt: null
+      #     total_counts_iqr_scale: 1.5
 label_column_name: CellType
 batch_column_name: batch
 counts_column_name: total_counts

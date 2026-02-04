@@ -8,6 +8,7 @@ from bmfm_targets.tokenization import MultiFieldTokenizer
 GENE2VEC_VOCAB_PATH = Path(__file__).parent / "gene2vec_vocab"
 ALL_GENES_VOCAB_PATH = Path(__file__).parent / "all_genes_vocab"
 ALL_GENES_V2_VOCAB_PATH = Path(__file__).parent / "all_genes_v2_vocab"
+PROTEIN_CODING_VOCAB_PATH = Path(__file__).parent / "protein_coding_vocab"
 SNP_VOCAB_PATH = Path(__file__).parent / "snp_vocab"
 REF_VOCAB_PATH = Path(__file__).parent / "ref_vocab"
 SNP_BPE_VOCAB_PATH = SNP_VOCAB_PATH / "tokenizers/dna_chunks"
@@ -37,6 +38,10 @@ def get_snp2vec_tokenizer() -> MultiFieldTokenizer:
 
 def get_ref2vec_tokenizer() -> MultiFieldTokenizer:
     return MultiFieldTokenizer.from_pretrained(REF_VOCAB_PATH)
+
+
+def get_protein_coding_tokenizer():
+    return MultiFieldTokenizer.from_pretrained(PROTEIN_CODING_VOCAB_PATH)
 
 
 def get_snp2vec_BPEtokenizer() -> PreTrainedTokenizerFast:
@@ -86,6 +91,8 @@ def _load_tokenizer_from_identifier(identifier) -> MultiFieldTokenizer:
         return get_all_genes_tokenizer()
     if identifier == "all_genes_v2":
         return get_all_genes_v2_tokenizer()
+    if identifier == "protein_coding":
+        return get_protein_coding_tokenizer()
     if identifier == "snp2vec":
         return get_snp2vec_tokenizer()
     if identifier == "ref2vec":

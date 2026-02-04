@@ -197,37 +197,60 @@ def predict_run(pl_trainer, task_config, model_config, data_module, trainer_conf
         save_embeddings_results(task_config.default_root_dir, results)
 
 
+def merge_trainer_configs(
+    checkpoint_config: config.TrainerConfig | None,
+    override_config: config.TrainerConfig | None,
+) -> config.TrainerConfig:
+    """
+    Merge trainer configs from checkpoint and override.
+
+    - override is None: use checkpoint config
+    - override.losses is None: inherit checkpoint's losses (zero-shot)
+    - override.losses is []: no losses (embedding-only)
+    - override.losses is [...]: use override's losses (fine-tune)
+    """
+    if override_config is None:
+        return checkpoint_config
+    if checkpoint_config is None:
+        return override_config
+    if override_config.losses is None:
+        logger.info(
+            f"Inheriting {len(checkpoint_config.losses)} losses from checkpoint config"
+        )
+        override_config.losses = checkpoint_config.losses
+    return override_config
+
+
 def instantiate_module_from_checkpoint(
     task_config, data_module, model_config, trainer_config
 ):
     from bmfm_targets.tokenization import load_tokenizer
 
-    if task_config.checkpoint is None:
-        raise ValueError("Cannot run test or predict run without a checkpoint!")
     data_module.tokenizer = load_tokenizer(os.path.dirname(task_config.checkpoint))
 
-    pl_factory = get_training_module_class_for_data_module(data_module)
+    ckpt = torch.load(task_config.checkpoint, map_location="cpu", weights_only=False)
+    ckpt_hyper = ckpt["hyper_parameters"]
+
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
-    if trainer_config is not None:
-        extra_kwargs["trainer_config"] = trainer_config
+    if data_module.label_dict:
+        extra_kwargs["label_dict"] = data_module.label_dict
+    extra_kwargs["trainer_config"] = merge_trainer_configs(
+        ckpt_hyper.get("trainer_config"), trainer_config
+    )
     extra_kwargs["config_is_loaded_from_ckpt"] = True
+
+    pl_factory = get_training_module_class_for_data_module(data_module)
+
     if model_config is None:
-        logger.info(
-            "Model config is none then loading model from checkpoint "
-            + str(task_config.checkpoint)
-        )
-        pl_module = pl_factory.load_from_checkpoint(
+        return pl_factory.load_from_checkpoint(
             task_config.checkpoint, **extra_kwargs, weights_only=False
         )
-    else:
-        model_config.checkpoint = task_config.checkpoint
-        for field in model_config.fields:
-            field.update_vocab_size(data_module.tokenizer)
-        if data_module.label_dict is not None:
-            extra_kwargs["label_dict"] = data_module.label_dict
-        pl_module = pl_factory(model_config=model_config, **extra_kwargs)
 
-    return pl_module
+    model_config.checkpoint = task_config.checkpoint
+    for field in model_config.fields:
+        field.update_vocab_size(data_module.tokenizer)
+    extra_kwargs["model_config"] = model_config
+    return pl_factory(**extra_kwargs)
 
 
 def prepare_extra_training_module_kwargs(

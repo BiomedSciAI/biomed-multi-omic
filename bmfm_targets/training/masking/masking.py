@@ -103,9 +103,10 @@ class Masker:
                 batch.get(f"label_{field.field_name}", None),
             )
             labels[field.field_name] = field_labels
-            logger.debug(
-                f"uncorrected mask rate: {1 - (field_labels == -100).count_nonzero() / field_labels.flatten().shape[0]}"
-            )
+            # uncomment to debug mask rate
+            # logger.debug(
+            #     f"uncorrected mask rate: {1 - (field_labels == -100).count_nonzero() / field_labels.flatten().shape[0]}"
+            # )
 
         field_input_ids = [
             batch[field.field_name]["input_ids"] for field in input_fields

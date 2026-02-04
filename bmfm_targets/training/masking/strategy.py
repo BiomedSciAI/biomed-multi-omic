@@ -157,6 +157,13 @@ class WCEDMasker:
         self.lookup_field_tokenizer = self.tokenizer.get_field_tokenizer(
             self.lookup_field_name
         )
+        if hasattr(self.lookup_field_tokenizer, "backend_tokenizer"):
+            pre_tokenizer = self.lookup_field_tokenizer.backend_tokenizer.pre_tokenizer
+            if pre_tokenizer is not None:
+                logging.warning(
+                    "WCEDMasker assumes no pre-tokenization for lookup field tokenizer."
+                    " If input contains spaces or hyphens, WCED masking will fail."
+                )
 
     @property
     def _sample_transforms_transform_inputs_kwargs(self) -> dict:

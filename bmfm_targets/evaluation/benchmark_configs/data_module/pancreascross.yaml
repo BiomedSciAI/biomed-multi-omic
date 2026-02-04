@@ -8,7 +8,7 @@ mlm: false
 limit_genes: protein_coding
 shuffle: true
 transform_datasets: false
-data_dir: /dccstor/bmfm-targets/data/omics/transcriptome/scRNA/finetune/PancreasCross
+data_dir: ${oc.env:BMFM_TARGETS_PANCREAS_CROSS_DATA}
 processed_name: processed_rawcount
 dataset_kwargs:
   split_column_name: split_cross

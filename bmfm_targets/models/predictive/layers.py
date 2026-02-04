@@ -290,7 +290,7 @@ def set_grad_to_zero(grads, indices):
 def get_embeddings_from_outputs(
     outputs: SequenceClassifierOutputWithEmbeddings | MaskedLMOutputWithEmbeddings,
     attention_mask: torch.Tensor,
-    pooling_method: str | int,
+    pooling_method: str | int | list[int],
 ) -> torch.Tensor:
     """
     Get embeddings from model outputs based on requested pooling method.
@@ -299,8 +299,9 @@ def get_embeddings_from_outputs(
     ----
         outputs (SequenceClassifierOutputWithEmbeddings | MaskedLMOutputWithEmbeddings): model output from __call__
         attention_mask (torch.Tensor): attention_mask for mean pooling so that only real tokens contribute
-        pooling_method (str | int): requested pooling method, if integer the embedding will be the
-            token vector at that position in the sequence
+        pooling_method (str | int | list[int]): requested pooling method, if integer the embedding will be the
+            token vector at that position in the sequence, if list of integers the embeddings at those
+            positions will be concatenated along the feature dimension
 
     Raises:
     ------
@@ -309,6 +310,7 @@ def get_embeddings_from_outputs(
     Returns:
     -------
         torch.Tensor: embeddings for the batch generally of shape (batch_size, hidden_size)
+            or (batch_size, len(positions) * hidden_size) for list of positions
 
     """
     if pooling_method == "pooling_layer":
@@ -323,6 +325,12 @@ def get_embeddings_from_outputs(
         last_hidden_states = outputs.hidden_states[-1]
         # use everything except CLS token
         return masked_mean(last_hidden_states[:, 1:, :], attention_mask[:, 1:])
+    elif isinstance(pooling_method, list):
+        # multi-position token stacking: concatenate embeddings from multiple positions
+        assert outputs.hidden_states is not None
+        last_hidden_states = outputs.hidden_states[-1]
+        position_embeddings = [last_hidden_states[:, pos, :] for pos in pooling_method]
+        return torch.cat(position_embeddings, dim=1)
     elif isinstance(pooling_method, int):
         decode_index = pooling_method
         assert outputs.hidden_states is not None

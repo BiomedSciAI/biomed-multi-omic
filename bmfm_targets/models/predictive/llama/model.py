@@ -122,9 +122,13 @@ class LlamaForMaskedLMModel(nn.Module, CheckpointMixin):
         attention_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
+        output_hidden_states: bool | None = None,
     ) -> SequenceClassifierOutputWithEmbeddings:
         outputs: BaseModelOutputWithPoolingAndCrossAttentions = self.core(
-            input_ids, attention_mask, inputs_embeds
+            input_ids,
+            attention_mask,
+            inputs_embeds,
+            output_hidden_states=output_hidden_states,
         )
         cls_embeddings = outputs.last_hidden_state[:, 0, :]
 
@@ -174,9 +178,13 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
         attention_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
+        output_hidden_states: bool | None = None,
     ) -> SequenceClassifierOutputWithEmbeddings:
         outputs: BaseModelOutputWithPoolingAndCrossAttentions = self.core(
-            input_ids, attention_mask, inputs_embeds
+            input_ids,
+            attention_mask,
+            inputs_embeds,
+            output_hidden_states=output_hidden_states,
         )
         cls_embeddings = outputs.pooler_output
 
@@ -235,7 +243,10 @@ class LlamaForSequenceClassificationModel(nn.Module, CheckpointMixin, InitWeight
             raise ValueError("LLama model does not support output attentions ...")
 
         outputs: BaseModelOutputWithPoolingAndCrossAttentions = self.core(
-            input_ids, attention_mask, inputs_embeds
+            input_ids,
+            attention_mask,
+            inputs_embeds,
+            output_hidden_states=output_hidden_states,
         )
         pooler_output = outputs.pooler_output
 

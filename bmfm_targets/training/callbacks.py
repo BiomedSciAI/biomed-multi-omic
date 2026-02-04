@@ -1,6 +1,7 @@
 import logging
 import os
 import pathlib
+from collections.abc import Iterable
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -10,19 +11,49 @@ import pytorch_lightning as pl
 import scanpy as sc
 import transformers
 from clearml.logger import Logger
+from czbenchmarks.tasks import (
+    MetadataLabelPredictionTask,
+    MetadataLabelPredictionTaskInput,
+)
 from lightning_utilities.core.rank_zero import rank_zero_only
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.utilities import types as pl_types
 from scipy.sparse import csr_matrix
 
-from bmfm_targets.datasets.datasets_utils import (
-    guess_if_raw,
-    make_group_means,
-    random_subsampling,
-)
+from bmfm_targets.datasets.datasets_utils import make_group_means, random_subsampling
 from bmfm_targets.training.metrics import perturbation_metrics as pm
 
 logger = logging.getLogger(__name__)
+
+
+def is_valid_embedding(arr: np.ndarray | None) -> bool:
+    """Check if embedding array is valid for benchmarking."""
+    if arr is None:
+        return False
+    if not isinstance(arr, np.ndarray):
+        return False
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] == 0:
+        return False
+    if np.all(arr == 0):
+        return False
+    if np.isnan(arr).all():
+        return False
+    return True
+
+
+def discover_baseline_embeddings(
+    adata: sc.AnnData, model_key: str, exclude_keys: Iterable[str]
+) -> list[str]:
+    """Find valid baseline embedding keys in obsm, excluding model and standard scanpy keys."""
+    baselines = []
+    for key in adata.obsm:
+        if key == model_key or key in exclude_keys:
+            continue
+        if is_valid_embedding(adata.obsm[key]):
+            baselines.append(key)
+        else:
+            logger.warning(f"Skipping invalid embedding: {key}")
+    return baselines
 
 
 class BatchSizeScheduler(pl.Callback):
@@ -163,71 +194,103 @@ class InitialCheckpoint(ModelCheckpoint):
         trainer.save_checkpoint(self.dirpath + "/" + self.filename)
 
 
+MODEL_EMBED_KEY = "BMFM_RNA"
+
+
+def get_adata_with_embeddings(
+    trainer: pl.Trainer, batch_column_name, model_embed_key=MODEL_EMBED_KEY
+) -> sc.AnnData:
+    """Extract predictions and align embeddings with original AnnData."""
+    predictions = extract_predictions(trainer)
+    adata = trainer.datamodule.predict_dataset.processed_data
+    aligned = align_embeddings(adata, predictions)
+    adata_emb = adata.copy()
+    adata_emb.obsm[model_embed_key] = aligned
+
+    if batch_column_name is not None and batch_column_name in adata_emb.obs:
+        if batch_column_name != "batch":
+            adata_emb.obs["batch"] = adata_emb.obs[batch_column_name]
+        adata_emb.obs["batch"] = adata_emb.obs["batch"].astype("category")
+    return adata_emb
+
+
+def extract_predictions(trainer: pl.Trainer) -> dict:
+    """Collect and concatenate prediction outputs."""
+    batch_preds = trainer.predict_loop.predictions
+    return {
+        k: np.concatenate([d[k] for d in batch_preds], axis=0) for k in batch_preds[0]
+    }
+
+
+def align_embeddings(adata: sc.AnnData, results: dict) -> sc.AnnData:
+    """Align and add model embeddings to AnnData obsm."""
+    adata_emb = adata.copy()
+    embeddings = results["embeddings"]
+    name_to_idx = {name: i for i, name in enumerate(results["cell_name"])}
+    aligned = np.array([embeddings[name_to_idx[n]] for n in adata_emb.obs_names])
+    return aligned
+
+
 class BatchIntegrationCallback(pl.Callback):
+    """Callback for evaluating batch integration quality after prediction."""
+
+    # Keys to exclude when discovering baseline embeddings in obsm
+    EXCLUDED_OBSM_KEYS = frozenset(
+        {"X_pca", "X_umap", "X_tsne", "X_diffmap", "X_draw_graph_fr"}
+    )
+
     def __init__(
         self,
-        batch_column_name=None,
-        counts_column_name=None,
-        benchmarking_methods=[
-            "Unintegrated",
-            "Scanorama",
-            "LIGER",
-            "Harmony",
-        ],
+        batch_column_name: str | None = None,
+        counts_column_name: str | None = None,
+        target_column_name: str | None = None,
     ):
         super().__init__()
         self.batch_column_name = batch_column_name
         self.counts_column_name = counts_column_name
-        self.benchmarking_methods = benchmarking_methods
+        self.target_column_name = target_column_name
+        self.cl: Logger | None = None
 
-    def on_predict_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+    def on_predict_end(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ) -> None:
         self.cl = Logger.current_logger()
-        if self.cl:
-            self.execute_batch_integration(trainer)
+        if not self.cl:
+            logger.warning(
+                "ClearML logger not found, skipping batch integration reporting."
+            )
+            return
 
-    def execute_batch_integration(self, trainer):
-        adata_emb = self.get_adata_with_embeddings(trainer)
-        self.batch_column_name = self.verify_batch_column_name(trainer)
-        self.report_batch_integartion_to_clearml(adata_emb)
+        adata_emb = get_adata_with_embeddings(trainer, self.batch_column_name)
+        if self.target_column_name is None:
+            self.target_column_name = trainer.datamodule.label_columns[
+                0
+            ].label_column_name
 
-    def verify_batch_column_name(self, trainer):
-        self.target_column_name = trainer.datamodule.label_columns[0].label_column_name
-        if self.batch_column_name is None:
-            return self.target_column_name
-        else:
-            return self.batch_column_name
+        self._execute_batch_integration(adata_emb)
 
-    def get_adata_with_embeddings(self, trainer):
-        batch_preds = trainer.predict_loop.predictions
-
-        def _join_batches(k):
-            return np.concatenate([d[k] for d in batch_preds], axis=0)
-
-        predictions = {k: _join_batches(k) for k in batch_preds[0].keys()}
-        adata_orig = trainer.datamodule.predict_dataset.processed_data
-        adata_emb = self.add_embed_to_obsm(adata_orig, predictions)
-        if not self.batch_column_name == "batch":
-            adata_emb.obs["batch"] = adata_emb.obs[self.batch_column_name]
-        adata_emb.obs["batch"] = adata_emb.obs["batch"].astype("category")
-        return adata_emb
-
-    def report_batch_integartion_to_clearml(self, adata_emb):
-        batch_int_df = self.generate_table_batch_integration(adata_emb)
+    def _execute_batch_integration(self, adata_emb: sc.AnnData) -> None:
+        """Run all batch integration evaluations and report to ClearML."""
+        # Core metrics table
+        batch_int_df = self._generate_metrics_table(adata_emb)
         self.cl.report_table(
             title="Batch Integration",
             series="Batch Integration",
             table_plot=batch_int_df.T,
         )
         self.cl.report_single_value(
-            name="Average Bio",
-            value=float(batch_int_df.loc[:, "Avg_bio"]),
+            name="Average Bio", value=float(batch_int_df["Avg_bio"].iloc[0])
         )
-        self.cl.report_single_value(
-            name="Average Batch",
-            value=float(batch_int_df.loc[:, "Avg_batch"]),
-        )
+        if "Avg_batch" in batch_int_df.columns:
+            self.cl.report_single_value(
+                name="Average Batch", value=float(batch_int_df["Avg_batch"].iloc[0])
+            )
+        else:
+            logger.warning("Avg_batch not found in batch integration results.")
 
-        fig = self.generate_fig_batch_integration(adata_emb)
+        # UMAP visualization
+        plt.close("all")  # Clear any stray figures before creating new ones
+        fig = self._generate_umap_figure(adata_emb)
         self.cl.report_matplotlib_figure(
             title="UMAP Visualization",
             series="umap_plot",
@@ -236,274 +299,247 @@ class BatchIntegrationCallback(pl.Callback):
         )
         plt.close(fig)
 
-        fig = self.generate_pretty_benchmarking_table(adata_emb)
-        self.cl.report_matplotlib_figure(
-            title="Integration Benchmark",
-            series="scIB Summary",
-            figure=fig,
-            report_image=True,
+        # Benchmarking table (only if baselines exist)
+        baselines = discover_baseline_embeddings(
+            adata_emb, MODEL_EMBED_KEY, self.EXCLUDED_OBSM_KEYS
         )
-
-    def generate_fig_batch_integration(self, adata_emb):
-        target_col = self.target_column_name
-        batch_col = self.batch_column_name
-        counts_col = self.counts_column_name
-        sampling_adata_emb = random_subsampling(
-            adata=adata_emb,
-            n_samples=min((10000, adata_emb.obs.shape[0])),
-            shuffle=False,
-        )
-        sc.pp.neighbors(sampling_adata_emb, use_rep="BMFM-RNA")
-        sc.tl.umap(sampling_adata_emb)
-        sampling_adata_emb.obs[batch_col] = sampling_adata_emb.obs[batch_col].astype(
-            "category"
-        )
-        colors = [target_col, batch_col]
-        titles = [
-            f"Targets embeddings: {target_col} ",
-            f"Batch embeddings: {batch_col}",
-        ]
-        if counts_col in sampling_adata_emb.obs.columns:
-            colors.append(counts_col)
-            titles.append("Embeddings colored by total counts per cell")
-        else:
-            logger.warning(
-                f"{counts_col} not found in obs. Available columns: {sampling_adata_emb.obs.columns}"
+        if baselines:
+            plt.close("all")
+            fig = self._generate_benchmarking_table(adata_emb, baselines)
+            self.cl.report_matplotlib_figure(
+                title="Integration Benchmark",
+                series="scIB Summary",
+                figure=fig,
+                report_image=True,
             )
-        fig, axs = plt.subplots(len(colors), 1, figsize=(15, 15))
-        for i, ax in enumerate(axs):
+            plt.close(fig)
+        else:
+            logger.info("No baseline embeddings found, skipping comparison table.")
+        plt.close("all")  # Final cleanup
+
+    def _generate_umap_figure(self, adata_emb: sc.AnnData) -> plt.Figure:
+        """Generate UMAP plots colored by target, batch, and counts."""
+        sampling = random_subsampling(
+            adata_emb, n_samples=min(10000, adata_emb.n_obs), shuffle=True
+        )
+        sc.pp.neighbors(sampling, use_rep=MODEL_EMBED_KEY)
+        sc.tl.umap(sampling)
+
+        colors, titles = [self.target_column_name], [
+            f"Targets: {self.target_column_name}"
+        ]
+
+        if self.batch_column_name and self.batch_column_name in sampling.obs:
+            sampling.obs[self.batch_column_name] = sampling.obs[
+                self.batch_column_name
+            ].astype("category")
+            colors.append(self.batch_column_name)
+            titles.append(f"Batch: {self.batch_column_name}")
+
+        if self.counts_column_name and self.counts_column_name in sampling.obs:
+            colors.append(self.counts_column_name)
+            titles.append("Total counts per cell")
+
+        fig, axs = plt.subplots(len(colors), 1, figsize=(12, 6 * len(colors)))
+        axs = [axs] if len(colors) == 1 else axs
+        for ax, col, title in zip(axs, colors, titles):
             sc.pl.umap(
-                sampling_adata_emb,
-                color=colors[i],
+                sampling,
+                color=col,
                 frameon=False,
-                title=titles[i],
+                title=title,
                 ax=ax,
                 show=False,
+                legend_loc="on data",
+                legend_fontsize="x-small",
+                legend_fontoutline=2,
             )
         plt.tight_layout()
         return fig
 
-    def generate_table_batch_integration(self, adata_emb):
-        batch_col = self.batch_column_name
-        label_col = self.target_column_name
-        sc.pp.neighbors(adata_emb, use_rep="BMFM-RNA")
-        sc.tl.umap(adata_emb)
-        import scib.metrics.metrics as scm
-
-        batch_int = scm(
-            adata_emb,
-            adata_int=adata_emb,
-            batch_key=f"{batch_col}",
-            label_key=f"{label_col}",
-            embed="BMFM-RNA",
-            isolated_labels_asw_=False,
-            silhouette_=True,
-            hvg_score_=False,
-            graph_conn_=True,
-            pcr_=False,
-            isolated_labels_f1_=False,
-            trajectory_=False,
-            nmi_=True,
-            ari_=True,
-            cell_cycle_=False,
-            kBET_=False,
-            ilisi_=False,
-            clisi_=False,
-        )
-        batch_int_dict = batch_int[0].to_dict()
-
-        batch_int_dict["avg_bio"] = np.mean(
-            [
-                batch_int_dict["NMI_cluster/label"],
-                batch_int_dict["ARI_cluster/label"],
-                batch_int_dict["ASW_label"],
-            ]
+    def _generate_metrics_table(self, adata_emb: sc.AnnData) -> pd.DataFrame:
+        """Compute scIB metrics for model embeddings."""
+        import scib.metrics as scm
+        from sklearn.metrics import (
+            adjusted_rand_score,
+            normalized_mutual_info_score,
+            silhouette_score,
         )
 
-        batch_int_dict["avg_batch"] = np.mean(
-            [
-                batch_int_dict["graph_conn"],
-                batch_int_dict["ASW_label/batch"],
-            ]
-        )
-        batch_int_dict = {k: v for k, v in batch_int_dict.items() if not np.isnan(v)}
-        batch_int_df = pd.DataFrame(
-            {k.capitalize(): [np.round(v, 2)] for k, v in batch_int_dict.items()}
-        )
-        batch_int_df = batch_int_df.rename(
-            columns={
-                "Nmi_cluster/label": f"NMI_cluster_by_{label_col}_(bio)",
-                "Ari_cluster/label": f"ARI_cluster_by{label_col}_(bio)",
-                "Asw_label": f"ASW_by_{label_col}_(bio)",
-                "Graph_conn": f"graph_conn_by_{batch_col}_(batch)",
-                "Asw_label/batch": f"ASW_by_{batch_col}_(batch)",
-            }
-        )
-        return batch_int_df
+        batch_col, label_col = self.batch_column_name, self.target_column_name
+        sc.pp.neighbors(adata_emb, use_rep=MODEL_EMBED_KEY)
 
-    def add_embed_to_obsm(self, adata, results):
-        adata_emb = adata.copy()
-        embeddings = results["embeddings"]
-
-        adata_cell_names = adata_emb.obs_names.values
-        dict_cell_names = results["cell_name"]
-        name_to_index = {name: idx for idx, name in enumerate(dict_cell_names)}
-
-        aligned_embeddings = np.array(
-            [embeddings[name_to_index[name]] for name in adata_cell_names]
+        has_batch = batch_col and batch_col in adata_emb.obs
+        single_batch = (not has_batch) or (
+            adata_emb.obs[batch_col].nunique(dropna=False) == 1  # noqa: PD101
         )
-        adata_emb.obsm["BMFM-RNA"] = aligned_embeddings
-        return adata_emb
+        results = {}
 
-    def generate_pretty_benchmarking_table(self, adata_emb):
+        if single_batch:
+            cluster_key = "__tmp_scib_cluster"
+            sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
+            clusters = adata_emb.obs[cluster_key].to_numpy()
+            labels = adata_emb.obs[label_col].to_numpy()
+            X = adata_emb.obsm[MODEL_EMBED_KEY]
+
+            mask = pd.notna(labels)
+            clusters, labels, X = clusters[mask], labels[mask], X[mask]
+
+            results["NMI_cluster/label"] = normalized_mutual_info_score(
+                labels, clusters
+            )
+            results["ARI_cluster/label"] = adjusted_rand_score(labels, clusters)
+            vc = pd.Series(labels).value_counts()
+            results["ASW_label"] = (
+                float(silhouette_score(X, labels))
+                if (vc.size > 1 and vc.min() >= 2)
+                else np.nan
+            )
+        else:
+            results_df = scm.metrics(
+                adata_emb,
+                adata_int=adata_emb,
+                batch_key=str(batch_col),
+                label_key=str(label_col),
+                embed=MODEL_EMBED_KEY,
+                isolated_labels_asw_=False,
+                silhouette_=True,
+                hvg_score_=False,
+                pcr_=False,
+                isolated_labels_f1_=False,
+                trajectory_=False,
+                nmi_=True,
+                ari_=True,
+                cell_cycle_=False,
+                kBET_=False,
+                ilisi_=False,
+                clisi_=False,
+                graph_conn_=True,
+            )
+            results = results_df.iloc[:, 0].to_dict()
+
+        bio_keys = ["NMI_cluster/label", "ARI_cluster/label", "ASW_label"]
+        results["avg_bio"] = np.nanmean([results.get(k, np.nan) for k in bio_keys])
+
+        if not single_batch:
+            batch_keys = ["graph_conn", "ASW_label/batch"]
+            results["avg_batch"] = np.nanmean(
+                [results.get(k, np.nan) for k in batch_keys]
+            )
+
+        rename = {
+            "NMI_cluster/label": f"NMI_cluster_by_{label_col}_(bio)",
+            "ARI_cluster/label": f"ARI_cluster_by_{label_col}_(bio)",
+            "ASW_label": f"ASW_by_{label_col}_(bio)",
+            "graph_conn": f"graph_conn_by_{batch_col}_(batch)",
+            "ASW_label/batch": f"ASW_by_{batch_col}_(batch)",
+            "avg_bio": "Avg_bio",
+            "avg_batch": "Avg_batch",
+        }
+        output = {}
+        for old, new in rename.items():
+            v = results.get(old, np.nan)
+            if not (isinstance(v, float) and np.isnan(v)):
+                output[new] = np.round(v, 3)
+        return pd.DataFrame([output])
+
+    def _generate_benchmarking_table(
+        self, adata_emb: sc.AnnData, baselines: list[str]
+    ) -> plt.Figure:
+        """Generate scib-metrics benchmarking table comparing model to baselines."""
         from scib_metrics.benchmark import BatchCorrection, Benchmarker, BioConservation
 
-        biocons = BioConservation(isolated_labels=False)
-        logger.info("Beginning Unintegrated...")
-        adata_emb.obsm["Unintegrated"] = self.get_pca_of_x(adata_emb)
-        logger.info("Beginning Harmony...")
-        adata_emb.obsm["Harmony"] = self.harmony_emb(adata_emb)
-        logger.info("Beginning Scanorama...")
-        adata_emb.obsm["Scanorama"] = self.scanorama_emb(adata_emb)
-        logger.info("Beginning LIGER...")
-        adata_emb.obsm["LIGER"] = self.liger_emb(adata_emb)
+        all_keys = [MODEL_EMBED_KEY] + baselines
+        pre_integrated = "Unintegrated" if "Unintegrated" in baselines else None
 
+        logger.info(f"Benchmarking embeddings: {all_keys}")
         bm = Benchmarker(
             adata_emb,
             batch_key=self.batch_column_name,
             label_key=self.target_column_name,
-            embedding_obsm_keys=["BMFM-RNA"] + self.benchmarking_methods,
-            pre_integrated_embedding_obsm_key="Unintegrated",
-            bio_conservation_metrics=biocons,
+            embedding_obsm_keys=all_keys,
+            pre_integrated_embedding_obsm_key=pre_integrated,
+            bio_conservation_metrics=BioConservation(isolated_labels=False),
             batch_correction_metrics=BatchCorrection(),
             n_jobs=-1,
         )
         bm.prepare()
         bm.benchmark()
-        fig = bm.plot_results_table(min_max_scale=False)
-        return fig
+        table = bm.plot_results_table(min_max_scale=False)
+        return table.figure
 
-    def harmony_emb(self, adata):
-        from harmony import harmonize
 
-        if not "Harmony" in self.benchmarking_methods:
-            return np.zeros((adata.n_obs, 1))
-        if "Unintegrated" not in adata.obsm:
-            adata.obsm["X_pca"] = self.get_pca_of_x(adata)
-        try:
-            return harmonize(
-                adata.obsm["X_pca"], adata.obs, batch_key=self.batch_column_name
-            )
-        except:
-            return np.zeros((adata.n_obs, 1))
+class CziBenchmarkCallback(pl.Callback):
+    def __init__(
+        self,
+        batch_column_name: str | None = None,
+        target_column_name: str | None = None,
+        n_folds: int = 5,
+    ):
+        super().__init__()
+        self.batch_column_name = batch_column_name
+        self.target_column_name = target_column_name
+        self.n_folds = n_folds
+        self.cl: Logger | None = None
 
-    def get_pca_of_x(self, adata_orig: sc.AnnData, flavor="cell_ranger"):
-        """
-        Calculate PCA of X.
-
-        This function produces a valid PCA of the initial data whether it is already log
-        normed, raw counts or lognormed and binned. It makes use of HVG to reduce the prePCA
-        space to 2000 genes. This too is sensitive to whether the data is lognormed or not.
-        It detects the kind of data via a detection heuristic and treats it accordingly.
-        It flags the data as raw and applies the lognorm before PCA if at least 4 of these
-        6 criteria are met:
-         - integer
-         - max > 50
-         - >40% ones
-         - mean_val < 2.5
-         - median val <= 1
-         - >60% one two or three
-
-        It does all of the rescaling and transforming on a copy of the anndata, injecting just
-        the PCA into the original anndata to preserve the data integrity.
-        """
-        adata = adata_orig.copy()
-        looks_raw = guess_if_raw(adata.X.data)
-
-        if looks_raw:
-            logger.info("Detected raw counts — applying normalization and log1p.")
-            sc.pp.normalize_total(adata, target_sum=1e4)
-            sc.pp.log1p(adata)
-        else:
-            logger.info(
-                "Detected log1p-transformed or binned input — skipping normalization."
-            )
-        adata.obs[self.batch_column_name] = adata.obs[self.batch_column_name].astype(
-            "category"
-        )
-        try:
-            sc.pp.highly_variable_genes(
-                adata, flavor=flavor, batch_key=self.batch_column_name, n_top_genes=2000
-            )
-        except:
+    def on_predict_end(self, trainer, pl_module):
+        self.cl = Logger.current_logger()
+        if not self.cl:
             logger.warning(
-                "Batch level HVG calc failed, reverting to batch insensitive"
+                "ClearML logger not found, skipping batch integration reporting."
             )
-            sc.pp.highly_variable_genes(adata, flavor=flavor, n_top_genes=2000)
+            return
 
-        sc.pp.scale(adata, max_value=10)
-        sc.tl.pca(adata, svd_solver="arpack", n_comps=30, mask_var="highly_variable")
-        adata_orig.obsm["X_pca"] = adata.obsm["X_pca"]
-        return adata_orig.obsm["X_pca"]
+        adata_emb = get_adata_with_embeddings(trainer, self.batch_column_name)
+        if self.target_column_name is None:
+            self.target_column_name = trainer.datamodule.label_columns[
+                0
+            ].label_column_name
 
-    def scanorama_emb(self, adata):
-        import scanorama
+        results = self.execute_czi_cell_type_classification_benchmark(adata_emb)
+        self.cl.report_table(
+            title="CZI Cell Type Classification",
+            series="CZI Cell Type Classification",
+            table_plot=results,
+        )
 
-        if not "Scanorama" in self.benchmarking_methods:
-            return np.zeros((adata.n_obs, 1))
-        try:
-            batch_cats = adata.obs.batch.cat.categories
-            adata_list = [adata[adata.obs.batch == b].copy() for b in batch_cats]
-            scanorama.integrate_scanpy(adata_list)
-
-            adata.obsm["Scanorama"] = np.zeros(
-                (adata.shape[0], adata_list[0].obsm["X_scanorama"].shape[1])
-            )
-            for i, b in enumerate(batch_cats):
-                adata.obsm["Scanorama"][adata.obs.batch == b] = adata_list[i].obsm[
-                    "X_scanorama"
-                ]
-
-            return adata.obsm["Scanorama"]
-        except:
-            return np.zeros((adata.n_obs, 1))
-
-    def liger_emb(self, adata):
-        import pyliger
-
-        k = min(adata.obs["batch"].value_counts().min() - 1, 10)
-
-        if not "LIGER" in self.benchmarking_methods or k < 1:
-            return np.zeros((adata.n_obs, 1))
-        try:
-            batch_cats = adata.obs.batch.cat.categories
-            bdata = adata.copy()
-            adata_list = [bdata[bdata.obs.batch == b].copy() for b in batch_cats]
-            for i, ad in enumerate(adata_list):
-                ad.uns["sample_name"] = batch_cats[i]
-                ad.uns["var_gene_idx"] = np.arange(bdata.n_vars)
-
-            liger_data = pyliger.create_liger(
-                adata_list, remove_missing=False, make_sparse=False
+        # Report logistic regression F1 as scalar for easier querying
+        if "mean_fold_f1" in results.index and "lr" in results.columns:
+            lr_f1 = float(results.loc["mean_fold_f1", "lr"])
+            self.cl.report_single_value(name="f1", value=lr_f1)
+        else:
+            logger.warning(
+                "Logistic regression F1 score (mean_fold_f1, lr) not found in CZI benchmark results"
             )
 
-            liger_data.var_genes = bdata.var_names
-            pyliger.normalize(liger_data)
-            pyliger.scale_not_center(liger_data)
-            pyliger.optimize_ALS(liger_data, k=k)
-            pyliger.quantile_norm(liger_data)
+    def execute_czi_cell_type_classification_benchmark(self, adata_with_embeddings):
+        label_prediction_task = MetadataLabelPredictionTask()
 
-            bdata.obsm["LIGER"] = np.zeros(
-                (adata.shape[0], liger_data.adata_list[0].obsm["H_norm"].shape[1])
-            )
-            for i, b in enumerate(batch_cats):
-                bdata.obsm["LIGER"][adata.obs.batch == b] = liger_data.adata_list[
-                    i
-                ].obsm["H_norm"]
+        # take ground-truth labels from the dataset
+        prediction_task_input = MetadataLabelPredictionTaskInput(
+            labels=adata_with_embeddings.obs[self.target_column_name],
+            n_folds=self.n_folds,
+        )
 
-            return bdata.obsm["LIGER"]
-        except:
-            return np.zeros((adata.n_obs, 1))
+        # evaluate embeddings against the ground-truth labels using finetuning with classifcal ML classifiers.
+        results = label_prediction_task.run(
+            cell_representation=adata_with_embeddings.obsm[MODEL_EMBED_KEY],
+            task_input=prediction_task_input,
+        )
+
+        results_table = pd.DataFrame(
+            [(r.metric_type.value, r.params["classifier"], r.value) for r in results],
+            columns=["metric", "classifier", "value"],
+        )
+
+        results_table_wide = results_table.pivot_table(
+            index="metric",
+            columns="classifier",
+            values="value",
+            aggfunc="mean",
+            observed=False,
+        )
+        return results_table_wide
 
 
 class SampleLevelLossCallback(pl.Callback):

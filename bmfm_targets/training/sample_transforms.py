@@ -693,7 +693,6 @@ def pad_zero_expressed_genes(
     }
     if pad_zero_expression_strategy["strategy"] == "batch_wise":
         return _batchwise_pad_zero_expressed_genes(mfi, max_length, **final_kwargs)
-
     elif pad_zero_expression_strategy["strategy"] == "random":
         return _random_pad_zero_expressed_genes(mfi, max_length, **final_kwargs)
     raise ValueError(
@@ -722,37 +721,51 @@ def _batchwise_pad_zero_expressed_genes(
     mfi: MultiFieldInstance,
     max_length: int,
     expressed_genes_in_batch: set,
+    expressed_sample_ratio: float | None = None,
     interleave_zero_ratio: float | None = None,
+    granularity: int = 10,
 ):
-    sample_nz, batch_nz, non_expressed_indices = [], [], []
+    genes = np.array(mfi.data["genes"])
+    expressions = np.array(mfi.data["expressions"])
+    non_zero_mask = expressions > 0.0
+    sample_nz = np.nonzero(non_zero_mask)[0]
+    sample_z = np.nonzero(~non_zero_mask)[0]
+    use_expressed_only = (expressed_sample_ratio is not None) and (
+        np.random.rand() < expressed_sample_ratio
+    )
 
-    for i, (gene, expression) in enumerate(
-        zip(mfi.data["genes"], mfi.data["expressions"])
-    ):
-        if expression > 0.0:
-            sample_nz.append(i)
-        elif gene in expressed_genes_in_batch:
-            batch_nz.append(i)
-        else:
-            non_expressed_indices.append(i)
-
-    if interleave_zero_ratio is not None:
-        combined_expressed = _interleave_with_ratio(
-            sample_nz, batch_nz, interleave_zero_ratio
-        )
+    if use_expressed_only:
+        output_indices = sample_nz[:max_length]
     else:
-        combined_expressed = sample_nz + batch_nz
+        batch_mask = np.isin(
+            genes[sample_z], list(expressed_genes_in_batch), assume_unique=True
+        )
+        batch_nz = sample_z[batch_mask]
+        non_expressed_indices = sample_z[~batch_mask]
+        np.random.shuffle(batch_nz)
+        np.random.shuffle(non_expressed_indices)
+        if interleave_zero_ratio is None:
+            combined_expressed = np.concatenate([sample_nz, batch_nz])
+        else:
+            combined_expressed = _interleave_with_ratio(
+                sample_nz, batch_nz, interleave_zero_ratio, granularity
+            )
+        output_indices = np.concatenate([combined_expressed, non_expressed_indices])[
+            :max_length
+        ]
 
-    ordered_indices = (combined_expressed + non_expressed_indices)[:max_length]
+    if len(output_indices) < 2:
+        output_indices = np.concatenate([sample_nz, sample_z[:128]])
+
     updated_data = {
-        field: list(itemgetter(*ordered_indices)(values))
+        field: list(itemgetter(*output_indices)(values))
         for field, values in mfi.data.items()
     }
 
     return MultiFieldInstance(data=updated_data, metadata=mfi.metadata)
 
 
-def _interleave_with_ratio(a: list, b: list, p: float) -> list:
+def _interleave_with_ratio(a, b, p, granularity=10):
     """
     Interleave elements from two lists according to a specified ratio.
 
@@ -766,6 +779,9 @@ def _interleave_with_ratio(a: list, b: list, p: float) -> list:
         Ratio parameter between 0 and 1, representing the proportion of elements
         to take from list 'a' in each interleaving cycle.
 
+    granularity: int
+        interleave step
+
     Returns
     -------
     list
@@ -778,29 +794,42 @@ def _interleave_with_ratio(a: list, b: list, p: float) -> list:
         If 'p' is not in the range [0, 1].
 
     """
+    len_a, len_b = len(a), len(b)
+
     if not (0 <= p <= 1):
         raise ValueError(f"p must be in [0,1], got {p}")
 
     if p == 0:
-        return b + a
+        return np.concatenate([b, a])
     if p == 1:
-        return a + b
-    if not a or not b:
-        return a + b
+        return np.concatenate([a, b])
+    if len_a == 0 or len_b == 0:
+        return np.concatenate([a, b])
 
-    k = max(1, round(1 / p)) if p > 0 else 1
-    a_step = max(1, round(p * k))
-    b_step = k - a_step
-    min_len = min(len(a) // a_step, len(b) // b_step)
+    elements_a_per_cycle = max(1, int(p * granularity))
+    elements_b_per_cycle = max(1, int((1 - p) * granularity))
+    cycle_size = elements_a_per_cycle + elements_b_per_cycle
 
-    if min_len == 0:
-        return a + b
+    max_cycles_a = len_a // elements_a_per_cycle
+    max_cycles_b = len_b // elements_b_per_cycle
+    n_cycles = min(max_cycles_a, max_cycles_b)
 
-    sample_part = np.array(a[: min_len * a_step]).reshape(min_len, a_step)
-    batch_part = np.array(b[: min_len * b_step]).reshape(min_len, b_step)
-    interleaved = np.hstack([sample_part, batch_part]).flatten().tolist()
+    used_a = n_cycles * elements_a_per_cycle
+    used_b = n_cycles * elements_b_per_cycle
 
-    return interleaved + a[min_len * a_step :] + b[min_len * b_step :]
+    if n_cycles > 0:
+        a_cycles = a[:used_a].reshape(n_cycles, elements_a_per_cycle)
+        b_cycles = b[:used_b].reshape(n_cycles, elements_b_per_cycle)
+
+        interleaved = np.empty((n_cycles, cycle_size), dtype=a.dtype)
+        interleaved[:, :elements_a_per_cycle] = a_cycles
+        interleaved[:, elements_a_per_cycle:] = b_cycles
+        interleaved = interleaved.ravel()
+    else:
+        interleaved = np.array([], dtype=a.dtype)
+
+    result = np.concatenate([interleaved, a[used_a:], b[used_b:]])
+    return result
 
 
 def downcast_numeric_fields(
@@ -890,6 +919,50 @@ def compose_transforms(
     selective_dropout_weights=None,
     limit_input_tokens=None,
 ):
+    """
+    Compose a list of transform functions to be applied to MultiFieldInstance objects.
+
+    This function creates a pipeline of data transformations based on the provided parameters.
+    Transforms are applied in a specific order to ensure correct data processing.
+
+    Args:
+    ----
+        fields: List of field configurations
+        label_columns: List of label column configurations
+        sequence_order: Order for gene sequences ('random', 'sorted', 'chromosomal_uce', or None)
+        log_normalize_transform: If True, apply log normalization (log1p after scaling).
+            Note: This is mutually exclusive with rda_transform. If both are specified,
+            log_normalize_transform will be automatically disabled with a warning, as RDA
+            transforms perform log normalization internally.
+        median_normalization: If True, apply median normalization
+        rda_transform: Read-depth aware transform ('downsample', 'poisson_downsample', 'equal',
+            integer for alignment, or None). All RDA transforms include log normalization internally.
+        pad_zero_expression_strategy: Strategy for padding zero-expressed genes
+        max_length: Maximum sequence length
+        sequence_dropout_factor: Dropout factor for sequences
+        fields_to_downcast: Fields to downcast to lower precision
+        map_orthologs: Ortholog mapping strategy ('mouse_to_human_orthologs',
+            'human_to_mouse_orthologs', or None)
+        renoise: Renoise parameter for poisson downsampling
+        selective_dropout_weights: Weights for selective dropout
+        limit_input_tokens: Limit input to specific tokens
+
+    Returns:
+    -------
+        list: List of transform functions to be applied in sequence
+
+    """
+    # Validate transform configuration to prevent double log normalization
+    if log_normalize_transform and rda_transform is not None:
+        logger.warning(
+            "Both log_normalize_transform=True and rda_transform=%s were specified. "
+            "RDA transforms perform log normalization internally, so the standalone "
+            "log_normalize will be skipped to prevent double-logging. "
+            "To suppress this warning, set log_normalize_transform=False when using rda_transform.",
+            rda_transform,
+        )
+        log_normalize_transform = False
+
     transforms = []
     if median_normalization:
         median_df = get_gene_medians()

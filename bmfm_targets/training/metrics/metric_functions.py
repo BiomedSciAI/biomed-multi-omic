@@ -13,6 +13,39 @@ from torchmetrics import Metric
 from torchmetrics.classification import BinaryConfusionMatrix
 
 
+class Perplexity(Metric):
+    """Compute perplexity as exp(cross_entropy_loss) from logits and labels."""
+
+    def __init__(self, ignore_index: int = -100):
+        super().__init__()
+        self.ignore_index = ignore_index
+        self.add_state(
+            "sum_log_likelihood", default=torch.tensor(0.0), dist_reduce_fx="sum"
+        )
+        self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: torch.Tensor, target: torch.Tensor) -> None:
+        """Update with predictions (logits) and targets."""
+        # preds shape: [batch*seq_len, vocab_size] (already reshaped)
+        # target shape: [batch*seq_len] (already reshaped)
+        mask = target != self.ignore_index
+        if mask.sum() == 0:
+            return
+
+        # Compute cross entropy loss
+        log_probs = F.log_softmax(preds[mask], dim=-1)
+        nll = F.nll_loss(log_probs, target[mask], reduction="sum")
+
+        self.sum_log_likelihood += nll
+        self.total += mask.sum()
+
+    def compute(self) -> torch.Tensor:
+        """Compute perplexity as exp(average_nll)."""
+        if self.total == 0:
+            return torch.tensor(float("nan"))
+        return torch.exp(self.sum_log_likelihood / self.total)
+
+
 class NonZeroBinaryConfusionMatrix(BinaryConfusionMatrix):
     def __init__(
         self, ignore_index: int = -100, threshold: float = 0.5, normalize="none"

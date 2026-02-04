@@ -163,7 +163,6 @@ class TrainerConfig:
 
     Args:
     ----
-        batch_size: The batch size to use for training.
         betas: The beta values for the AdamW optimizer.
         epsilon: The epsilon value for the AdamW optimizer.
         learning_rate: The learning rate to use for the AdamW optimizer.
@@ -187,7 +186,6 @@ class TrainerConfig:
             the options are "pooling_layer", "first_token" or "mean_pooling".
             Note that "pooling_layer" will only give meaningful output with sequence
             classification.
-        metrics: list of dicts with keys "name" and other optional parameters for each metric
         batch_prediction_behavior (str|int|None): whether to track batch_predictions, track and dump or
             do not track at all.
               "dump" - dump every batch to disk (uses lots of hd space and lots of memory)
@@ -199,18 +197,22 @@ class TrainerConfig:
 
     """
 
-    batch_size: int | str = 64
     betas: tuple[float, float] = (0.9, 0.99)
     epsilon: float = 1e-8
     learning_rate: float = 1e-4
-    losses: list[dict] = field(default_factory=list)
+    losses: list[Any] | None = None
     lr_decay_steps: int | None = None
     warmup_steps: int = 0
     weight_decay: float | None = None
-    metrics: list[dict] | None = None
     pooling_method: str | int = "pooling_layer"
     batch_prediction_behavior: str | int | None = None
     lora_config: Any = None
+
+    def __setstate__(self, state):
+        # Handle removed fields from old checkpoints
+        state.pop("metrics", None)
+        state.pop("batch_size", None)
+        self.__dict__.update(state)
 
     def get_lora_config(self) -> LoraConfigWrapper:
         if isinstance(self.lora_config, str):
