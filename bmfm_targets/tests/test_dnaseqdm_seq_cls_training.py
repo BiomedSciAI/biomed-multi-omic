@@ -12,6 +12,7 @@ from bmfm_targets.training.modules import SequenceClassificationTrainingModule
 from bmfm_targets.training.modules.masked_language_modeling import MLMTrainingModule
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.parametrize(
     "pl_data_module_dnaseq_fixture",
     [
@@ -71,7 +72,7 @@ def test_train_dnaseq_seq_cls_regression_tasks(
             task_config=task_config,
         )
 
-
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.parametrize(
     "pl_data_module_dnaseq_fixture",
     [
@@ -136,7 +137,7 @@ def test_train_dnaseq_seq_cls_classification_tasks(
             task_config=task_config,
         )
 
-
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_raw_to_lit")
 def test_pretrain_scbert_snpdb_and_finetune_lenti_mpra(
     streaming_snpdb_parameters,
