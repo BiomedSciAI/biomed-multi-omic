@@ -1,0 +1,141 @@
+defaults:
+  - base_scbert_config
+  - _self_
+
+# seed:
+#   seed_value: 1234
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes
+# fields are supplied outside as it is needed by both data module and model
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: genes
+    pretrained_embedding: null
+    is_masked: true
+    vocab_update_strategy: static
+    decode_modes:
+      - token_scores
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "expressions"
+    pretrained_embedding: null
+    is_masked: true
+    vocab_update_strategy: "dynamic"
+    decode_modes:
+      - token_scores
+data_module:
+  _target_: bmfm_targets.datasets.panglaodb.PanglaoDBDataModule
+  _partial_: true
+  num_workers: 8
+  mlm: true
+  collation_strategy: "language_modeling"
+  change_ratio: 0.4
+  mask_ratio: 0.8
+  switch_ratio: 0.1
+  batch_size: 20
+  max_length: 512
+  limit_dataset_samples: null
+  sequence_order: random
+  shuffle: true
+  dataset_kwargs:
+    data_dir: ${oc.env:BMFM_TARGETS_PANGLAO_DATA}
+    data_info_path: ${oc.env:BMFM_TARGETS_PANGLAO_METADATA}
+    filter_query: 'Species == "Homo sapiens"'
+    num_workers: 8
+    transform_datasets: false
+    convert_rdata_to_h5ad: false
+    processed_dir_name: "processed_dynamic"
+    pre_transforms:
+      - transform_name: RenameGenesTransform
+        transform_args:
+          gene_map: null
+
+      - transform_name: KeepGenesTransform
+        transform_args:
+          genes_to_keep: null
+
+      - transform_name: NormalizeTotalTransform
+        transform_args:
+          exclude_highly_expressed: false
+          max_fraction: 0.05
+          target_sum: 10000.0
+
+      - transform_name: LogTransform
+        transform_args:
+          base: 2
+          chunk_size: null
+          chunked: null
+
+      - transform_name: BinTransform
+        transform_args:
+          binning_method: int_cast
+
+      - transform_name: FilterCellsTransform
+        transform_args:
+          min_counts: 2
+
+      - transform_name: FilterGenesTransform
+        transform_args:
+          min_counts: 1
+
+model:
+  _target_: bmfm_targets.config.SCBertConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  intermediate_size: 3072
+  hidden_act: "gelu"
+  hidden_size: 768
+  hidden_dropout_prob: 0.1
+  attention_probs_dropout_prob: 0.1
+  initializer_range: 0.02
+  layer_norm_eps: 1e-12
+  pad_token_id: 0
+  use_cache: true
+  checkpoint: null
+
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 1000
+  weight_decay: 0.01
+  learning_rate: 1.0e-4
+  betas:
+    - 0.9
+    - 0.99
+  epsilon: 1.0e-8
+  lr_decay_steps: null
+  losses:
+    - field_name: expressions
+      name: cross_entropy
+      weight: 1
+      label_smoothing: 0.01
+    - field_name: expressions
+      name: token_value
+      weight: 1
+    - field_name: genes
+      name: cross_entropy
+      weight: 1
+      label_smoothing: 0.01
+
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}
+  max_epochs: 20
+  precision: "16-mixed"
+  val_check_interval:  0.05
+  gradient_clip_val: 0.5
+  accelerator: "gpu"
+  max_steps: -1  # -1 means no limit
+  tf32_mode: medium # permitted nonNone values of tf32_mode:  "highest","high","medium"
+  accumulate_grad_batches:  1
+  freeze_layers: false
+  callbacks:
+    - _target_: bmfm_targets.training.callbacks.InitialCheckpoint
+      dirpath: ${task.default_root_dir}
+
+
+track_clearml:
+    project_name: "bmfm-targets"
+    task_name: "scbert_panglaodb_dynamic_bins_bge_90k_random"
+    continue_last_task: False

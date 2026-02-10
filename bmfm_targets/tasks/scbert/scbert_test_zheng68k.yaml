@@ -1,0 +1,64 @@
+defaults:
+  - base_scbert_config
+  - _self_
+
+seed:
+  seed_value: 1234
+
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "genes"
+    is_masked: false
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "expressions"
+    is_masked: false
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: "celltype"
+    is_stratification_label: true
+
+data_module:
+  _target_: bmfm_targets.datasets.zheng68k.Zheng68kDataModule
+  _partial_: true
+  num_workers: 8
+  collation_strategy: "sequence_classification"
+  max_length: 512
+  batch_size: 16
+  pad_to_multiple_of: 16
+  shuffle: false
+  sequence_order: "random"
+  data_dir: ${oc.env:BMFM_TARGETS_ZHENG68K_DATA}
+  processed_name: processed
+  transform_datasets: false
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  weight_decay: null
+  learning_rate: 5.0e-6
+
+  betas:
+    - 0.9
+    - 0.99
+  epsilon: 1.0e-8
+  lr_decay_steps: null
+  losses:
+    - label_column_name: celltype
+
+
+      metrics:
+        - name: f1
+        - name: accuracy
+track_clearml:
+    project_name: "bmfm-targets"
+    task_name: "scbert_zheng68k_ft_from_v2_test"
+    continue_last_task: false
+    task_type: "inference"
+
+task:
+  _target_: bmfm_targets.config.TestTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}
+  precision: "16-mixed"
+  accelerator: "gpu"
+  tf32_mode: "medium" # permitted nonNone values of tf32_mode:  "highest","high","medium"
+  checkpoint: '/dccstor/bmfm-targets/users/dmichael/scbert_train/scbert_train_2024-05-10_05-27-19/epoch=5-step=16374-val_loss=0.42.ckpt'
+  num_bootstrap_runs: 10

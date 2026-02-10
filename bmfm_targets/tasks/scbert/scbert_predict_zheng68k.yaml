@@ -1,0 +1,42 @@
+defaults:
+  - base_scbert_config
+  - _self_
+
+seed:
+  seed_value: 1234
+
+data_module:
+  _target_: bmfm_targets.datasets.zheng68k.Zheng68kDataModule
+  _partial_: true
+  num_workers: 8
+  collation_strategy: "sequence_classification"
+  batch_size: 20
+  max_length: 512
+  pad_to_multiple_of: 16
+  change_ratio: 0.15
+  mask_ratio: 0.5
+  switch_ratio: 0.5
+  limit_dataset_samples: null
+  shuffle: false
+  data_dir: ${oc.env:BMFM_TARGETS_ZHENG68K_DATA}
+  transform_datasets: false
+
+task:
+  _target_: bmfm_targets.config.PredictTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}
+  precision: "16-mixed"
+  accelerator: "gpu"
+  tf32_mode: null # permitted nonNone values of tf32_mode:  "highest","high","medium"
+  output_embeddings: true
+  output_predictions: true
+  #fill this in with a post April 9 2024 ckpt or add model, fields and tokenizer sections
+  #checkpoint: /dccstor/bmfm-targets/users/dmichael/scbert_train/scbert_train_2023-12-14_13-52-28/last.ckpt
+  checkpoint: /dccstor/bmfm-targets/users/liransz/zheng68k_from_v2_1024/zheng68k_from_v2_1024_2024-10-07_03-41-54/epoch=10-step=22595-val_loss=0.42.ckpt
+
+track_clearml:
+    project_name: "bmfm-targets"
+    task_name: "test_cell_type_predict"
+    task_type: "inference"
+  #   tags: "fuse_example"
+  #   reuse_last_task_id: True
+  #   continue_last_task: False
