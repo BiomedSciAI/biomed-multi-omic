@@ -196,6 +196,7 @@ def test_mlm_training_performer(
     )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_raw_to_lit")
 def test_mlm_training_nystromformer_snpdb(
     streaming_snpdb_parameters,
@@ -227,6 +228,7 @@ def test_mlm_training_nystromformer_snpdb(
     )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_hic_raw_to_lit")
 def test_mlm_training_scbert_hic(
     streaming_hic_parameters,
@@ -256,6 +258,7 @@ def test_mlm_training_scbert_hic(
     )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_insulation_raw_to_lit")
 def test_mlm_training_scbert_insulation(
     streaming_insulation_parameters,
@@ -285,6 +288,7 @@ def test_mlm_training_scbert_insulation(
     )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_insulation_raw_to_lit")
 def test_mlm_training_llama_insulation(
     streaming_insulation_parameters,

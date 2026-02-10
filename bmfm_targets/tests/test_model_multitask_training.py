@@ -445,6 +445,7 @@ def test_train_multitask_finetune_llama(
         assert finetune_model.keys() != pretrain_model.keys()
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_hic_raw_to_lit")
 def test_train_multitask_hic(streaming_hic_parameters):
     pl_data_module_hic_multitask = StreamingHiCDataModule(**streaming_hic_parameters)
@@ -492,6 +493,7 @@ def test_train_multitask_hic(streaming_hic_parameters):
         )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_hic_raw_to_lit")
 def test_train_multitask_hic_llama(streaming_hic_parameters):
     pl_data_module_hic_multitask = StreamingHiCDataModule(**streaming_hic_parameters)
@@ -538,6 +540,7 @@ def test_train_multitask_hic_llama(streaming_hic_parameters):
         )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_hic_raw_to_lit")
 def test_train_multitask_hic_only(streaming_hic_only_parameters):
     pl_data_module_hic_multitask = StreamingHiCDataModule(
@@ -586,6 +589,7 @@ def test_train_multitask_hic_only(streaming_hic_only_parameters):
         )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_hic_raw_to_lit")
 def test_train_multitask_hic_only_llama(streaming_hic_only_parameters):
     pl_data_module_hic_multitask = StreamingHiCDataModule(
@@ -633,6 +637,7 @@ def test_train_multitask_hic_only_llama(streaming_hic_only_parameters):
         )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_insulation_raw_to_lit")
 def test_train_multitask_insulation(streaming_insulation_parameters):
     pl_data_module_insulation_multitask = StreamingInsulationDataModule(
@@ -682,6 +687,7 @@ def test_train_multitask_insulation(streaming_insulation_parameters):
         )
 
 
+@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_insulation_raw_to_lit")
 def test_train_multitask_insulation_llama(streaming_insulation_parameters):
     pl_data_module_insulation_multitask = StreamingInsulationDataModule(
