@@ -1109,15 +1109,45 @@ def pl_data_module_panglao_rda(
 
 
 @pytest.fixture(scope="session")
-def pl_zheng_mlm_raw_counts(
-    all_genes_fields_with_regression_masking, zheng68k_label_columns
-):
+def _zheng68k_transform_raw_counts():
+    """Pre-transform fixture to avoid race conditions."""
+    helpers.initialize_litdata()
     tokenizer = load_tokenizer("protein_coding")
     dm = Zheng68kDataModule(
         data_dir=helpers.Zheng68kPaths.root,
         processed_name=helpers.Zheng68kPaths.raw_counts_name,
         transform_kwargs={"transforms": []},
         transform_datasets=True,
+        tokenizer=tokenizer,
+        label_columns=[
+            config.LabelColumnInfo(
+                label_column_name="celltype", is_stratification_label=True
+            )
+        ],
+        batch_size=2,
+        fields=[],  # Empty fields for transform only
+        limit_dataset_samples=8,
+        mlm=True,
+        collation_strategy="language_modeling",
+        rda_transform=2000,
+        max_length=20,
+        pad_to_multiple_of=2,
+    )
+    dm.prepare_data()
+
+
+@pytest.fixture(scope="session")
+def pl_zheng_mlm_raw_counts(
+    all_genes_fields_with_regression_masking,
+    zheng68k_label_columns,
+    _zheng68k_transform_raw_counts,
+):
+    tokenizer = load_tokenizer("protein_coding")
+    dm = Zheng68kDataModule(
+        data_dir=helpers.Zheng68kPaths.root,
+        processed_name=helpers.Zheng68kPaths.raw_counts_name,
+        transform_kwargs={"transforms": []},
+        transform_datasets=False,
         tokenizer=tokenizer,
         label_columns=zheng68k_label_columns,
         batch_size=2,
@@ -1313,12 +1343,33 @@ def pl_data_module_panglao_geneformer(
 
 
 @pytest.fixture(scope="session")
-def pl_data_module_zheng68k_seq_cls(gene2vec_unmasked_fields, zheng68k_label_columns):
+def _zheng68k_transform_default(zheng68k_label_columns):
+    """Pre-transform fixture for default processed directory to avoid race conditions."""
     tokenizer = get_gene2vec_tokenizer()
     pl_data_module = Zheng68kDataModule(
         data_dir=helpers.Zheng68kPaths.root,
         tokenizer=tokenizer,
         transform_datasets=True,
+        collation_strategy="sequence_classification",
+        num_workers=0,
+        batch_size=3,
+        fields=[],  # Empty fields for transform only
+        label_columns=zheng68k_label_columns,
+        max_length=16,
+        limit_dataset_samples={"train": 12, "dev": 12, "predict": 2},
+    )
+    pl_data_module.prepare_data()
+
+
+@pytest.fixture(scope="session")
+def pl_data_module_zheng68k_seq_cls(
+    gene2vec_unmasked_fields, zheng68k_label_columns, _zheng68k_transform_default
+):
+    tokenizer = get_gene2vec_tokenizer()
+    pl_data_module = Zheng68kDataModule(
+        data_dir=helpers.Zheng68kPaths.root,
+        tokenizer=tokenizer,
+        transform_datasets=False,
         collation_strategy="sequence_classification",
         num_workers=0,
         batch_size=3,
@@ -1336,12 +1387,14 @@ def pl_data_module_zheng68k_seq_cls(gene2vec_unmasked_fields, zheng68k_label_col
 
 
 @pytest.fixture(scope="session")
-def pl_data_module_zheng68k_multitask(gene2vec_fields, zheng68k_label_columns):
+def pl_data_module_zheng68k_multitask(
+    gene2vec_fields, zheng68k_label_columns, _zheng68k_transform_default
+):
     tokenizer = get_gene2vec_tokenizer()
     pl_data_module = Zheng68kDataModule(
         data_dir=helpers.Zheng68kPaths.root,
         tokenizer=tokenizer,
-        transform_datasets=True,
+        transform_datasets=False,
         collation_strategy="multitask",
         mlm=True,
         num_workers=0,
