@@ -72,6 +72,7 @@ def test_train_dnaseq_seq_cls_regression_tasks(
             task_config=task_config,
         )
 
+
 @pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.parametrize(
     "pl_data_module_dnaseq_fixture",
@@ -136,6 +137,7 @@ def test_train_dnaseq_seq_cls_classification_tasks(
             pl_module=seq_cls_training_module,
             task_config=task_config,
         )
+
 
 @pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_raw_to_lit")
