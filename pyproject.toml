@@ -23,7 +23,7 @@ dependencies = [
   "anndata>=0.10.0",
   "scanpy",
   "numpy<2",
-  "scipy", 
+  "scipy",
   "torch",
   "rdata",
   "pytorch-lightning>=2.0.0",
