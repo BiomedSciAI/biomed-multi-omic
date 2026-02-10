@@ -22,10 +22,10 @@ task:
   default_root_dir: ${working_dir}
 
 
-trainer:
-  losses:
-    - name: cross_entropy
-      label_column_name: ${label_columns[0].label_column_name}
+# trainer:
+#   losses:
+#     - name: cross_entropy
+#       label_column_name: ${label_columns[0].label_column_name}
 
 
 
