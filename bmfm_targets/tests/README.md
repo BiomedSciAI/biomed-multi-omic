@@ -7,7 +7,7 @@ All of the basic package logic is covered by unit tests. Every new feature must 
 ## Integration tests
 
 We have a number of end-to-end integration tests as well. These tests run an entire training loop using synthetic resampling of real data that is packaged in `tests/resources`, including
-validation, checkpointing and verifying artifact creation. This resampling process identifies the data state by differentiating between raw counts and log-normalized data, modeling them via Negative Binomial and Gamma distributions respectively while adjusting for sparsity to match the original density. By aggregating rare populations and synthesizing new data based on these group-specific profiles, the process preserves the functional identity and cluster structure of the original dataset for robust testing.
+validation, checkpointing and verifying artifact creation. This resampling process identifies the data state by differentiating between raw counts and log-normalized data, modeling them via Negative Binomial and Gamma distributions respectively while adjusting for sparsity to match the original density. By aggregating rare populations and synthesizing new data based on these group-specific profiles, the process preserves the functional identity and cluster structure of the original dataset.
 
 
 ## Speed tips
