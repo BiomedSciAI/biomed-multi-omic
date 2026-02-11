@@ -17,8 +17,6 @@ class SCP1884Dataset(BaseRNAExpressionDataset):
     A PyTorch Dataset for scp1884 h5ad.
     https://singlecell.broadinstitute.org/single_cell/study/SCP1884/human-cd-atlas-study-between-colon-and-terminal-ileum.
 
-    h5ad is generated downloaded tree from above URL using this notebook.
-    https://github.ibm.com/A1KOSUGI/gsetests/blob/main/scp1884.ipynb
 
     Attributes
     ----------
