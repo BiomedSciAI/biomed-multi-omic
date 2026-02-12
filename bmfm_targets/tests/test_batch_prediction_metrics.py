@@ -7,7 +7,8 @@ import pandas as pd
 import pytest
 import torch
 
-from bmfm_targets.tokenization import load_tokenizer
+from bmfm_targets.datasets.zheng68k import Zheng68kDataModule
+from bmfm_targets.tests import helpers
 from bmfm_targets.training.metrics import (
     batch_prediction_metrics,
     perturbation_metrics,
@@ -91,6 +92,7 @@ def perturbations_predictions_list(pl_data_module_adamson_weissman_seq_labeling)
         cell_names.append(batch["cell_name"])
         perturbed_genes.append(batch["perturbed_genes"])
     return (
+        dm.tokenizer,
         list(chain.from_iterable(cell_names)),
         list(chain.from_iterable(perturbed_genes)),
         predictions_list,
@@ -99,7 +101,22 @@ def perturbations_predictions_list(pl_data_module_adamson_weissman_seq_labeling)
 
 @pytest.fixture(scope="module")
 def mlm_predictions_list(pl_zheng_mlm_raw_counts):
-    dm = pl_zheng_mlm_raw_counts
+    dm = Zheng68kDataModule(
+        data_dir=helpers.Zheng68kPaths.root,
+        processed_name=helpers.Zheng68kPaths.raw_counts_name,
+        transform_datasets=False,
+        tokenizer=pl_zheng_mlm_raw_counts.tokenizer,
+        label_columns=pl_zheng_mlm_raw_counts.label_columns,
+        batch_size=2,
+        fields=pl_zheng_mlm_raw_counts.fields,
+        mlm=True,
+        collation_strategy="language_modeling",
+        rda_transform=2000,
+        max_length=128,
+        pad_to_multiple_of=2,
+    )
+    dm.prepare_data()
+    dm.setup("fit")
     field = [f for f in dm.fields if f.field_name == "expressions"][0]
     predictions_list = []
     cell_names = []
@@ -148,9 +165,8 @@ def mlm_predictions_df(pl_zheng_mlm_raw_counts, mlm_predictions_list):
 
 @pytest.fixture(scope="module")
 def perturbations_predictions_df(perturbations_predictions_list):
-    tokenizer = load_tokenizer("all_genes")
+    tokenizer, cell_names, perturbed_genes, predictions = perturbations_predictions_list
     id2gene = {v: k for k, v in tokenizer.get_field_vocab("genes").items()}
-    cell_names, perturbed_genes, predictions = perturbations_predictions_list
     return batch_prediction_metrics.create_field_predictions_df(
         predictions,
         id2gene,

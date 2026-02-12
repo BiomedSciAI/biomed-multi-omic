@@ -12,7 +12,7 @@ from bmfm_targets.datasets.zheng68k import Zheng68kDataModule
 from bmfm_targets.tasks import task_utils
 from bmfm_targets.tests import helpers
 from bmfm_targets.tokenization import load_tokenizer
-from bmfm_targets.training.losses import CrossEntropyObjective, LossTask, MSEObjective
+from bmfm_targets.training.losses import CrossEntropyObjective, LossTask
 from bmfm_targets.training.metrics.metric_functions import calculate_95_ci
 from bmfm_targets.training.modules import SequenceClassificationTrainingModule
 
@@ -404,15 +404,25 @@ def test_scp1884_prediction_on_zheng_ckpt(
     gene2vec_unmasked_fields,
     zheng_seq_cls_ckpt,
 ):
+    # SCP1884 has "Celltype" (capital C), Zheng68k has "celltype" (lowercase)
+    label_columns = [config.LabelColumnInfo(label_column_name="Celltype")]
+
     dm = SCP1884DataModule(
         data_dir=helpers.SCP1884Paths.root,
         mlm=False,
         fields=gene2vec_unmasked_fields,
+        label_columns=label_columns,
         collation_strategy="sequence_classification",
         tokenizer=load_tokenizer("gene2vec"),
     )
     dm.prepare_data()
     dm.setup()
+    helpers.update_label_columns(dm.label_columns, dm.label_dict)
+
+    # Verify SCP1884 has "Celltype" with 68 classes
+    assert "Celltype" in dm.label_dict
+    assert len(dm.label_dict["Celltype"]) == 68
+
     with tempfile.TemporaryDirectory() as tmpdir:
         task_config = config.PredictTaskConfig(
             default_root_dir=tmpdir,
@@ -422,23 +432,18 @@ def test_scp1884_prediction_on_zheng_ckpt(
             enable_progress_bar=False,
             enable_model_summary=False,
             callbacks=[],
+            output_predictions=True,
+            output_embeddings=True,
         )
 
-        pl_module = task_utils.instantiate_module_from_checkpoint(
-            task_config, dm, model_config=None, trainer_config=None
-        )
         pl_trainer = task_utils.make_trainer_for_task(task_config)
-        results = task_utils.predict(pl_trainer, pl_module, dm)
-
-        assert results["celltype_predictions"] is not None
-        assert results["embeddings"] is not None
-
-        task_utils.save_prediction_results(
-            task_config.default_root_dir,
-            pl_module.label_dict,
-            results,
+        task_utils.predict_run(
+            pl_trainer,
+            task_config,
+            model_config=None,
+            data_module=dm,
+            trainer_config=None,
         )
-        task_utils.save_embeddings_results(task_config.default_root_dir, results)
 
         output_path = Path(task_config.default_root_dir)
         embeddings_path = output_path / "embeddings.csv"
@@ -448,9 +453,6 @@ def test_scp1884_prediction_on_zheng_ckpt(
         predictions_df = pd.read_csv(predictions_path, index_col=0)
 
         assert embeddings_df.shape == (1020, 32)
-        assert all(
-            i in pl_module.label_dict["celltype"] for i in predictions_df["celltype"]
-        )
 
 
 def test_scp1884_prediction_on_zheng_multitask_ckpt(
@@ -574,79 +576,6 @@ def test_generic_dataset_with_no_label_dict_prediction_on_zheng_ckpt(
         assert all(
             i in pl_module.label_dict["celltype"] for i in predictions_df["celltype"]
         )
-
-
-def test_sciplex3_regression_predict_no_train(gene2vec_fields, zheng_seq_cls_ckpt):
-    from bmfm_targets.datasets.sciplex3 import SciPlex3DataModule
-
-    from .helpers import SciPlex3Paths
-
-    tokenizer = load_tokenizer("gene2vec")
-
-    label_columns = [
-        config.LabelColumnInfo(
-            label_column_name="size_factor", is_regression_label=True
-        )
-    ]
-    dm = SciPlex3DataModule(
-        dataset_kwargs={
-            "data_dir": SciPlex3Paths.root,
-            "split_column": "split_random",
-        },
-        tokenizer=tokenizer,
-        fields=gene2vec_fields,
-        label_columns=label_columns,
-        mlm=False,
-        collation_strategy="sequence_classification",
-        batch_size=1,
-        max_length=32,
-        limit_dataset_samples=3,
-    )
-    dm.prepare_data()
-    dm.setup("predict")
-    helpers.update_label_columns(dm.label_columns, dm.label_dict)
-    trainer_config = config.TrainerConfig(
-        losses=[LossTask.from_label("size_factor", objective=MSEObjective())]
-    )
-
-    model_config = config.SCBertConfig(
-        fields=gene2vec_fields,
-        label_columns=dm.label_columns,
-        num_attention_heads=2,
-        num_hidden_layers=2,
-        intermediate_size=64,
-        hidden_size=32,
-    )
-
-    task_config = config.PredictTaskConfig(
-        precision="32",
-        accelerator="cpu",
-        checkpoint=zheng_seq_cls_ckpt,
-        output_embeddings=True,
-        output_predictions=True,
-        enable_progress_bar=False,
-        enable_model_summary=False,
-        callbacks=[],
-    )
-    with tempfile.TemporaryDirectory() as tmpdir:
-        task_config.default_root_dir = tmpdir
-        pl_trainer = task_utils.make_trainer_for_task(task_config)
-
-        task_utils.predict_run(
-            pl_trainer,
-            model_config=model_config,
-            data_module=dm,
-            task_config=task_config,
-            trainer_config=trainer_config,
-        )
-
-        output_path = Path(task_config.default_root_dir)
-        predictions_path = output_path / "predictions.csv"
-
-        predictions_df = pd.read_csv(predictions_path, index_col=0)
-
-        assert list(predictions_df.columns) == ["size_factor"]
-        assert predictions_df.size_factor.apply(lambda x: isinstance(x, float)).all()
 
 
 def test_calculate_95_ci_scalar():

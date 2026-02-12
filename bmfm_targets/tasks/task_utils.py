@@ -232,8 +232,6 @@ def instantiate_module_from_checkpoint(
     ckpt_hyper = ckpt["hyper_parameters"]
 
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
-    if data_module.label_dict:
-        extra_kwargs["label_dict"] = data_module.label_dict
     extra_kwargs["trainer_config"] = merge_trainer_configs(
         ckpt_hyper.get("trainer_config"), trainer_config
     )
@@ -330,6 +328,7 @@ def train(
         model=pl_module,
         datamodule=pl_data_module,
         ckpt_path=checkpoint_path,
+        weights_only=False,
     )
 
 
