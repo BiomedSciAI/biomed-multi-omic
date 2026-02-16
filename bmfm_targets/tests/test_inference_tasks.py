@@ -480,7 +480,7 @@ def test_scp1884_prediction_on_zheng_multitask_ckpt(
         )
 
         pl_module = task_utils.instantiate_module_from_checkpoint(
-            task_config, dm, model_config=None, trainer_config=None
+            task_config, dm, trainer_config=None
         )
         pl_trainer = task_utils.make_trainer_for_task(task_config)
         results = task_utils.predict(pl_trainer, pl_module, dm)
@@ -550,7 +550,7 @@ def test_generic_dataset_with_no_label_dict_prediction_on_zheng_ckpt(
         )
 
         pl_module = task_utils.instantiate_module_from_checkpoint(
-            task_config, generic_dm, model_config=None, trainer_config=None
+            task_config, generic_dm, trainer_config=None
         )
         pl_trainer = task_utils.make_trainer_for_task(task_config)
         results = task_utils.predict(pl_trainer, pl_module, generic_dm)
@@ -647,7 +647,6 @@ def test_instantiate_inherits_checkpoint_losses_when_override_is_none(
     pl_module = task_utils.instantiate_module_from_checkpoint(
         task_config,
         pl_data_module_zheng68k_seq_cls,
-        model_config=None,
         trainer_config=override_config,
     )
 
@@ -665,7 +664,6 @@ def test_instantiate_uses_empty_losses_for_embedding_only(
     pl_module = task_utils.instantiate_module_from_checkpoint(
         task_config,
         pl_data_module_zheng68k_multitask,
-        model_config=None,
         trainer_config=override_config,
     )
 

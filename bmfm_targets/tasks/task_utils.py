@@ -128,7 +128,7 @@ def test_run(
         task_config.checkpoint = download_ckpt_from_huggingface(task_config.checkpoint)
 
     pl_module = instantiate_module_from_checkpoint(
-        task_config, data_module, model_config, trainer_config
+        task_config, data_module, trainer_config
     )
 
     if task_config.num_bootstrap_runs >= 1:
@@ -172,7 +172,7 @@ def predict_run(pl_trainer, task_config, model_config, data_module, trainer_conf
         task_config.checkpoint = download_ckpt_from_huggingface(task_config.checkpoint)
 
     pl_module = instantiate_module_from_checkpoint(
-        task_config, data_module, model_config, trainer_config
+        task_config, data_module, trainer_config
     )
 
     results = predict(pl_trainer, pl_module, data_module)
@@ -221,9 +221,7 @@ def merge_trainer_configs(
     return override_config
 
 
-def instantiate_module_from_checkpoint(
-    task_config, data_module, model_config, trainer_config
-):
+def instantiate_module_from_checkpoint(task_config, data_module, trainer_config):
     from bmfm_targets.tokenization import load_tokenizer
 
     data_module.tokenizer = load_tokenizer(os.path.dirname(task_config.checkpoint))
@@ -239,16 +237,9 @@ def instantiate_module_from_checkpoint(
 
     pl_factory = get_training_module_class_for_data_module(data_module)
 
-    if model_config is None:
-        return pl_factory.load_from_checkpoint(
-            task_config.checkpoint, **extra_kwargs, weights_only=False
-        )
-
-    model_config.checkpoint = task_config.checkpoint
-    for field in model_config.fields:
-        field.update_vocab_size(data_module.tokenizer)
-    extra_kwargs["model_config"] = model_config
-    return pl_factory(**extra_kwargs)
+    return pl_factory.load_from_checkpoint(
+        task_config.checkpoint, **extra_kwargs, weights_only=False
+    )
 
 
 def prepare_extra_training_module_kwargs(
