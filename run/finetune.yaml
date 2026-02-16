@@ -26,15 +26,14 @@ data_module:
   log_normalize_transform: true
 
 trainer:
-  metrics:
-   - name: accuracy
-   - name: f1
-   - name: precision
-   - name: recall
   losses:
    - label_column_name: ${label_column_name}
      name: cross_entropy # focal also supported, or mse if column is a regression_label
-
+     metrics:
+     - name: accuracy
+     - name: f1
+     - name: precision
+     - name: recall
 accelerator: gpu
 input_file: null
 working_dir: /tmp

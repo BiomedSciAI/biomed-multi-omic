@@ -23,11 +23,11 @@ dependencies = [
   "anndata>=0.10.0",
   "scanpy",
   "numpy<2",
-  "scipy<1.15.0", #unpin when upstream fixes this https://github.com/scverse/anndata/issues/1811
+  "scipy",
   "torch",
   "rdata",
   "pytorch-lightning>=2.0.0",
-  "transformers>=4.54.0",
+  "transformers>=4.54.0,<5.0.0",
   "omegaconf",
   "hydra-core",
   "clearml>1.13,<2",
@@ -46,9 +46,13 @@ dependencies = [
   "rnanorm",
   "hic-straw",
   "anndata>=0.10.9",
-  "focal-loss-torch @ git+https://github.com/mathiaszinnen/focal_loss_torch.git",
-  "torchdata<0.10",
-  "peft"
+  "focal_loss_torch",
+  "torchdata<0.8",
+  "peft",
+  "huggingface_hub",
+  "numexpr",
+  "pybigwig",
+  "igraph",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +64,7 @@ benchmarking = [
   "pyliger",
   "scanorama",
   "harmony-pytorch",
+  "cz-benchmarks",
 ]
 notebook = ["cellxgene-ontology-guide", "jupyter", "swatch"]
 

@@ -1,6 +1,9 @@
 defaults:
   - default
 
-metrics:
-  - name: pcc
-  - name: mse
+losses:
+  - weight: 1
+    label_column_name: ${label_columns[0].label_column_name}
+    metrics:
+      - name: pcc
+      - name: mse

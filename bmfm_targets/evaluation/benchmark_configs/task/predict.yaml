@@ -5,6 +5,10 @@ accelerator: "gpu"
 checkpoint: ${checkpoint_path}
 output_embeddings: true
 callbacks:
+  - _target_: bmfm_targets.training.callbacks.CziBenchmarkCallback
+    batch_column_name: ${data_module.batch_column_name}
+    target_column_name: ${data_module.label_column_name}
   - _target_: bmfm_targets.training.callbacks.BatchIntegrationCallback
     batch_column_name: ${data_module.batch_column_name}
     counts_column_name: ${data_module.counts_column_name}
+    target_column_name: ${data_module.label_column_name}

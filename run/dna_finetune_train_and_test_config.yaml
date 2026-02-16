@@ -21,7 +21,7 @@ data_module:
 
 
 trainer:
-  batch_size: ${batch_size}
+  # batch_size: ${batch_size}
   learning_rate: ${learning_rate}
   losses:
     - name: cross_entropy

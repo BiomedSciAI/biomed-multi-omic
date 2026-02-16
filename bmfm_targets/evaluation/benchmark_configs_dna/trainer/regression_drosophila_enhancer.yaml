@@ -1,9 +1,7 @@
 defaults:
   - regression
 
-metrics:
-  - name: pcc
-  - name: mse
+
 
 losses:
     - weight: 1

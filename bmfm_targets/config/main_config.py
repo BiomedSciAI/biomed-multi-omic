@@ -82,54 +82,82 @@ class SCBertMainConfig:
     task: BaseTaskConfig | None = None
     trainer: TrainerConfig | None = None
     model: SCModelConfigBase | None = None
-    # track_clearml follows kwargs for clearml.Task.init
     track_clearml: dict | None = None
-    # a simple dict with key `seed_value`
     seed: dict | None = None
 
     @classmethod
     def from_omegaconf_config_schema(cls, dict_config: DictConfig):
-        # self.data_module = instantiate(self.data_module)
-        new_kwargs = {
-            k: cls._instantiate_configs_only(v)
-            for k, v in dict_config.items()
-            if v is not None and k in cls.__annotations__
-        }
+        new_kwargs = {}
+        for k, v in dict_config.items():
+            if v is not None and k in cls.__annotations__:
+                new_kwargs[k] = cls._instantiate_recursive(v)
         return cls(**new_kwargs)
 
     @classmethod
-    def _instantiate_configs_only(cls, val):
-        if OmegaConf.is_config(val):
+    def _instantiate_recursive(cls, val):
+        if OmegaConf.is_config(val) or OmegaConf.is_dict(val):
             return instantiate(val, _convert_="object")
-        if OmegaConf.is_dict(val):
-            return instantiate(val, _convert_="all")
         if OmegaConf.is_list(val):
-            return [instantiate(x, _convert_="object") for x in val]
+            return [cls._instantiate_recursive(x) for x in val]
         if isinstance(val, functools.partial):
-            keywords = instantiate(val.keywords, _convert_="all")
-            return functools.partial(val.func, **keywords)
+            return functools.partial(
+                val.func, **instantiate(val.keywords, _convert_="all")
+            )
         return val
 
     def complete_config(self):
         self._load_missing_configs_from_ckpt()
         tokenizer = self._load_tokenizer_from_cfg()
+
         if isinstance(self.data_module, functools.partial):
-            self.data_module = self._instantiate_and_setup_data_module(
-                self.data_module, tokenizer, self.fields, self.label_columns, self.task
-            )
+            self.data_module = self._setup_data_module(tokenizer)
+
         self.save_tokenizer(tokenizer, self.task.default_root_dir)
-        self.update_fields(self.fields, tokenizer)
-        if self.label_columns:
-            self.update_label_columns(self.label_columns, self.data_module.label_dict)
+        self._update_fields(tokenizer)
+        self._update_label_columns()
+
         if isinstance(self.model, functools.partial):
-            self.model = self._instantiate_model_config(
-                self.model, self.data_module, self.fields, self.label_columns
+            self.model = self.model(
+                fields=self.fields,
+                label_columns=self.label_columns,
+                pad_token_id=self.data_module.tokenizer.pad_token_id,
             )
+
         if (
             isinstance(self.task, TrainingTaskConfig)
             and self.task.enable_checkpointing is not False
         ):
             self.add_checkpointing_callbacks()
+
+    def _setup_data_module(self, tokenizer):
+        dm = self.data_module(
+            tokenizer=tokenizer, fields=self.fields, label_columns=self.label_columns
+        )
+        if getattr(dm, "dataset_kwargs", None) and OmegaConf.is_config(
+            dm.dataset_kwargs
+        ):
+            dm.dataset_kwargs = OmegaConf.to_container(dm.dataset_kwargs)
+        dm.prepare_data()
+        dm.transform_datasets = False
+        dm.setup(self.task.setup_stage)
+        return dm
+
+    def _update_fields(self, tokenizer):
+        for f in self.fields:
+            f.update_vocab_size(tokenizer)
+            if f.pretrained_embedding:
+                f.update_pretrained_embedding_indices(tokenizer)
+
+    def _update_label_columns(self):
+        if not self.label_columns:
+            return
+        for lc in self.label_columns:
+            if (
+                self.data_module.label_dict
+                and lc.label_column_name in self.data_module.label_dict
+                and lc.n_unique_values is None
+            ):
+                lc.update_n_unique_values(self.data_module.label_dict)
 
     def _load_missing_configs_from_ckpt(self):
         from bmfm_targets.models import download_ckpt_from_huggingface
@@ -181,6 +209,57 @@ class SCBertMainConfig:
             field_info.update_vocab_size(tokenizer)
             if field_info.pretrained_embedding:
                 field_info.update_pretrained_embedding_indices(tokenizer)
+
+    @staticmethod
+    def _instantiate_loss_tasks(
+        losses: list[Any],
+        fields: list[FieldInfo],
+        label_columns: list[LabelColumnInfo],
+    ) -> list[Any]:
+        """
+        Convert loss configs to LossTask objects at the config layer.
+
+        By this point, Hydra configs should already be instantiated by
+        from_omegaconf_config_schema(). This method only handles:
+        - Already-instantiated LossTask objects (pass through)
+        - Old-style dicts (convert via loss_dict_to_task)
+
+        Does NOT call bind() - that happens in training module.
+
+        Args:
+        ----
+            losses: List of loss configs (LossTask objects or old-style dicts)
+            fields: List of FieldInfo from model config
+            label_columns: List of LabelColumnInfo from model config
+
+        Returns:
+        -------
+            list[LossTask]: List of instantiated (but not bound) loss tasks
+
+        Raises:
+        ------
+            TypeError: If Hydra config with _target_ is passed (should be instantiated upstream)
+
+        """
+        from bmfm_targets.training.losses import LossTask, loss_dict_to_task
+
+        result = []
+        for loss_config in losses:
+            if isinstance(loss_config, LossTask):
+                # Already instantiated - pass through
+                result.append(loss_config)
+            elif isinstance(loss_config, dict):
+                if "_target_" in loss_config:
+                    raise TypeError(
+                        f"Hydra config with _target_ should be instantiated in "
+                        f"from_omegaconf_config_schema(), not here. Got: {loss_config}"
+                    )
+                # Old-style dict - convert via compat layer
+                result.append(loss_dict_to_task(loss_config, fields, label_columns))
+            else:
+                raise TypeError(f"Expected LossTask or dict, got {type(loss_config)}")
+
+        return result
 
     @staticmethod
     def update_label_columns(label_columns: list[LabelColumnInfo], label_dict):

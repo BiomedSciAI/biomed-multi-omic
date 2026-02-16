@@ -4,7 +4,7 @@ defaults:
   - fields: genes_expressions_wced
   - trainer: default
   - task: train
-  - model: scbert
+  - model: llama_384
   - label_columns: default
   - _self_
 seed:
@@ -27,15 +27,14 @@ track_clearml:
 # to adapt all of the dataset input to the ckpt modify this section
 # in general it should match the pretraining config except for masking settings
 data_module:
-  max_length: 1024
+  max_length: 4096
   batch_size: 8
   # rda_transform: auto_align
   # limit genes is modified per dataset to handle mouse
-  pad_zero_expression_strategy: batch_wise
-  collation_strategy: sequence_classification
+  collation_strategy: multitask
 
 
-max_finetuning_epochs: 2
+max_finetuning_epochs: 10
 
 dataset_name: "" # do not modify, set by script
 checkpoint_path: ""

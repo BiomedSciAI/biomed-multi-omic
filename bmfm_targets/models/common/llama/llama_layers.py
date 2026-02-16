@@ -166,7 +166,12 @@ class LlamaEncoder(nn.Module):
             LlamaEncoder.flex_attention = torch.compile(flex_attention)
 
     @staticmethod
-    def compute_attention(q, k, v, attention_mask):
+    def compute_attention(
+        q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask
+    ):
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
         if attention_mask.ndim == 2:
 
             def padding_mask_mod(score, b, h, q_idx, kv_idx):

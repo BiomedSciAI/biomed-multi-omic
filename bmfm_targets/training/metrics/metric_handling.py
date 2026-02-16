@@ -1,4 +1,7 @@
 """Functions for handling the metrics functions requested during training."""
+import inspect
+import logging
+
 import numpy as np
 import torchmetrics
 from torchmetrics.classification import MulticlassConfusionMatrix
@@ -6,7 +9,9 @@ from torchmetrics.regression import MeanAbsoluteError, MeanSquaredError, Pearson
 
 from bmfm_targets.training.metrics import get_token_labels
 
-from .metric_functions import NonZeroBinaryConfusionMatrix
+from .metric_functions import NonZeroBinaryConfusionMatrix, Perplexity
+
+logger = logging.getLogger(__name__)
 
 KNOWN_CATEGORICAL_METRICS = {
     "accuracy": torchmetrics.Accuracy,
@@ -17,6 +22,7 @@ KNOWN_CATEGORICAL_METRICS = {
     "auc": torchmetrics.AUROC,
     "auprc": torchmetrics.AveragePrecision,
     "confusion_matrix": MulticlassConfusionMatrix,
+    "perplexity": Perplexity,
 }
 KNOWN_REGRESSION_METRICS = {
     "mae": MeanAbsoluteError,
@@ -28,37 +34,28 @@ DEFAULT_CATEGORICAL_KWARGS = {"ignore_index": -100, "task": "multiclass"}
 
 SPECIAL_DEFAULT_CATEGORICAL_KWARGS = {
     "f1": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
+    "accuracy": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
+    "precision": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
+    "recall": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
     "confusion_matrix": {"ignore_index": -100, "normalize": None},
+    "perplexity": {"ignore_index": -100},
 }
 
 
-def get_relevant_metrics(
-    desired_metrics: list[dict], output_size: int, max_confusion_matrix_size=200
-) -> list[dict]:
-    """
-    Limit the list of all desired metrics to the relevant metrics.
-
-    We begin with an inclusive list of all desired metrics but some are not relevant
-    because some are categorical only, regression only, or if there are too many outputs
-    for a confusion matrix. This function restricts the full list to those which are relevant
-    for this output.
-
-    Args:
-    ----
-        desired_metrics (list[dict]): the full list of desired metrics, usually from trainer_config
-        output_size (int): number of labels for this task (1 for regression, >1 for categorical)
-        max_confusion_matrix_size (int, optional): Maximum confusion matrix size. Defaults to 200.
-
-    Returns:
-    -------
-        list[dict]: list of metrics which can be instantiated for this label
-    """
-    if output_size == 1:
-        return [mt for mt in desired_metrics if mt["name"] in KNOWN_REGRESSION_METRICS]
-    metrics = [mt for mt in desired_metrics if mt["name"] in KNOWN_CATEGORICAL_METRICS]
-    if output_size > max_confusion_matrix_size:
-        metrics = [mt for mt in metrics if mt["name"] != "confusion_matrix"]
-    return metrics
+def _filter_unsupported_kwargs(metric_class: type, kwargs: dict) -> dict:
+    """Filter kwargs to only those supported by metric_class.__init__ or __new__."""
+    # Check __new__ first (some metrics like Accuracy use it), fall back to __init__
+    try:
+        sig = inspect.signature(metric_class.__new__)
+    except (ValueError, TypeError):
+        sig = inspect.signature(metric_class.__init__)
+    supported = set(sig.parameters.keys()) - {"self", "cls"}
+    filtered = {k: v for k, v in kwargs.items() if k in supported}
+    if dropped := set(kwargs) - set(filtered):
+        logger.warning(
+            f"{metric_class.__name__} ignoring unsupported params: {dropped}"
+        )
+    return filtered
 
 
 def get_metric_object(mt: dict, num_classes: int) -> torchmetrics.Metric:
@@ -81,7 +78,7 @@ def get_metric_object(mt: dict, num_classes: int) -> torchmetrics.Metric:
 
 
 def _get_categorical_metric(mt: dict, num_classes: int) -> torchmetrics.Metric:
-    kwargs = {"num_classes": num_classes}  # default task is multiclass...
+    kwargs = {"num_classes": num_classes}
     kwargs.update(
         SPECIAL_DEFAULT_CATEGORICAL_KWARGS.get(mt["name"], DEFAULT_CATEGORICAL_KWARGS)
     )
@@ -89,13 +86,15 @@ def _get_categorical_metric(mt: dict, num_classes: int) -> torchmetrics.Metric:
     if "task" in kwargs and kwargs["task"] == "multilabel":
         kwargs["num_labels"] = num_classes
         del kwargs["num_classes"]
-    return KNOWN_CATEGORICAL_METRICS[mt["name"]](**kwargs)
+
+    metric_class = KNOWN_CATEGORICAL_METRICS[mt["name"]]
+    return metric_class(**_filter_unsupported_kwargs(metric_class, kwargs))
 
 
 def _get_regression_metric(mt: dict) -> torchmetrics.Metric:
-    kwargs = {}
-    kwargs.update({k: v for k, v in mt.items() if k != "name"})
-    return KNOWN_REGRESSION_METRICS[mt["name"]](**kwargs)
+    kwargs = {k: v for k, v in mt.items() if k != "name"}
+    metric_class = KNOWN_REGRESSION_METRICS[mt["name"]]
+    return metric_class(**_filter_unsupported_kwargs(metric_class, kwargs))
 
 
 def limit_confusion_matrix_to_numerical_labels(token_values, cm_original):

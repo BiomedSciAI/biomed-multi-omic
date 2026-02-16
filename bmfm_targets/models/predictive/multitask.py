@@ -13,7 +13,7 @@ from bmfm_targets.models.model_utils import (
     SequenceClassifierOutputWithEmbeddings,
 )
 from bmfm_targets.models.predictive.layers import GradientReversal
-from bmfm_targets.training.metrics import LabelLossTask
+from bmfm_targets.training.losses import LossTask
 
 logger = getLogger()
 
@@ -41,7 +41,7 @@ class ClassificationHead(nn.Module):
 
 class MultiTaskClassifier(nn.Module):
     def __init__(
-        self, base_model: PreTrainedModel, loss_tasks: list[LabelLossTask], config=None
+        self, base_model: PreTrainedModel, loss_tasks: list[LossTask], config=None
     ):
         """
         A classifier with multiple classification heads.
@@ -117,7 +117,7 @@ class MultiTaskClassifier(nn.Module):
     def from_ckpt(
         cls,
         ckpt_path: str,
-        loss_tasks: list[LabelLossTask] | None = None,
+        loss_tasks: list[LossTask] | None = None,
         model_config: bmfm_targets.config.SCModelConfigBase | None = None,
         device=None,
     ):

@@ -46,6 +46,7 @@ class MultiFieldCollator:
             "multitask",
         ] = "language_modeling",
         label_dict: dict[str, dict[str, int]] | None = None,
+        max_mfi_data_len: int | None = None,
         max_length: int | None = None,
         pad_to_multiple_of: int | None = None,
         return_attention_mask: bool = True,
@@ -93,6 +94,7 @@ class MultiFieldCollator:
         self.fields = fields
         self.label_columns = label_columns
         self.padding = padding
+        self.max_mfi_data_len = max_mfi_data_len
         self.max_length = max_length
         self.truncation = truncation
         self.return_attention_mask = return_attention_mask
@@ -300,7 +302,7 @@ class MultiFieldCollator:
             "median_normalization": self.median_normalization,
             "rda_transform": self.rda_transform,
             "pad_zero_expression_strategy": self.pad_zero_expression_strategy,
-            "max_length": self.max_length,
+            "max_length": self.max_mfi_data_len,
             "sequence_dropout_factor": self.sequence_dropout_factor,
             "map_orthologs": self.map_orthologs,
             "renoise": self.renoise,

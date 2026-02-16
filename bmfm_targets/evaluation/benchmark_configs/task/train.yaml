@@ -7,7 +7,7 @@
   max_steps: -1  # -1 means no limit
   tf32_mode: medium  # permitted values: "highest", "high", "medium"
   accumulate_grad_batches: 1
-  freeze_layers: false
+  freeze_layers: true
   resume_training_from_ckpt: false
 - _target_: bmfm_targets.config.TestTaskConfig
   default_root_dir: "${output_directory}/${checkpoint_name}/${data_module.dataset_name}"

@@ -14,9 +14,7 @@ from transformers import PreTrainedModel
 from bmfm_targets.config.model_config import SCModelConfigBase
 from bmfm_targets.models import get_model_from_config, instantiate_classification_model
 from bmfm_targets.tokenization import MultiFieldTokenizer
-from bmfm_targets.training.metrics import (
-    get_loss_tasks,
-)
+from bmfm_targets.training.losses import get_loss_tasks
 
 
 class LabelAttribution(BaseModel):
@@ -77,6 +75,7 @@ class SequenceClassificationAttributionModule(pl.LightningModule):
 
         self.loss_tasks = get_loss_tasks(
             losses,
+            fields=self.model_config.fields,
             label_columns=self.model_config.label_columns,
         )
         if self.modeling_strategy == "sequence_classification":

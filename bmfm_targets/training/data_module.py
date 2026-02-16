@@ -57,6 +57,7 @@ class DataModule(pl.LightningDataModule):
         | Literal["protein_coding"]
         | None = "tokenizer",
         balancing_label_column: str | None = None,
+        max_mfi_data_len: int | None = None,
         max_length: int | Literal["scheduled"] = 512,
         padding: PaddingStrategy | str | bool = "max_length",
         truncation: TruncationStrategy | bool = True,
@@ -137,8 +138,12 @@ class DataModule(pl.LightningDataModule):
         balancing_label_column : str | None, optional
             Column to use for balancing the dataset, by default None.
             Ensures that each label from this column is equally likely to appear in training batches.
+        max_mfi_data_len : int | None, optional
+            Maximum length of MultiFieldInstance data sequences before tokenization.
+            If None, sequences remain untruncated until tokenization.
         max_length : int | "scheduled", optional
-            Maximum length of input sequences, by default 512.
+            Maximum length of tokenized input sequence by default 512.
+            If max_mfi_data_len is None, also used to clip sequence before tokenization.
             - "scheduled": then the `batch_size` will be controlled by the callback `BatchSizeScheduler`.
         padding : PaddingStrategy | str | bool, optional
             Padding strategy for input sequences, by default "max_length".
@@ -197,10 +202,15 @@ class DataModule(pl.LightningDataModule):
             consistent sorting. Defaults to False.
         log_normalize_transform : bool, optional
             Whether to apply log normalization to expression data, by default False.
+            Note: This parameter is mutually exclusive with rda_transform. If both are set to True,
+            log_normalize_transform will be automatically disabled with a warning, as all RDA
+            transforms perform log normalization internally. To avoid the warning, explicitly set
+            log_normalize_transform=False when using rda_transform.
         median_normalization: bool, optional
             Whether to apply median normalization to expression data, by default False.
         rda_transform : "downsample" | "auto_align" | "equal" | int | None, optional
             RNA differential abundance transformation strategy, by default None.
+            All RDA transforms include log normalization internally.
             - "downsample": Applies RDA downsampling augmentation strategy as described in scFoundation.
             - "auto_align": Automatically selects maximum expression and sets target reads [T] value
             to that for all samples. Recommended for inference, not training.
@@ -234,6 +244,7 @@ class DataModule(pl.LightningDataModule):
         self.label_columns = label_columns
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.max_mfi_data_len = max_mfi_data_len
         self.max_length = max_length
         self.padding = padding
         self.pad_to_multiple_of = pad_to_multiple_of
@@ -784,6 +795,7 @@ class DataModule(pl.LightningDataModule):
             label_columns=self.label_columns,
             truncation=self.truncation,
             collation_strategy=self.collation_strategy,
+            max_mfi_data_len=self.max_mfi_data_len,
             max_length=self.max_length,
             masker=self.masker,
             sequence_order=self.sequence_order,
@@ -944,6 +956,7 @@ class DNASeqDataModule(pl.LightningDataModule):
         transform_kwargs: dict[str, Any] | None = None,
         batch_size: int = 32,
         num_workers: int = 0,
+        max_mfi_data_len: int | None = None,
         max_length: int = 512,
         padding: PaddingStrategy | str | bool = "max_length",
         truncation: TruncationStrategy | bool = True,
@@ -999,6 +1012,7 @@ class DNASeqDataModule(pl.LightningDataModule):
         self.label_columns = label_columns
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.max_mfi_data_len = max_mfi_data_len
         self.max_length = max_length
         self.padding = padding
         self.pad_to_multiple_of = pad_to_multiple_of
@@ -1312,6 +1326,7 @@ class DNASeqDataModule(pl.LightningDataModule):
             label_columns=self.label_columns,
             label_dict=self.label_dict,
             pad_to_multiple_of=self.pad_to_multiple_of,
+            max_mfi_data_len=self.max_mfi_data_len,
             max_length=self.max_length,
             padding=self.padding,
             truncation=self.truncation,

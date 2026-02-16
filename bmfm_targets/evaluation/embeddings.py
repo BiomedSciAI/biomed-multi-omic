@@ -141,7 +141,9 @@ def get_clusters(
     if clustering_method == "louvain":
         if not "resolution" in kwargs:
             kwargs["resolution"] = 0.6
-        clusters = sc.tl.louvain(adata_dim_reduced, copy=True, **kwargs)
+        clusters = sc.tl.louvain(
+            adata_dim_reduced, copy=True, flavor="igraph", **kwargs
+        )
     elif clustering_method == "leiden":
         if not "resolution" in kwargs:
             kwargs["resolution"] = 0.6
