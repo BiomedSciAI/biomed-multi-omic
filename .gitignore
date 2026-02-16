@@ -135,3 +135,4 @@ bmfm_targets/tests/resources/pretrain/cellxgene/processed.h5ad
 prof/
 bmfm_targets/tests/resources/pretrain/hic/litdata/
 bmfm_targets/tests/resources/pretrain/hic/parquet/
+bmfm_targets/tokenization/resources/GSE70138_Broad_LINCS_gene_info_2017-03-06.txt
