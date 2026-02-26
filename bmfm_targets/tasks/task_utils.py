@@ -352,6 +352,11 @@ def save_embeddings_results(root_dir, results):
 
 
 def save_prediction_results(root_dir, label_dict, results):
+    supported_row_names = ["cell_name", "seq_id"]
+    index_vals = next(
+        (results.get(k) for k in supported_row_names if results.get(k) is not None),
+        None,
+    )
     str_predictions = {}
     for predictions_name, raw_predictions in results.items():
         if "predictions" not in predictions_name:
@@ -365,12 +370,17 @@ def save_prediction_results(root_dir, label_dict, results):
         else:  # regression case
             str_predictions[label_column_name] = raw_predictions
 
-    pd.DataFrame(str_predictions, index=results["cell_name"]).to_csv(
+    pd.DataFrame(str_predictions, index=index_vals).to_csv(
         f"{root_dir}/predictions.csv"
     )
 
 
 def save_logits_results(root_dir, label_dict, results):
+    supported_row_names = ["cell_name", "seq_id"]
+    index_vals = next(
+        (results.get(k) for k in supported_row_names if results.get(k) is not None),
+        None,
+    )
     str_logits = {}
     str_probabilities = {}
 
@@ -388,10 +398,8 @@ def save_logits_results(root_dir, label_dict, results):
             str_probabilities[label_column_name + "_" + key] = id_softmax[:, value]
 
     if str_logits:
-        pd.DataFrame(str_logits, index=results["cell_name"]).to_csv(
-            f"{root_dir}/logits.csv"
-        )
-        pd.DataFrame(str_probabilities, index=results["cell_name"]).to_csv(
+        pd.DataFrame(str_logits, index=index_vals).to_csv(f"{root_dir}/logits.csv")
+        pd.DataFrame(str_probabilities, index=index_vals).to_csv(
             f"{root_dir}/probabilities.csv"
         )
 

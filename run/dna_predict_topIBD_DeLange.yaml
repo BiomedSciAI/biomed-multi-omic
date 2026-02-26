@@ -1,0 +1,47 @@
+defaults:
+  - task: predict
+  - data_module: dna_base_seq_cls
+  - label_columns: dnaeval_default
+  - trainer: default
+  - _self_
+
+seed:
+  seed_value: 1234
+
+data_module:
+  shuffle: false
+  collation_strategy: sequence_classification
+  max_length: 320
+  dataset_kwargs:
+    processed_data_source: "${input_directory}/${input_filename}"
+    dataset_name: ${dataset_name}
+    label_dict_path: "${input_directory}/{dataset_name}_all_labels.json"
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: "${label_column_name}"
+    is_regression_label: true
+    classifier_depth: 2
+
+task:
+  output_embeddings: true
+  output_predictions: true
+  default_root_dir: ${working_dir}
+
+
+trainer:
+  losses:
+    - name: mse
+      label_column_name: ${label_columns[0].label_column_name}
+
+
+
+accelerator: cpu
+working_dir: /proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump_predict
+checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise_K562/epoch=3-step=73167-val_loss=0.56.ckpt'
+
+batch_size: 32
+dataset_name: topIBD_overlapped_203
+label_column_name: K562_label
+input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/IBD_De_Lange/
+input_filename: "topIBD_overlapped_203.csv"
