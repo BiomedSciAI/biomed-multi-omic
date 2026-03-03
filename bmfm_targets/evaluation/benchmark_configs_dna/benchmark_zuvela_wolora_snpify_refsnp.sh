@@ -6,10 +6,10 @@ declare -a label_column_names=("mean_value")
 EST_TIME=$(TZ="America/New_York" date +"%Y%m%d_%H%M")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 TOKENIZER="snp2vec"
-BS=32
+BS=64
 LEARNING_RATE=0.0001
 MODEL_PE=128
-MODEL_WD=0.01
+MODEL_WD=0.1
 MODEL="modernbert" # Makesure it is passed on config.yaml as MODEL
 MODEL_NAME="modernbert_wo_lora"
 CHKPT_NAME="refsnp_v3.5"
@@ -138,12 +138,13 @@ for i in "${!datasets[@]}"; do
                     $SUFFIX_CMD\"" ;
             done
         done
-    elif [ "$DATASET" == "snv_TeWhey" ]; then
-        SPLIT_TYPE="split_Gosai_chrwise"
-        INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/snv_mpra_Tewhey/${SPLIT_TYPE}"
-        for fold in "K562" "HepG2"; do
+    elif [ "$DATASET" == "snv_Tewhey" ]; then
+        SPLIT_TYPE="split_Gosai_and_mpra"
+        for cell in 'K562' ; do
+            fold="${cell}_snpified_v3_ref_gen"
+            INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/snv_mpra_Tewhey/${SPLIT_TYPE}/${fold}"
             DATASET_NAME=${DATASET}_${SPLIT_TYPE}_${fold}
-            LABEL_COLUMN_NAME="${fold}_label"
+            LABEL_COLUMN_NAME="${cell}_log2FC"
             mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
             $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
                 -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
@@ -152,7 +153,7 @@ for i in "${!datasets[@]}"; do
                 batch_size=$BS \
                 tokenizer=$TOKENIZER \
                 data_module=$DATASET  trainer=regression task=train model=$MODEL\
-                max_finetuning_epochs=15 \
+                max_finetuning_epochs=7 \
                 dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
                 model_name=$MODEL_NAME \
                 model_pe=$MODEL_PE \
@@ -164,6 +165,7 @@ for i in "${!datasets[@]}"; do
                 output_directory=$OUTPUT_DIR \
                 extra_tag=$EXTRA_TAG \
                 $SUFFIX_CMD\"" ;
+            #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
         done
     else
         mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}

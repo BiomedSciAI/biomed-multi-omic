@@ -12,7 +12,7 @@ seed:
   seed_value: 1234
 
 track_clearml:
-  project_name: "bmfm-targets/evaluate_dna/${model_name}_${checkpoint_name}${extra_tag}"
+  project_name: "bmfm-targets/evaluate_dna/${model_name}_${checkpoint_name}"
   task_name: "${track_clearml.tags[0]}_${track_clearml.tags[1]}_${track_clearml.tags[2]}_batchsize${data_module.batch_size}_maxlen${data_module.max_length}_lr${trainer.learning_rate}_wd${trainer.weight_decay}_pe${model_pe}_${track_clearml.tags[3]}"
   tags:
     - "${dataset_name}${extra_clearml_tags}"

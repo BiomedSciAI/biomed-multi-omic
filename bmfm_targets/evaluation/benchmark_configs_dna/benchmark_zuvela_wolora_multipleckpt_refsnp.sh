@@ -40,6 +40,14 @@ CHKPT_REFS=(
 #   "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines/backup_ckpt/epoch=14-step=298350-val_loss=4.37.ckpt\'"
 # )
 
+CHKPT_NAME="human_genome_multipleckpts"
+CHKPT_REFS=(
+    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_v2/backup_ckpt/epoch=10-step=240273-val_loss=4.36.ckpt\'"
+    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_v2/backup_ckpt/epoch=15-step=349488-val_loss=4.32.ckpt'"
+    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_v2/backup_ckpt/epoch=21-step=480546-val_loss=4.26.ckpt\'"
+)
+
+
 # CHKPT_NAME="human_genome_multipleckpts"
 # CHKPT_REFS=(
 #     "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x/backup_ckpt/epoch=0-step=21843-val_loss=4.61.ckpt\'"
@@ -106,7 +114,7 @@ for ind in "${!CHKPT_REFS[@]}"; do
                 done
             done
         elif [ "$DATASET" == "mpra" ]; then
-            for fold in "K562_original_trimmed" "HepG2_original_trimmed" "WTC11_original_trimmed"; do
+            for fold in "K562_original_trimmed" "HepG2_original_trimmed" "WTC11_original_trimmed" "K562_biallelic_200" "HepG2_biallelic_200" "WTC11_biallelic_200"; do
                 DATASET_NAME=${DATASET}_${fold}
                 mkdir -p ../output_logs/${MODEL_NAME}_${NEW_CHKPT_NAME}/${DATASET_NAME}
                 $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${NEW_CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
