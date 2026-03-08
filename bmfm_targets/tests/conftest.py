@@ -64,9 +64,7 @@ from bmfm_targets.tokenization import (
 )
 from bmfm_targets.training import losses
 from bmfm_targets.training.modules import (
-    MLMTrainingModule,
     MultiTaskTrainingModule,
-    SequenceClassificationTrainingModule,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,28 +73,6 @@ logger = logging.getLogger(__name__)
 @pytest.fixture(autouse=True)
 def _suppress_matplotlib_font_debug_logs():
     logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
-
-
-@pytest.fixture(scope="session")
-def fields():
-    field_dicts = [
-        {
-            "field_name": "genes",
-            "pretrained_embedding": None,
-            "is_masked": False,
-            "vocab_update_strategy": "static",
-        },
-        {
-            "field_name": "expressions",
-            "pretrained_embedding": None,
-            "is_masked": True,
-            "vocab_update_strategy": "static",
-            "decode_modes": ["token_scores"],
-        },
-    ]
-
-    fields = [config.FieldInfo(**fd) for fd in field_dicts]
-    return fields
 
 
 @pytest.fixture(scope="session")
@@ -220,45 +196,17 @@ def gene2vec_unmasked_fields():
 
 
 @pytest.fixture(scope="session")
-def all_genes_fields():
-    field_dicts = [
-        {
-            "field_name": "genes",
-            "pretrained_embedding": None,
-            "is_masked": False,
-            "vocab_update_strategy": "static",
-        },
-        {
-            "field_name": "expressions",
-            "pretrained_embedding": None,
-            "is_masked": True,
-            "vocab_update_strategy": "static",
-            "decode_modes": ["token_scores"],
-        },
-    ]
-
-    fields = [config.FieldInfo(**fd) for fd in field_dicts]
-    tokenizer = get_all_genes_tokenizer()
-    for field in fields:
-        field.update_vocab_size(tokenizer)
-    return fields
-
-
-@pytest.fixture(scope="session")
 def perturbation_fields_cve():
     perturbation_field_dicts = [
         {
             "field_name": "genes",
-            "pretrained_embedding": None,
             "is_masked": False,
-            "vocab_update_strategy": "static",
         },
         {
             "field_name": "expressions",
             "is_masked": False,
             "decode_modes": ["regression", "is_zero"],
             "tokenization_strategy": "continuous_value_encoder",
-            "vocab_update_strategy": "static",
             "encoder_kwargs": {
                 "kind": "mlp_with_special_token_embedding",
                 "zero_as_special_token": True,
@@ -268,7 +216,6 @@ def perturbation_fields_cve():
             "field_name": "perturbations",
             "pretrained_embedding": None,
             "is_masked": False,
-            "vocab_update_strategy": "static",
         },
         {
             "field_name": "label_expressions",
@@ -276,11 +223,6 @@ def perturbation_fields_cve():
             "is_input": False,
             "decode_modes": ["regression", "is_zero"],
             "tokenization_strategy": "continuous_value_encoder",
-            "vocab_update_strategy": "static",
-            "encoder_kwargs": {
-                "kind": "mlp_with_special_token_embedding",
-                "zero_as_special_token": True,
-            },
         },
     ]
 
@@ -414,6 +356,7 @@ def all_genes_fields_with_regression_masking_plus_mvc():
             "field_name": "expressions",
             "pretrained_embedding": None,
             "is_masked": True,
+            "is_input": True,  # Required for MVC query embeddings
             "decode_modes": ["regression", "is_zero", "mvc_regression", "mvc_is_zero"],
             "tokenization_strategy": "continuous_value_encoder",
             "vocab_update_strategy": "static",
@@ -593,7 +536,6 @@ def streaming_panglao_parameters(gene2vec_fields):
         "fields": gene2vec_fields,
         "num_workers": 2,
         "mlm": True,
-        "collation_strategy": "language_modeling",
         "dataset_kwargs": dataset_kwargs,
     }
     return pars
@@ -688,7 +630,6 @@ def streaming_snpdb_parameters(snp2vec_fields):
         "fields": snp2vec_fields,
         "num_workers": 0,
         "mlm": True,
-        "collation_strategy": "language_modeling",
         "dataset_kwargs": dataset_kwargs,
     }
     return pars
@@ -708,7 +649,6 @@ def combined_streaming_snpdb_parameters(snp2vec_fields):
         "fields": snp2vec_fields,
         "num_workers": 2,
         "mlm": True,
-        "collation_strategy": "language_modeling",
         "dataset_kwargs": dataset_kwargs,
     }
     return pars
@@ -758,7 +698,6 @@ def streaming_hic_parameters(hic_fields, hic_label_columns):
         "max_length": 512,
         "num_workers": 0,
         "mlm": True,
-        "collation_strategy": "multitask",
         "dataset_kwargs": dataset_kwargs,
     }
     return pars
@@ -778,7 +717,6 @@ def streaming_hic_only_parameters(hic_fields, hic_label_columns):
         "max_length": 512,
         "num_workers": 0,
         "mlm": False,
-        "collation_strategy": "sequence_classification",
         "dataset_kwargs": dataset_kwargs,
     }
     return pars
@@ -848,7 +786,6 @@ def streaming_insulation_parameters(insulation_fields, insulation_label_columns)
         "max_length": 512,
         "num_workers": 0,
         "mlm": True,
-        "collation_strategy": "multitask",
         "dataset_kwargs": dataset_kwargs,
     }
     return pars
@@ -867,7 +804,6 @@ def _panglao_convert_rdata_and_transform(gene2vec_fields):
 
     kwargs: dict[str, Any] = {
         "num_workers": 0,
-        "collation_strategy": "language_modeling",
         "mlm": True,
         "dataset_kwargs": panglao_dataset_kwargs,
     }
@@ -886,39 +822,6 @@ def _panglao_convert_rdata_and_transform(gene2vec_fields):
 
 
 @pytest.fixture(scope="session")
-def pl_data_module_panglao_all_genes_tokenizer(
-    all_genes_fields, _panglao_convert_rdata_and_transform
-):
-    panglao_dataset_kwargs = {
-        "data_dir": helpers.PanglaoPaths.root,
-        "data_info_path": helpers.PanglaoPaths.test_metadata,
-        "filter_query": 'Species == "Homo sapiens"',
-        "num_workers": 0,
-        "transform_datasets": False,
-        "convert_rdata_to_h5ad": False,
-    }
-    kwargs: dict[str, Any] = {
-        "num_workers": 0,
-        "collation_strategy": "language_modeling",
-        "mlm": True,
-        "dataset_kwargs": panglao_dataset_kwargs,
-    }
-
-    tokenizer = get_all_genes_tokenizer()
-    pl_data_module_panglao = PanglaoDBDataModule(
-        tokenizer=tokenizer,
-        batch_size=3,
-        fields=all_genes_fields,
-        max_length=16,
-        limit_dataset_samples=12,
-        **kwargs,
-    )
-    pl_data_module_panglao.prepare_data()
-    pl_data_module_panglao.setup("fit")
-    return pl_data_module_panglao
-
-
-@pytest.fixture(scope="session")
 def pl_data_module_panglao(gene2vec_fields, _panglao_convert_rdata_and_transform):
     panglao_dataset_kwargs = {
         "data_dir": helpers.PanglaoPaths.root,
@@ -932,7 +835,6 @@ def pl_data_module_panglao(gene2vec_fields, _panglao_convert_rdata_and_transform
     kwargs: dict[str, Any] = {
         "num_workers": 0,
         "mlm": True,
-        "collation_strategy": "language_modeling",
         "dataset_kwargs": panglao_dataset_kwargs,
     }
 
@@ -948,75 +850,6 @@ def pl_data_module_panglao(gene2vec_fields, _panglao_convert_rdata_and_transform
     pl_data_module_panglao.prepare_data()
     pl_data_module_panglao.setup("fit")
     return pl_data_module_panglao
-
-
-@pytest.fixture(scope="session")
-def pl_data_module_panglao_protein_coding(
-    all_genes_fields, _panglao_convert_rdata_and_transform
-):
-    panglao_dataset_kwargs = {
-        "data_dir": helpers.PanglaoPaths.root,
-        "data_info_path": helpers.PanglaoPaths.test_metadata,
-        "filter_query": 'Species == "Homo sapiens"',
-        "num_workers": 0,
-        "transform_datasets": False,
-        "convert_rdata_to_h5ad": False,
-    }
-
-    kwargs: dict[str, Any] = {
-        "num_workers": 0,
-        "mlm": True,
-        "collation_strategy": "language_modeling",
-        "dataset_kwargs": panglao_dataset_kwargs,
-    }
-
-    tokenizer = load_tokenizer("all_genes")
-    pl_data_module_panglao = PanglaoDBDataModule(
-        tokenizer=tokenizer,
-        batch_size=3,
-        fields=all_genes_fields,
-        max_length=16,
-        limit_dataset_samples=12,
-        limit_genes="protein_coding",
-        **kwargs,
-    )
-    pl_data_module_panglao.prepare_data()
-    pl_data_module_panglao.setup("fit")
-    return pl_data_module_panglao
-
-
-@pytest.fixture(scope="session")
-def pl_data_module_panglao_limit10(
-    gene2vec_fields, _panglao_convert_rdata_and_transform
-):
-    dataset_kwargs = {
-        "data_dir": helpers.PanglaoPaths.root,
-        "data_info_path": helpers.PanglaoPaths.test_metadata,
-        "filter_query": 'Species == "Homo sapiens"',
-        "num_workers": 0,
-        "transform_datasets": False,
-        "convert_rdata_to_h5ad": False,
-        "pre_transforms": helpers.test_pre_transforms,
-    }
-
-    kwargs: dict[str, Any] = {
-        "num_workers": 0,
-        "collation_strategy": "language_modeling",
-        "mlm": True,
-        "dataset_kwargs": dataset_kwargs,
-    }
-
-    tokenizer = get_gene2vec_tokenizer()
-    dm = PanglaoDBDataModule(
-        tokenizer=tokenizer,
-        batch_size=3,
-        fields=gene2vec_fields,
-        limit_dataset_samples=10,
-        **kwargs,
-    )
-    dm.prepare_data()
-    dm.setup("fit")
-    return dm
 
 
 @pytest.fixture(scope="session")
@@ -1035,7 +868,6 @@ def pl_data_module_panglao_regression(
     kwargs: dict[str, Any] = {
         "num_workers": 0,
         "mlm": True,
-        "collation_strategy": "language_modeling",
         "dataset_kwargs": panglao_dataset_kwargs,
     }
 
@@ -1089,7 +921,6 @@ def pl_data_module_panglao_rda(
     kwargs: dict[str, Any] = {
         "num_workers": 0,
         "mlm": True,
-        "collation_strategy": "language_modeling",
         "dataset_kwargs": panglao_dataset_kwargs,
         "rda_transform": "downsample",
         "switch_ratio": 0.0,
@@ -1109,11 +940,9 @@ def pl_data_module_panglao_rda(
 
 
 @pytest.fixture(scope="session")
-def _zheng68k_transform_raw_counts(
+def pl_zheng_mlm_raw_counts(
     all_genes_fields_with_regression_masking, zheng68k_label_columns
 ):
-    """Pre-transform fixture to avoid race conditions."""
-    helpers.initialize_litdata()
     tokenizer = load_tokenizer("protein_coding")
     dm = Zheng68kDataModule(
         data_dir=helpers.Zheng68kPaths.root,
@@ -1126,33 +955,6 @@ def _zheng68k_transform_raw_counts(
         fields=all_genes_fields_with_regression_masking,
         limit_dataset_samples=8,
         mlm=True,
-        collation_strategy="language_modeling",
-        rda_transform=2000,
-        max_length=20,
-        pad_to_multiple_of=2,
-    )
-    dm.prepare_data()
-
-
-@pytest.fixture(scope="session")
-def pl_zheng_mlm_raw_counts(
-    all_genes_fields_with_regression_masking,
-    zheng68k_label_columns,
-    _zheng68k_transform_raw_counts,
-):
-    tokenizer = load_tokenizer("protein_coding")
-    dm = Zheng68kDataModule(
-        data_dir=helpers.Zheng68kPaths.root,
-        processed_name=helpers.Zheng68kPaths.raw_counts_name,
-        transform_kwargs={"transforms": []},
-        transform_datasets=False,
-        tokenizer=tokenizer,
-        label_columns=zheng68k_label_columns,
-        batch_size=2,
-        fields=all_genes_fields_with_regression_masking,
-        limit_dataset_samples=8,
-        mlm=True,
-        collation_strategy="language_modeling",
         rda_transform=2000,
         max_length=20,
         pad_to_multiple_of=2,
@@ -1209,7 +1011,6 @@ def pl_data_module_panglao_regression_raw_counts(
     kwargs: dict[str, Any] = {
         "num_workers": 0,
         "mlm": True,
-        "collation_strategy": "language_modeling",
         "dataset_kwargs": panglao_dataset_kwargs,
     }
 
@@ -1231,7 +1032,6 @@ def pl_data_module_panglao_dynamic_binning(
 ):
     kwargs: dict[str, Any] = {
         "num_workers": 0,
-        "collation_strategy": "language_modeling",
         "mlm": True,
         "dataset_kwargs": {
             "data_dir": helpers.PanglaoPaths.root,
@@ -1296,7 +1096,6 @@ def pl_data_module_panglao_geneformer(
 ):
     kwargs: dict[str, Any] = {
         "num_workers": 0,
-        "collation_strategy": "language_modeling",
         "mlm": True,
         "dataset_kwargs": {
             "data_dir": helpers.PanglaoPaths.root,
@@ -1341,34 +1140,39 @@ def pl_data_module_panglao_geneformer(
 
 
 @pytest.fixture(scope="session")
-def _zheng68k_transform_default(gene2vec_unmasked_fields, zheng68k_label_columns):
-    """Pre-transform fixture for default processed directory to avoid race conditions."""
+def _zheng68k_transform_once(zheng68k_label_columns):
+    """Transform Zheng68k dataset once to avoid race conditions."""
     tokenizer = get_gene2vec_tokenizer()
+    # Use minimal fields just to trigger transform
+    from bmfm_targets.config.tokenization_config import FieldInfo
+
+    minimal_fields = [FieldInfo(field_name="input_ids")]
+
     pl_data_module = Zheng68kDataModule(
         data_dir=helpers.Zheng68kPaths.root,
         tokenizer=tokenizer,
         transform_datasets=True,
-        collation_strategy="sequence_classification",
         num_workers=0,
         batch_size=3,
-        fields=gene2vec_unmasked_fields,
+        fields=minimal_fields,
         label_columns=zheng68k_label_columns,
         max_length=16,
         limit_dataset_samples={"train": 12, "dev": 12, "predict": 2},
     )
     pl_data_module.prepare_data()
+    pl_data_module.setup()
 
 
 @pytest.fixture(scope="session")
 def pl_data_module_zheng68k_seq_cls(
-    gene2vec_unmasked_fields, zheng68k_label_columns, _zheng68k_transform_default
+    gene2vec_unmasked_fields, zheng68k_label_columns, _zheng68k_transform_once
 ):
+    """Zheng68k with unmasked fields + labels (for seq classification tests)."""
     tokenizer = get_gene2vec_tokenizer()
     pl_data_module = Zheng68kDataModule(
         data_dir=helpers.Zheng68kPaths.root,
         tokenizer=tokenizer,
         transform_datasets=False,
-        collation_strategy="sequence_classification",
         num_workers=0,
         batch_size=3,
         fields=gene2vec_unmasked_fields,
@@ -1386,14 +1190,20 @@ def pl_data_module_zheng68k_seq_cls(
 
 @pytest.fixture(scope="session")
 def pl_data_module_zheng68k_multitask(
-    gene2vec_fields, zheng68k_label_columns, _zheng68k_transform_default
+    gene2vec_fields, zheng68k_label_columns, _zheng68k_transform_once
 ):
+    """
+    Zheng68k with masked fields + labels (for multitask tests).
+
+    Note: This is identical to seq_cls except fields are masked. The distinction
+    between "multitask", "mlm", and "seq_cls" is just about which losses are used,
+    not the data module itself.
+    """
     tokenizer = get_gene2vec_tokenizer()
     pl_data_module = Zheng68kDataModule(
         data_dir=helpers.Zheng68kPaths.root,
         tokenizer=tokenizer,
         transform_datasets=False,
-        collation_strategy="multitask",
         mlm=True,
         num_workers=0,
         batch_size=3,
@@ -1417,7 +1227,6 @@ def pl_data_module_adamson_weissman_seq_labeling(perturbation_fields_cve):
         data_dir=helpers.ScperturbPerturbationPaths.root,
         tokenizer=tokenizer,
         transform_datasets=True,
-        collation_strategy="sequence_labeling",
         num_workers=0,
         batch_size=3,
         fields=perturbation_fields_cve,
@@ -1432,9 +1241,8 @@ def pl_data_module_adamson_weissman_seq_labeling(perturbation_fields_cve):
 
 
 @pytest.fixture(scope="session")
-def zheng_seq_cls_ckpt(
-    pl_data_module_zheng68k_seq_cls: Zheng68kDataModule,
-):
+def zheng_seq_cls_ckpt(pl_data_module_zheng68k_seq_cls: Zheng68kDataModule):
+    """Checkpoint with label losses only (traditional sequence classification)."""
     trainer_config = config.TrainerConfig(
         losses=[
             losses.LossTask(
@@ -1450,54 +1258,14 @@ def zheng_seq_cls_ckpt(
         intermediate_size=64,
         hidden_size=32,
     )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        filename = "epoch={epoch}-step={step}-val_loss={validation/loss:.2f}"
-
-        task_config = config.TrainingTaskConfig(
-            default_root_dir=tmpdir,
-            max_epochs=1,
-            max_steps=3,
-            val_check_interval=3,
-            enable_progress_bar=False,
-            enable_model_summary=False,
-            callbacks=[
-                ModelCheckpoint(
-                    dirpath=Path(tmpdir),
-                    save_last=True,
-                    save_top_k=0,
-                    filename=filename,
-                    auto_insert_metric_name=False,
-                )
-            ],
-        )
-
-        seq_cls_training_module = SequenceClassificationTrainingModule(
-            model_config=model_config,
-            trainer_config=trainer_config,
-            label_dict=pl_data_module_zheng68k_seq_cls.label_dict,
-        )
-        pl_data_module_zheng68k_seq_cls.tokenizer.save_pretrained(
-            tmpdir,
-            legacy_format=not pl_data_module_zheng68k_seq_cls.tokenizer.is_fast,
-        )
-        pl_trainer = make_trainer_for_task(task_config)
-        train(
-            pl_trainer,
-            pl_data_module=pl_data_module_zheng68k_seq_cls,
-            pl_module=seq_cls_training_module,
-            task_config=task_config,
-        )
-
-        ckpt_path = task_config.default_root_dir + "/last.ckpt"
-
-        yield ckpt_path
-
-    return
+    yield from _create_training_checkpoint(
+        pl_data_module_zheng68k_seq_cls, model_config, trainer_config
+    )
 
 
 @pytest.fixture(scope="session")
 def zheng_mlm_ckpt(pl_zheng_mlm_raw_counts):
+    """Checkpoint with field losses only (traditional MLM)."""
     trainer_config = config.TrainerConfig(
         losses=[
             losses.LossTask(
@@ -1511,61 +1279,20 @@ def zheng_mlm_ckpt(pl_zheng_mlm_raw_counts):
     )
     model_config = config.SCBertConfig(
         fields=pl_zheng_mlm_raw_counts.fields,
+        label_columns=None,
         num_attention_heads=2,
         num_hidden_layers=2,
         intermediate_size=64,
         hidden_size=32,
     )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        filename = "epoch={epoch}-step={step}-val_loss={validation/loss:.2f}"
-
-        task_config = config.TrainingTaskConfig(
-            default_root_dir=tmpdir,
-            max_epochs=1,
-            max_steps=3,
-            val_check_interval=3,
-            precision="32",
-            accelerator="cpu",
-            enable_progress_bar=False,
-            enable_model_summary=False,
-            callbacks=[
-                ModelCheckpoint(
-                    dirpath=Path(tmpdir),
-                    save_last=True,
-                    save_top_k=0,
-                    filename=filename,
-                    auto_insert_metric_name=False,
-                )
-            ],
-        )
-
-        training_module = MLMTrainingModule(
-            model_config, trainer_config, pl_zheng_mlm_raw_counts.tokenizer
-        )
-        pl_zheng_mlm_raw_counts.tokenizer.save_pretrained(
-            tmpdir,
-            legacy_format=not pl_zheng_mlm_raw_counts.tokenizer.is_fast,
-        )
-        pl_trainer = make_trainer_for_task(task_config)
-        train(
-            pl_data_module=pl_zheng_mlm_raw_counts,
-            pl_module=training_module,
-            task_config=task_config,
-            pl_trainer=pl_trainer,
-        )
-
-        ckpt_path = task_config.default_root_dir + "/last.ckpt"
-
-        yield ckpt_path
-
-    return
+    yield from _create_training_checkpoint(
+        pl_zheng_mlm_raw_counts, model_config, trainer_config, accelerator="cpu"
+    )
 
 
 @pytest.fixture(scope="session")
-def zheng_multitask_ckpt(
-    pl_data_module_zheng68k_multitask: Zheng68kDataModule,
-):
+def zheng_multitask_ckpt(pl_data_module_zheng68k_multitask: Zheng68kDataModule):
+    """Checkpoint with field + label losses (true multitask)."""
     mlm_losses = helpers.default_mlm_losses_from_fields(
         pl_data_module_zheng68k_multitask.fields
     )
@@ -1584,7 +1311,15 @@ def zheng_multitask_ckpt(
         intermediate_size=64,
         hidden_size=32,
     )
+    yield from _create_training_checkpoint(
+        pl_data_module_zheng68k_multitask, model_config, trainer_config
+    )
 
+
+def _create_training_checkpoint(
+    data_module, model_config, trainer_config, accelerator="auto"
+):
+    """Helper to create a training checkpoint (reduces duplication)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         filename = "epoch={epoch}-step={step}-val_loss={validation/loss:.2f}"
 
@@ -1593,6 +1328,8 @@ def zheng_multitask_ckpt(
             max_epochs=1,
             max_steps=3,
             val_check_interval=3,
+            precision="32",
+            accelerator=accelerator,
             enable_progress_bar=False,
             enable_model_summary=False,
             callbacks=[
@@ -1606,30 +1343,26 @@ def zheng_multitask_ckpt(
             ],
         )
 
-        multitask_training_module = MultiTaskTrainingModule(
+        training_module = MultiTaskTrainingModule(
             model_config,
             trainer_config,
-            tokenizer=pl_data_module_zheng68k_multitask.tokenizer,
-            label_dict=pl_data_module_zheng68k_multitask.label_dict,
+            tokenizer=data_module.tokenizer,
+            label_dict=getattr(data_module, "label_dict", None),
         )
-        pl_data_module_zheng68k_multitask.tokenizer.save_pretrained(
+        data_module.tokenizer.save_pretrained(
             tmpdir,
-            legacy_format=not pl_data_module_zheng68k_multitask.tokenizer.is_fast,
-            # filename_prefix="multifield",
+            legacy_format=not data_module.tokenizer.is_fast,
         )
         pl_trainer = make_trainer_for_task(task_config)
         train(
             pl_trainer,
-            pl_data_module=pl_data_module_zheng68k_multitask,
-            pl_module=multitask_training_module,
+            pl_data_module=data_module,
+            pl_module=training_module,
             task_config=task_config,
         )
 
         ckpt_path = task_config.default_root_dir + "/last.ckpt"
-
         yield ckpt_path
-
-    return
 
 
 @pytest.fixture(scope="session")
@@ -1642,12 +1375,11 @@ def zheng_mlm_rda_ckpt(
         processed_name=helpers.Zheng68kPaths.raw_counts_name,
         label_columns=pl_zheng_mlm_raw_counts.label_columns,
         transform_datasets=False,
-        tokenizer=pl_zheng_mlm_raw_counts.tokenizer,
+        tokenizer=load_tokenizer("all_genes"),
         batch_size=2,
         fields=all_genes_fields_with_rda_regression_masking,
         limit_dataset_samples=8,
         mlm=True,
-        collation_strategy="language_modeling",
         rda_transform="downsample",
         max_length=20,
         pad_to_multiple_of=2,
@@ -1663,7 +1395,6 @@ def zheng_mlm_rda_ckpt(
     )
     model_config = config.SCBertConfig(
         fields=dm.fields,
-        label_columns=dm.label_columns,
         num_attention_heads=2,
         num_hidden_layers=2,
         intermediate_size=64,
@@ -1692,7 +1423,7 @@ def zheng_mlm_rda_ckpt(
             ],
         )
 
-        pl_module = MLMTrainingModule(model_config, trainer_config, dm.tokenizer)
+        pl_module = MultiTaskTrainingModule(model_config, trainer_config, dm.tokenizer)
         dm.tokenizer.save_pretrained(
             tmpdir,
             legacy_format=not dm.tokenizer.is_fast,
@@ -1731,7 +1462,6 @@ def sciplex3_seqcls_mt_model_and_ckpt(gene2vec_fields):
         batch_size=3,
         max_length=8,
         pad_to_multiple_of=2,
-        collation_strategy="sequence_classification",
     )
     dm.setup("fit")
     helpers.update_label_columns(label_columns, dm.label_dict)
@@ -1758,7 +1488,7 @@ def sciplex3_seqcls_mt_model_and_ckpt(gene2vec_fields):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         task_config = helpers.get_test_task_config(tmpdir)
-        mt_pl_module = SequenceClassificationTrainingModule(
+        mt_pl_module = MultiTaskTrainingModule(
             model_config,
             config.TrainerConfig(losses=tasks),
             label_dict=dm.label_dict,
@@ -1801,7 +1531,6 @@ def sciplex3_mt_model_and_ckpt(gene2vec_fields):
         batch_size=3,
         max_length=8,
         pad_to_multiple_of=2,
-        collation_strategy="multitask",
         mlm=True,  # Enable MLM to include field labels for expressions
     )
     dm.setup("fit")
@@ -1996,7 +1725,6 @@ def pl_module_cellxgene_soma(cellxgene_label_columns):
         fields=default_fields(),
         label_columns=cellxgene_label_columns,
         num_workers=0,
-        collation_strategy="sequence_classification",
     )
     dm.setup("fit")
     return dm
@@ -2035,7 +1763,6 @@ def pl_data_module_dnaseq_core_promoter(dnaseq_fields):
         batch_size=8,
         fields=dnaseq_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         max_length=512,
         dataset_kwargs=promoter_dataset_kwargs,
     )
@@ -2058,7 +1785,6 @@ def pl_data_module_dnaseq_promoter(dnaseq_fields):
         batch_size=5,
         fields=dnaseq_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         max_length=512,
         dataset_kwargs=promoter_dataset_kwargs,
     )
@@ -2087,7 +1813,6 @@ def pl_data_module_dnaseq_lenti_mpra(dnaseq_fields):
         batch_size=5,
         fields=dnaseq_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         max_length=512,
         dataset_kwargs=dnaseq_dataset_kwargs,
     )
@@ -2115,7 +1840,6 @@ def pl_data_module_dnaseq_splice(dnaseq_fields):
         fields=dnaseq_fields,
         label_columns=label_columns,
         num_workers=0,
-        collation_strategy="sequence_classification",
         max_length=512,
         dataset_kwargs=dnaseq_dataset_kwargs,
     )
@@ -2142,7 +1866,6 @@ def pl_data_module_dnaseq_covid(dnaseq_fields):
         batch_size=5,
         fields=dnaseq_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         max_length=512,
         num_workers=0,
         dataset_kwargs=dnaseq_dataset_kwargs,
@@ -2175,7 +1898,6 @@ def pl_data_module_dnaseq_chromatin(dnaseq_fields):
         batch_size=5,
         fields=dnaseq_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         max_length=512,
         num_workers=0,
         dataset_kwargs=dnaseq_dataset_kwargs,
@@ -2209,7 +1931,6 @@ def pl_data_module_dnaseq_drosophila_enhancer(dnaseq_fields):
         fields=dnaseq_fields,
         label_columns=label_columns,
         num_workers=0,
-        collation_strategy="sequence_classification",
         max_length=512,
         dataset_kwargs=dnaseq_dataset_kwargs,
     )
@@ -2236,7 +1957,6 @@ def pl_data_module_dnaseq_epigenetic_marks(dnaseq_fields):
         fields=dnaseq_fields,
         label_columns=label_columns,
         num_workers=0,
-        collation_strategy="sequence_classification",
         max_length=512,
         dataset_kwargs=dnaseq_dataset_kwargs,
     )
@@ -2264,7 +1984,6 @@ def pl_data_module_dnaseq_transcription_factor(dnaseq_fields):
         fields=dnaseq_fields,
         label_columns=label_columns,
         num_workers=0,
-        collation_strategy="sequence_classification",
         max_length=512,
         dataset_kwargs=dnaseq_dataset_kwargs,
     )
@@ -2322,7 +2041,6 @@ def pl_data_module_dnaseq_snp2trait(dnaseq_fields):
         batch_size=5,
         fields=dnaseq_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         max_length=512,
         num_workers=0,
         dataset_kwargs=dnaseq_dataset_kwargs,

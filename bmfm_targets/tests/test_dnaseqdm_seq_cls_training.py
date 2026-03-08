@@ -8,11 +8,9 @@ from bmfm_targets.datasets import dnaseq
 from bmfm_targets.datasets.SNPdb.streaming_snp_dataset import StreamingSNPdbDataModule
 from bmfm_targets.tasks.task_utils import make_trainer_for_task, train
 from bmfm_targets.training.losses import CrossEntropyObjective, LossTask, MSEObjective
-from bmfm_targets.training.modules import SequenceClassificationTrainingModule
-from bmfm_targets.training.modules.masked_language_modeling import MLMTrainingModule
+from bmfm_targets.training.modules import MultiTaskTrainingModule
 
 
-@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.parametrize(
     "pl_data_module_dnaseq_fixture",
     [
@@ -59,7 +57,7 @@ def test_train_dnaseq_seq_cls_regression_tasks(
             enable_model_summary=False,
             callbacks=[],
         )
-        seq_cls_training_module = SequenceClassificationTrainingModule(
+        training_module = MultiTaskTrainingModule(
             model_config,
             trainer_config,
             label_dict=pl_data_module_dnaseq.label_dict,
@@ -68,12 +66,11 @@ def test_train_dnaseq_seq_cls_regression_tasks(
         train(
             pl_trainer,
             pl_data_module=pl_data_module_dnaseq,
-            pl_module=seq_cls_training_module,
+            pl_module=training_module,
             task_config=task_config,
         )
 
 
-@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.parametrize(
     "pl_data_module_dnaseq_fixture",
     [
@@ -125,7 +122,7 @@ def test_train_dnaseq_seq_cls_classification_tasks(
             enable_model_summary=False,
             callbacks=[],
         )
-        seq_cls_training_module = SequenceClassificationTrainingModule(
+        training_module = MultiTaskTrainingModule(
             model_config,
             trainer_config,
             label_dict=pl_data_module_dnaseq.label_dict,
@@ -134,12 +131,11 @@ def test_train_dnaseq_seq_cls_classification_tasks(
         train(
             pl_trainer,
             pl_data_module=pl_data_module_dnaseq,
-            pl_module=seq_cls_training_module,
+            pl_module=training_module,
             task_config=task_config,
         )
 
 
-@pytest.mark.skip(reason="skip for open source integration")
 @pytest.mark.usefixtures("_convert_raw_to_lit")
 def test_pretrain_scbert_snpdb_and_finetune_lenti_mpra(
     streaming_snpdb_parameters,
@@ -176,14 +172,14 @@ def test_pretrain_scbert_snpdb_and_finetune_lenti_mpra(
             callbacks=[],
         )
 
-        mlm_training_module = MLMTrainingModule(
+        pretrain_training_module = MultiTaskTrainingModule(
             model_config, trainer_config, datamodule.tokenizer
         )
         pl_trainer = make_trainer_for_task(pretrain_task_config)
         train(
             pl_trainer,
             pl_data_module=datamodule,
-            pl_module=mlm_training_module,
+            pl_module=pretrain_training_module,
             task_config=pretrain_task_config,
         )
 
@@ -207,7 +203,7 @@ def test_pretrain_scbert_snpdb_and_finetune_lenti_mpra(
             intermediate_size=64,
             hidden_size=32,
         )
-        seq_cls_training_module = SequenceClassificationTrainingModule(
+        finetune_training_module = MultiTaskTrainingModule(
             model_config,
             trainer_config,
             label_dict=pl_data_module_dnaseq_lenti_mpra.label_dict,
@@ -230,7 +226,7 @@ def test_pretrain_scbert_snpdb_and_finetune_lenti_mpra(
         train(
             pl_trainer,
             pl_data_module=pl_data_module_dnaseq_lenti_mpra,
-            pl_module=seq_cls_training_module,
+            pl_module=finetune_training_module,
             task_config=finetune_task_config,
         )
 
@@ -242,7 +238,8 @@ def test_pretrain_scbert_snpdb_and_finetune_lenti_mpra(
             "state_dict"
         ]
         assert finetune_model.keys() != pretrain_model.keys()
+        # Multitask models use model.scbert prefix, not model.base_model
         assert (
-            "model.base_model.embeddings.dna_chunks_embeddings.weight"
+            "model.scbert.embeddings.dna_chunks_embeddings.weight"
             in finetune_model.keys()
         )

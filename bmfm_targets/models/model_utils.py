@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 def register_configs_and_models():
+    """
+    Register model configs and multitask models with HuggingFace AutoModel.
+
+    Multitask models are registered for BOTH AutoModelForMaskedLM and
+    AutoModelForSequenceClassification since they handle both tasks.
+    This maintains HF API compatibility while using only multitask models internally.
+    """
     from bmfm_targets.models.predictive import (
         scbert,
         scmodernbert,
@@ -30,35 +37,44 @@ def register_configs_and_models():
     _config_maps = [
         (
             config.SCBertConfig,
-            scbert.SCBertForMaskedLM,
-            scbert.SCBertForSequenceClassification,
+            scbert.SCBertForMultiTaskModeling,
         ),
         (
             config.SCPerformerConfig,
-            scperformer.SCPerformerForMaskedLM,
-            scperformer.SCPerformerForSequenceClassification,
+            scperformer.SCPerformerForMultiTaskModeling,
         ),
         (
             config.SCNystromformerConfig,
-            scnystromformer.SCNystromformerForMaskedLM,
-            scnystromformer.SCNystromformerForSequenceClassification,
+            scnystromformer.SCNystromformerForMultiTaskModeling,
         ),
         (
             config.SCModernBertConfig,
-            scmodernbert.SCModernBertForMaskedLM,
-            scmodernbert.SCModernBertForSequenceClassification,
+            scmodernbert.SCModernBertForMultiTaskModeling,
         ),
     ]
 
-    for config_class, lm_class, seqcls_class in _config_maps:
+    for config_class, multitask_class in _config_maps:
         AutoConfig.register(config_class.model_type, config_class)
-        AutoModelForMaskedLM.register(config_class, lm_class)
-        AutoModelForSequenceClassification.register(config_class, seqcls_class)
+        # Register multitask model for both MLM and SeqCls
+        # This is correct since multitask models handle both tasks
+        AutoModelForMaskedLM.register(config_class, multitask_class, exist_ok=True)
+        AutoModelForSequenceClassification.register(
+            config_class, multitask_class, exist_ok=True
+        )
 
 
-def get_model_from_config(
-    model_config: config.SCModelConfigBase, modeling_strategy: str
-):
+def get_model_from_config(model_config: config.SCModelConfigBase):
+    """
+    Get model from config. Always returns multitask model.
+
+    Args:
+    ----
+        model_config: Model configuration
+
+    Returns:
+    -------
+        Multitask model instance
+    """
     from bmfm_targets.models.predictive import (
         scbert,
         scmodernbert,
@@ -68,52 +84,19 @@ def get_model_from_config(
 
     # LLaMa
     if hasattr(model_config, "build_model"):
-        return model_config.build_model(modeling_strategy)
+        return model_config.build_model()
 
-    # scbert
+    # Always return multitask models
     if isinstance(model_config, config.SCBertConfig):
-        if modeling_strategy == "mlm":
-            return scbert.SCBertForMaskedLM(model_config)
-        if modeling_strategy == "sequence_classification":
-            return scbert.SCBertForSequenceClassification(model_config)
-        if modeling_strategy == "sequence_labeling":
-            return scbert.SCBertForSequenceLabeling(model_config)
-        if modeling_strategy == "multitask":
-            return scbert.SCBertForMultiTaskModeling(model_config)
-    # scperformer
-    if isinstance(model_config, config.SCPerformerConfig):
-        if modeling_strategy == "mlm":
-            return scperformer.SCPerformerForMaskedLM(model_config)
-        if modeling_strategy == "sequence_classification":
-            return scperformer.SCPerformerForSequenceClassification(model_config)
-        if modeling_strategy == "sequence_labeling":
-            return scperformer.SCPerformerForSequenceLabeling(model_config)
-        if modeling_strategy == "multitask":
-            return scperformer.SCPerformerForMultiTaskModeling(model_config)
-    # scnystromformer
-    if isinstance(model_config, config.SCNystromformerConfig):
-        if modeling_strategy == "mlm":
-            return scnystromformer.SCNystromformerForMaskedLM(model_config)
-        if modeling_strategy == "sequence_classification":
-            return scnystromformer.SCNystromformerForSequenceClassification(
-                model_config
-            )
-        if modeling_strategy == "sequence_labeling":
-            return scnystromformer.SCNystromformerForSequenceLabeling(model_config)
-        if modeling_strategy == "multitask":
-            return scnystromformer.SCNystromformerForMultiTaskModeling(model_config)
-    # SCModernBert
-    if isinstance(model_config, config.SCModernBertConfig):
-        if modeling_strategy == "mlm":
-            return scmodernbert.SCModernBertForMaskedLM(model_config)
-        if modeling_strategy == "sequence_classification":
-            return scmodernbert.SCModernBertForSequenceClassification(model_config)
-        if modeling_strategy == "sequence_labeling":
-            return scmodernbert.SCModernBertForSequenceLabeling(model_config)
-        if modeling_strategy == "multitask":
-            return scmodernbert.SCModernBertForMultiTaskModeling(model_config)
-
-    raise ValueError(f"Unknown model_config type {type(model_config)}")
+        return scbert.SCBertForMultiTaskModeling(model_config)
+    elif isinstance(model_config, config.SCPerformerConfig):
+        return scperformer.SCPerformerForMultiTaskModeling(model_config)
+    elif isinstance(model_config, config.SCNystromformerConfig):
+        return scnystromformer.SCNystromformerForMultiTaskModeling(model_config)
+    elif isinstance(model_config, config.SCModernBertConfig):
+        return scmodernbert.SCModernBertForMultiTaskModeling(model_config)
+    else:
+        raise ValueError(f"Unknown model_config type {type(model_config)}")
 
 
 def get_base_model_from_config(model_config: config.SCModelConfigBase):
@@ -159,26 +142,6 @@ class SequenceClassifierOutputWithEmbeddings(SequenceClassifierOutput):
 @dataclass
 class MaskedLMOutputWithEmbeddings(SequenceClassifierOutput):
     embeddings: torch.FloatTensor | None = None
-
-
-def instantiate_classification_model(model_config, loss_tasks, device=None):
-    from bmfm_targets.models.predictive import MultiTaskClassifier
-
-    if loss_tasks:
-        if model_config.checkpoint:
-            return MultiTaskClassifier.from_ckpt(
-                model_config.checkpoint,
-                loss_tasks=loss_tasks,
-                model_config=model_config,
-                device=device,
-            )
-        else:
-            base_model = get_base_model_from_config(model_config)
-            return MultiTaskClassifier(base_model, loss_tasks)
-
-    return get_model_from_config(
-        model_config, modeling_strategy="sequence_classification"
-    )
 
 
 def download_ckpt_from_huggingface(hf_repo) -> str:
@@ -229,4 +192,42 @@ def download_tokenizer_from_huggingface(hf_repo) -> None:
         return local_hf_repo_path
     else:
         logger.warning(f"Tokenizer not found in HuggingFace repo: {hf_repo}")
-        return hf_repo
+
+
+def migrate_checkpoint_if_needed(
+    checkpoint_path: str, label_name: str | None = None
+) -> dict:
+    """Load and migrate old checkpoint formats to multitask."""
+    from run.migrate_checkpoints_to_multitask import (
+        convert_mlm_to_multitask,
+        convert_seqcls_to_multitask,
+        detect_checkpoint_type,
+    )
+
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state_dict = ckpt.get("state_dict", ckpt)
+
+    # Remove "model." prefix for detection
+    cleaned = {k[6:] if k.startswith("model.") else k: v for k, v in state_dict.items()}
+
+    ckpt_type, detected_label = detect_checkpoint_type(cleaned)
+    if ckpt_type == "multitask":
+        return ckpt
+
+    logger.info(f"Migrating {ckpt_type} checkpoint")
+    label_name = detected_label or label_name
+
+    if ckpt_type == "mlm_or_seqlabel":
+        migrated = convert_mlm_to_multitask(cleaned)
+    elif ckpt_type in ("sequence_classification", "multitask_classifier"):
+        if not label_name:
+            raise ValueError("SeqCls checkpoint requires label_name")
+        migrated = convert_seqcls_to_multitask(cleaned, label_name=label_name)
+    else:
+        raise ValueError(f"Unknown checkpoint type: {ckpt_type}")
+
+    if "state_dict" in ckpt:
+        ckpt["state_dict"] = migrated
+    else:
+        ckpt = migrated
+    return ckpt

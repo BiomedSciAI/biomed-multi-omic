@@ -43,12 +43,8 @@ SPECIAL_DEFAULT_CATEGORICAL_KWARGS = {
 
 
 def _filter_unsupported_kwargs(metric_class: type, kwargs: dict) -> dict:
-    """Filter kwargs to only those supported by metric_class.__init__ or __new__."""
-    # Check __new__ first (some metrics like Accuracy use it), fall back to __init__
-    try:
-        sig = inspect.signature(metric_class.__new__)
-    except (ValueError, TypeError):
-        sig = inspect.signature(metric_class.__init__)
+    """Filter kwargs to only those supported by metric_class constructor."""
+    sig = inspect.signature(metric_class)
     supported = set(sig.parameters.keys()) - {"self", "cls"}
     filtered = {k: v for k, v in kwargs.items() if k in supported}
     if dropped := set(kwargs) - set(filtered):

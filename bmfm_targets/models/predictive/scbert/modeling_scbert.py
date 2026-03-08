@@ -1036,6 +1036,7 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,  # Added for PEFT compatibility
     ) -> SequenceClassifierOutputWithEmbeddings:
         """
         Forward pass on the model.
@@ -1081,13 +1082,8 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
             output_hidden_states=output_hidden_states,
         )
 
-        pooler_output = self.dropout(outputs.pooler_output)
-
-        cls_embeddings = (
-            outputs.pooler_output
-            if outputs.pooler_output is not None
-            else outputs.last_hidden_state[:, 0, :]
-        )
+        pooler_output = outputs.pooler_output
+        pooler_output = self.dropout(pooler_output)
 
         mvc_query_embeddings = {}
         mvc_field_names = {
@@ -1095,20 +1091,21 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
             for decoder_name in self.cls.predictions.predictions.decoder.field_decoders.keys()
             if "mvc" in decoder_name
         }
+
+        # Build mvc_query_embeddings using the correct filtered index
+        # The embeddings layer filters to input_fields, so we need to use that same filtered index
         input_fields = [field for field in self.config.fields if field.is_input]
-        for i, field in enumerate(input_fields):
+        for filtered_idx, field in enumerate(input_fields):
             if field.field_name in mvc_field_names:
                 embeds = self.scbert.embeddings.calculate_field_embedding(
-                    input_ids, i, field
+                    input_ids, filtered_idx, field
                 )
                 mvc_query_embeddings[field.field_name] = embeds
 
-        if len(mvc_query_embeddings) == 0:
-            logits = self.cls(outputs.last_hidden_state, cls_embeddings)
-        else:
-            logits = self.cls(
-                outputs.last_hidden_state, cls_embeddings, mvc_query_embeddings
-            )
+        # Always pass mvc_query_embeddings (even if empty dict) so decoder knows what to expect
+        logits = self.cls(
+            outputs.last_hidden_state, pooler_output, mvc_query_embeddings
+        )
 
         return SequenceClassifierOutputWithEmbeddings(
             logits=logits,

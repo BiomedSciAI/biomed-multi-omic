@@ -14,7 +14,7 @@ from bmfm_targets.tests import helpers
 from bmfm_targets.tokenization import load_tokenizer
 from bmfm_targets.training.losses import CrossEntropyObjective, LossTask
 from bmfm_targets.training.metrics.metric_functions import calculate_95_ci
-from bmfm_targets.training.modules import SequenceClassificationTrainingModule
+from bmfm_targets.training.modules import MultiTaskTrainingModule
 
 
 def test_zheng68k_predict_no_train(
@@ -32,7 +32,7 @@ def test_zheng68k_predict_no_train(
         intermediate_size=64,
         hidden_size=32,
     )
-    training_module = SequenceClassificationTrainingModule(
+    training_module = MultiTaskTrainingModule(
         model_config, trainer_config, label_dict=data_module.label_dict
     )
     task_config = config.PredictTaskConfig(
@@ -83,7 +83,6 @@ def test_zheng68k_predict_no_train_including_non_input_fields(
         batch_size=2,
         limit_dataset_samples=8,
         mlm=False,
-        collation_strategy="sequence_classification",
         max_length=20,
         pad_to_multiple_of=2,
     )
@@ -114,7 +113,7 @@ def test_zheng68k_predict_no_train_including_non_input_fields(
 
     data_module.setup(task_config.setup_stage)
 
-    training_module = SequenceClassificationTrainingModule(
+    training_module = MultiTaskTrainingModule(
         model_config, trainer_config, label_dict=data_module.label_dict
     )
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -143,7 +142,6 @@ def test_different_pooling_choices_respected(gene2vec_fields, sciplex3_label_col
         limit_dataset_samples=test_size,
         fields=gene2vec_fields,
         label_columns=sciplex3_label_columns,
-        collation_strategy="sequence_classification",
         tokenizer=load_tokenizer("gene2vec"),
         batch_size=10,
         max_length=64,
@@ -161,7 +159,7 @@ def test_different_pooling_choices_respected(gene2vec_fields, sciplex3_label_col
         intermediate_size=64,
         hidden_size=32,
     )
-    pl_module = SequenceClassificationTrainingModule(
+    pl_module = MultiTaskTrainingModule(
         model_config, trainer_config, label_dict=dm.label_dict
     )
     task_config = config.PredictTaskConfig(
@@ -412,7 +410,6 @@ def test_scp1884_prediction_on_zheng_ckpt(
         mlm=False,
         fields=gene2vec_unmasked_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         tokenizer=load_tokenizer("gene2vec"),
     )
     dm.prepare_data()
@@ -463,7 +460,6 @@ def test_scp1884_prediction_on_zheng_multitask_ckpt(
         data_dir=helpers.SCP1884Paths.root,
         mlm=False,
         fields=gene2vec_unmasked_fields,
-        collation_strategy="multitask",
         tokenizer=load_tokenizer("gene2vec"),
     )
     dm.prepare_data()
@@ -518,7 +514,6 @@ def test_generic_dataset_with_no_label_dict_prediction_on_zheng_ckpt(
         data_dir=helpers.SCP1884Paths.root,
         mlm=False,
         fields=gene2vec_fields,
-        collation_strategy="sequence_classification",
         tokenizer=load_tokenizer("gene2vec"),
     )
     dm.prepare_data()
@@ -531,7 +526,6 @@ def test_generic_dataset_with_no_label_dict_prediction_on_zheng_ckpt(
         max_length=16,
         tokenizer=dm.tokenizer,
         fields=dm.fields,
-        collation_strategy="sequence_classification",
     )
     generic_dm.prepare_data()
     generic_dm.setup("predict")

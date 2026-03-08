@@ -29,8 +29,8 @@ from bmfm_targets.training.metrics import (
 )
 from bmfm_targets.training.metrics.metric_functions import calculate_95_ci
 from bmfm_targets.training.modules import (
-    SequenceClassificationTrainingModule,
-    get_training_module_class_for_data_module,
+    MultiTaskTrainingModule,
+    SequenceLabelingTrainingModule,
 )
 from bmfm_targets.training.modules.base import BaseTrainingModule
 
@@ -94,7 +94,11 @@ def train_run(pl_trainer, task_config, model_config, data_module, trainer_config
             model_config.checkpoint = download_ckpt_from_huggingface(
                 model_config.checkpoint
             )
-    pl_module_factory = get_training_module_class_for_data_module(data_module)
+    if trainer_config.enable_perturbation_metrics:
+        pl_factory = SequenceLabelingTrainingModule
+    else:
+        pl_factory = MultiTaskTrainingModule
+
     checkpoint_path = None
     if task_config.resume_training_from_ckpt:
         checkpoint_path = model_config.checkpoint
@@ -102,7 +106,7 @@ def train_run(pl_trainer, task_config, model_config, data_module, trainer_config
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
     if data_module.label_dict is not None:
         extra_kwargs["label_dict"] = data_module.label_dict
-    pl_module = pl_module_factory(model_config, trainer_config, **extra_kwargs)
+    pl_module = pl_factory(model_config, trainer_config, **extra_kwargs)
     train(
         pl_trainer,
         pl_data_module=data_module,
@@ -177,21 +181,16 @@ def predict_run(pl_trainer, task_config, model_config, data_module, trainer_conf
 
     results = predict(pl_trainer, pl_module, data_module)
     if task_config.output_predictions:
-        if pl_module.MODELING_STRATEGY in ("multitask", "sequence_classification"):
-            save_prediction_results(
-                task_config.default_root_dir,
-                pl_module.label_dict,
-                results,
-            )
-            save_logits_results(
-                task_config.default_root_dir,
-                pl_module.label_dict,
-                results,
-            )
-        else:
-            logger.warning(
-                f"Predictions not supported for modeling strategy: {pl_module.MODELING_STRATEGY}"
-            )
+        save_prediction_results(
+            task_config.default_root_dir,
+            pl_module.label_dict,
+            results,
+        )
+        save_logits_results(
+            task_config.default_root_dir,
+            pl_module.label_dict,
+            results,
+        )
 
     if task_config.output_embeddings:
         save_embeddings_results(task_config.default_root_dir, results)
@@ -221,25 +220,63 @@ def merge_trainer_configs(
     return override_config
 
 
-def instantiate_module_from_checkpoint(task_config, data_module, trainer_config):
+def instantiate_module_from_checkpoint(
+    task_config,
+    data_module,
+    trainer_config,
+):
+    """
+    Instantiate a training module from a checkpoint.
+
+    The checkpoint is the source of truth for both model_config and label_dict.
+    If the checkpoint doesn't have label_dict (old checkpoints), we fall back to
+    data_module.label_dict as a compatibility measure.
+
+    Args:
+    ----
+        task_config: Task configuration with checkpoint path
+        data_module: Data module with tokenizer and optional label_dict
+        trainer_config: Trainer configuration (merged with checkpoint's trainer_config)
+
+    Returns:
+    -------
+        Instantiated PyTorch Lightning module with model and label_dict from checkpoint
+    """
     from bmfm_targets.tokenization import load_tokenizer
+
+    if task_config.checkpoint is None:
+        raise ValueError("Cannot run test or predict run without a checkpoint!")
 
     data_module.tokenizer = load_tokenizer(os.path.dirname(task_config.checkpoint))
 
+    # Load checkpoint to check if it has label_dict and to merge trainer_config
     ckpt = torch.load(task_config.checkpoint, map_location="cpu", weights_only=False)
     ckpt_hyper = ckpt["hyper_parameters"]
 
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
-    extra_kwargs["trainer_config"] = merge_trainer_configs(
+    merged_trainer_config = merge_trainer_configs(
         ckpt_hyper.get("trainer_config"), trainer_config
     )
+    extra_kwargs["trainer_config"] = merged_trainer_config
     extra_kwargs["config_is_loaded_from_ckpt"] = True
+    if merged_trainer_config.enable_perturbation_metrics:
+        pl_factory = SequenceLabelingTrainingModule
+    else:
+        pl_factory = MultiTaskTrainingModule
 
-    pl_factory = get_training_module_class_for_data_module(data_module)
+    if "label_dict" not in ckpt_hyper and data_module.label_dict is not None:
+        logger.warning(
+            "Checkpoint does not contain label_dict. Using data_module.label_dict as fallback."
+        )
+        extra_kwargs["label_dict"] = data_module.label_dict
 
-    return pl_factory.load_from_checkpoint(
+    logger.info(
+        f"Loading model and label_dict from checkpoint: {task_config.checkpoint}"
+    )
+    pl_module = pl_factory.load_from_checkpoint(
         task_config.checkpoint, **extra_kwargs, weights_only=False
     )
+    return pl_module
 
 
 def prepare_extra_training_module_kwargs(
@@ -352,7 +389,7 @@ def test(
 
 def predict(
     pl_trainer: pl.Trainer,
-    pl_module: SequenceClassificationTrainingModule,
+    pl_module: MultiTaskTrainingModule,
     pl_data_module: pl.LightningDataModule,
 ):
     batch_preds = pl_trainer.predict(model=pl_module, datamodule=pl_data_module)
@@ -391,9 +428,13 @@ def save_prediction_results(root_dir, label_dict, results):
         else:  # regression case
             str_predictions[label_column_name] = raw_predictions
 
-    pd.DataFrame(str_predictions, index=results["cell_name"]).to_csv(
-        f"{root_dir}/predictions.csv"
-    )
+    if str_predictions:
+        pd.DataFrame(str_predictions, index=results["cell_name"]).to_csv(
+            f"{root_dir}/predictions.csv"
+        )
+        logger.info(f"Predictions saved to {root_dir}/predictions.csv")
+    else:
+        logger.warning("No predictions found in results to save")
 
 
 def save_logits_results(root_dir, label_dict, results):
@@ -420,6 +461,9 @@ def save_logits_results(root_dir, label_dict, results):
         pd.DataFrame(str_probabilities, index=results["cell_name"]).to_csv(
             f"{root_dir}/probabilities.csv"
         )
+        logger.info(f"Logits and probabilities saved to {root_dir}/")
+    else:
+        logger.warning("No logits found in results to save")
 
 
 def prepare_test_metrics_for_logging(
@@ -524,7 +568,6 @@ def interpret_run(
         module = interpret.SequenceClassificationAttributionModule.load_from_checkpoint(
             task_config.checkpoint,
             tokenizer=data_module.tokenizer,
-            modeling_strategy=data_module.collation_strategy,
             attribute_kwargs=task_config.attribute_kwargs,
             attribute_filter=task_config.attribute_filter,
             weights_only=False,
@@ -534,7 +577,6 @@ def interpret_run(
             model_config,
             data_module.tokenizer,
             data_module.label_dict,
-            modeling_strategy=data_module.collation_strategy,
             attribute_kwargs=task_config.attribute_kwargs,
             attribute_filter=task_config.attribute_filter,
         )

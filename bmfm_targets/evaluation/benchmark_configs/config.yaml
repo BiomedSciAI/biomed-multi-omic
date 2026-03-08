@@ -15,6 +15,16 @@ trainer:
     - name: focal
       label_column_name: ${label_columns[0].label_column_name}
       focal_gamma: 3
+      metrics:
+       - name: accuracy
+         average: micro
+       - name: f1
+         average: macro
+       - name: precision
+         average: macro
+       - name: recall
+         average: macro
+       - name: confusion_matrix
   # for rda models this should be set to `first_token`, for multitask 'pooling_layer' or 'mean_pooling'
   pooling_method: pooling_layer
   batch_prediction_behavior: track
@@ -31,13 +41,12 @@ data_module:
   batch_size: 8
   # rda_transform: auto_align
   # limit genes is modified per dataset to handle mouse
-  collation_strategy: multitask
 
 
 max_finetuning_epochs: 10
 
 dataset_name: "" # do not modify, set by script
-checkpoint_path: ""
-checkpoint_name: multitask_cellxgene_v2
+checkpoint_path: /proj/bmfm/users/vgurev/runs/main_runs/llama/data/last-v1.ckpt
+checkpoint_name: llama_medium_cell_ontology_zuvela
 # checkpoint_name: multitask_cellxgene
-output_directory: ""
+output_directory: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/benchmarking

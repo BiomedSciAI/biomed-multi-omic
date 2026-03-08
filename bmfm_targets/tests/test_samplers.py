@@ -26,7 +26,6 @@ def test_weighted_sampler_sciplex3(dataset_kwargs, gene2vec_fields):
         tokenizer=get_all_genes_tokenizer(),
         balancing_label_column="control",
         fields=gene2vec_fields,
-        collation_strategy="sequence_classification",
         batch_size=256,
     )
     dm.setup("fit")
@@ -49,7 +48,6 @@ def test_bootstrap_sampler_is_resampling(dataset_kwargs, gene2vec_fields):
         tokenizer=get_all_genes_tokenizer(),
         fields=gene2vec_fields,
         label_columns=label_columns,
-        collation_strategy="sequence_classification",
         batch_size=2,
         limit_dataset_samples=10,
         bootstrap_test_dataloader=True,
