@@ -67,24 +67,10 @@ def convert_mlm_to_multitask(state_dict: dict) -> dict:
         else:
             new_state_dict[key] = value
 
-    # Detect model type from checkpoint keys
-    # ModernBERT has "layers.X.attn.Wqkv", scBERT has "encoder.layer.X.attention"
-    is_modernbert = any("layers." in k and ".attn.Wqkv" in k for k in state_dict.keys())
+    # Detect model prefix from checkpoint keys
+    # ModernBERT has "scmodernbert.*" prefix, scBERT has "scbert.*"
+    is_modernbert = any(k.startswith("scmodernbert.") for k in state_dict.keys())
     model_prefix = "scmodernbert" if is_modernbert else "scbert"
-
-    # ModernBERT multitask inherits from SCModernBertModel, so it needs encoder weights at BOTH:
-    # - Top level: embeddings.*, layers.*, final_norm.* (inherited from parent)
-    # - Submodule: scmodernbert.embeddings.*, scmodernbert.layers.*, etc.
-    # The checkpoint only has scmodernbert.* keys, so we need to copy them to top level
-    if is_modernbert:
-        encoder_keys = ["embeddings", "layers", "final_norm"]
-        for key, value in list(new_state_dict.items()):
-            if key.startswith(f"{model_prefix}.") and any(
-                key.startswith(f"{model_prefix}.{enc_key}") for enc_key in encoder_keys
-            ):
-                # Copy to top level (remove scmodernbert. prefix)
-                top_level_key = key[len(f"{model_prefix}.") :]
-                new_state_dict[top_level_key] = value
 
     # Initialize pooler as identity to preserve first-token behavior
     # MLM models don't have pooler (add_pooling_layer=False), but multitask models need it
@@ -102,11 +88,6 @@ def convert_mlm_to_multitask(state_dict: dict) -> dict:
         # Add pooler under submodule name (e.g., scbert.pooler or scmodernbert.pooler)
         new_state_dict[f"{model_prefix}.pooler.dense.weight"] = pooler_weight
         new_state_dict[f"{model_prefix}.pooler.dense.bias"] = pooler_bias
-
-        # ModernBERT also needs pooler at top level (inherited from parent)
-        if is_modernbert:
-            new_state_dict["pooler.dense.weight"] = pooler_weight.clone()
-            new_state_dict["pooler.dense.bias"] = pooler_bias.clone()
 
     return new_state_dict
 

@@ -1326,7 +1326,7 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
-class SCModernBertForMultiTaskModeling(SCModernBertModel):
+class SCModernBertForMultiTaskModeling(SCModernBertPreTrainedModel):
     _tied_weights_keys = [
         "cls.predictions.decoder.bias",
         "cls.predictions.decoder.weight",

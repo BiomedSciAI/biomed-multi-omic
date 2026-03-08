@@ -559,16 +559,14 @@ def test_pooler_embeddings_consistency_after_migration(
 
 def test_modernbert_mlm_migration_uses_correct_pooler_prefix():
     """
-    Test that ModernBERT MLM checkpoints get encoder weights and pooler at BOTH locations.
+    Test that ModernBERT MLM checkpoints get scmodernbert.pooler (not scbert).
 
-    ModernBERT multitask model inherits from SCModernBertModel, so it has:
-    - Inherited attributes: embeddings.*, layers.*, final_norm.*, pooler.* (from parent class)
-    - Submodule attributes: scmodernbert.embeddings.*, scmodernbert.layers.*, etc. (explicit submodule)
-
-    The checkpoint has scmodernbert.* keys, so migration must copy them to top level too.
+    After fixing SCModernBertForMultiTaskModeling to inherit from SCModernBertPreTrainedModel
+    (not SCModernBertModel), the model no longer has duplicate encoder weights.
+    Migration only needs to add pooler under scmodernbert.* prefix.
     """
     # Create a minimal ModernBERT-style state dict
-    # ModernBERT has "layers.X.attn.Wqkv" keys (not "encoder.layer.X.attention")
+    # ModernBERT has "scmodernbert.*" prefix
     modernbert_state = {
         "scmodernbert.embeddings.dna_chunks_embeddings.weight": torch.zeros(100, 128),
         "scmodernbert.embeddings.LayerNorm.weight": torch.ones(128),
@@ -587,39 +585,24 @@ def test_modernbert_mlm_migration_uses_correct_pooler_prefix():
 
     migrated = convert_mlm_to_multitask(modernbert_state)
 
-    # Must have scmodernbert.* keys (submodule - original)
+    # Must have scmodernbert.* keys (submodule)
     assert "scmodernbert.embeddings.dna_chunks_embeddings.weight" in migrated
     assert "scmodernbert.layers.0.attn.Wqkv.weight" in migrated
     assert "scmodernbert.final_norm.weight" in migrated
     assert "scmodernbert.pooler.dense.weight" in migrated
     assert "scmodernbert.pooler.dense.bias" in migrated
 
-    # Must ALSO have top-level keys (inherited from parent - copied during migration)
-    assert "embeddings.dna_chunks_embeddings.weight" in migrated
-    assert "layers.0.attn.Wqkv.weight" in migrated
-    assert "final_norm.weight" in migrated
-    assert "pooler.dense.weight" in migrated
-    assert "pooler.dense.bias" in migrated
-
     # Must NOT have scbert.* keys
     assert "scbert.pooler.dense.weight" not in migrated
     assert "scbert.pooler.dense.bias" not in migrated
 
-    # Verify encoder weights are the same at both locations
-    assert torch.allclose(
-        migrated["embeddings.dna_chunks_embeddings.weight"],
-        migrated["scmodernbert.embeddings.dna_chunks_embeddings.weight"],
-    )
-    assert torch.allclose(
-        migrated["layers.0.attn.Wqkv.weight"],
-        migrated["scmodernbert.layers.0.attn.Wqkv.weight"],
-    )
+    # Must NOT have top-level encoder keys (no longer needed after inheritance fix)
+    assert "embeddings.dna_chunks_embeddings.weight" not in migrated
+    assert "pooler.dense.weight" not in migrated
 
-    # Verify both poolers are identity matrices
+    # Verify pooler is identity matrix
     assert torch.allclose(migrated["scmodernbert.pooler.dense.weight"], torch.eye(128))
     assert torch.allclose(migrated["scmodernbert.pooler.dense.bias"], torch.zeros(128))
-    assert torch.allclose(migrated["pooler.dense.weight"], torch.eye(128))
-    assert torch.allclose(migrated["pooler.dense.bias"], torch.zeros(128))
 
 
 def test_scbert_mlm_migration_uses_scbert_pooler_prefix():
