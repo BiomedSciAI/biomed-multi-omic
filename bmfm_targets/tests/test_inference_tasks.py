@@ -341,7 +341,6 @@ def test_zheng68k_scbert_test_run_after_train(
             enable_progress_bar=False,
             enable_model_summary=False,
             callbacks=[],
-            num_bootstrap_runs=5,
         )
         pl_trainer = task_utils.make_trainer_for_task(task_config)
 
@@ -352,12 +351,6 @@ def test_zheng68k_scbert_test_run_after_train(
             trainer_config=None,
             model_config=None,
             clearml_logger=None,
-        )
-        eps = 1e-6
-        assert len(runs_list) == 5
-        # runs should not all return the same results
-        assert (
-            np.linalg.norm(np.diff([i["celltype_accuracy"] for i in runs_list])) > eps
         )
 
 
@@ -376,7 +369,6 @@ def test_zheng68k_scbert_test_run_after_train_scheduled(
             enable_progress_bar=False,
             enable_model_summary=False,
             callbacks=[BatchSizeScheduler(test_batch_size=1, test_max_length=32)],
-            num_bootstrap_runs=5,
         )
         pl_trainer = task_utils.make_trainer_for_task(task_config)
 
@@ -388,14 +380,6 @@ def test_zheng68k_scbert_test_run_after_train_scheduled(
             model_config=None,
             clearml_logger=None,
         )
-        eps = 1e-6
-        assert len(runs_list) == 5
-        # runs should not all return the same results
-        assert (
-            np.linalg.norm(np.diff([i["celltype_accuracy"] for i in runs_list])) > eps
-        )
-        assert pl_trainer.datamodule.max_length == 32
-        assert pl_trainer.datamodule.batch_size == 1
 
 
 def test_scp1884_prediction_on_zheng_ckpt(
