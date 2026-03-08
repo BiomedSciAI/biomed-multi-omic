@@ -273,6 +273,22 @@ class BaseTrainingModule(pl.LightningModule):
 
         if ckpt_type == "mlm_or_seqlabel":
             migrated = convert_mlm_to_multitask(cleaned)
+            # MLM checkpoints don't have label prediction weights
+            # Remove label_columns from config so model isn't created with prediction heads
+            if (
+                "hyper_parameters" in checkpoint
+                and "model_config" in checkpoint["hyper_parameters"]
+            ):
+                model_config = checkpoint["hyper_parameters"]["model_config"]
+                if (
+                    hasattr(model_config, "label_columns")
+                    and model_config.label_columns
+                ):
+                    logger.info(
+                        f"Removing {len(model_config.label_columns)} label_columns from MLM checkpoint config "
+                        "(weights not present in state_dict)"
+                    )
+                    model_config.label_columns = []
         elif ckpt_type in ("sequence_classification", "multitask_classifier"):
             migrated = convert_seqcls_to_multitask(cleaned, label_name=label_name)
         else:

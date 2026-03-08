@@ -197,6 +197,28 @@ class TrainerConfig:
 
     """
 
+    def merge_from_checkpoint(
+        self, checkpoint_trainer: "TrainerConfig | None"
+    ) -> "TrainerConfig":
+        """
+        Merge trainer config with checkpoint trainer config.
+
+        Special handling for losses: if yaml.losses is None, inherit from checkpoint.
+        """
+        if not checkpoint_trainer:
+            return self
+
+        if self.losses is None and checkpoint_trainer.losses:
+            from transformers.utils import logging
+
+            logger = logging.get_logger(__name__)
+            logger.info(
+                f"Inheriting {len(checkpoint_trainer.losses)} losses from checkpoint"
+            )
+            self.losses = checkpoint_trainer.losses
+
+        return self
+
     betas: tuple[float, float] = (0.9, 0.99)
     epsilon: float = 1e-8
     learning_rate: float = 1e-4

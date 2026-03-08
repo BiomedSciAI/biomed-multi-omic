@@ -41,11 +41,11 @@ def detect_checkpoint_type(state_dict: dict) -> tuple[str, str | None]:
                         return ("multitask_classifier", label_name)
         return ("multitask_classifier", None)
 
-    if any("cls.predictions.predictions" in k for k in keys):
+    if any(k.startswith("cls.predictions.predictions") for k in keys):
         return ("multitask", None)
     elif any("classifier" in k for k in keys):
         return ("sequence_classification", None)
-    elif any("cls.predictions" in k for k in keys):
+    elif any(k.startswith("cls.predictions") for k in keys):
         # MLM and sequence_labeling have identical state dicts
         # Both convert the same way, so we use a combined type
         return ("mlm_or_seqlabel", None)
@@ -58,9 +58,11 @@ def convert_mlm_to_multitask(state_dict: dict) -> dict:
     new_state_dict = {}
 
     for key, value in state_dict.items():
-        if "cls.predictions" in key and "cls.predictions.predictions" not in key:
+        if key.startswith("cls.predictions") and not key.startswith(
+            "cls.predictions.predictions"
+        ):
             # Nest MLM head under predictions.predictions
-            new_key = key.replace("cls.predictions", "cls.predictions.predictions")
+            new_key = key.replace("cls.predictions", "cls.predictions.predictions", 1)
             new_state_dict[new_key] = value
         else:
             new_state_dict[key] = value

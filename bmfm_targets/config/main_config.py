@@ -14,7 +14,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from bmfm_targets.config import (
     FieldInfo,
     LabelColumnInfo,
-    TestTaskConfig,
+    PredictTaskConfig,
     TokenizerConfig,
     TrainerConfig,
     TrainingTaskConfig,
@@ -106,7 +106,7 @@ class SCBertMainConfig:
         return val
 
     def complete_config(self):
-        self._load_missing_configs_from_ckpt()
+        self._merge_configs_from_checkpoint()
         tokenizer = self._load_tokenizer_from_cfg()
 
         if isinstance(self.data_module, functools.partial):
@@ -159,29 +159,121 @@ class SCBertMainConfig:
             ):
                 lc.update_n_unique_values(self.data_module.label_dict)
 
-    def _load_missing_configs_from_ckpt(self):
+    def _merge_fields(
+        self,
+        ckpt_fields: list[FieldInfo],
+        yaml_fields: list[FieldInfo],
+        is_training: bool,
+    ) -> list[FieldInfo]:
+        """Merge fields: checkpoint wins for existing, new YAML fields added in training."""
+        if not ckpt_fields:
+            return yaml_fields
+
+        # Test/predict: checkpoint only
+        if not is_training:
+            if yaml_fields != ckpt_fields:
+                logger.warning(
+                    "fields: Ignoring YAML config in test/predict mode. "
+                    "Using checkpoint fields to match trained model."
+                )
+            return ckpt_fields
+
+        # Training: merge - checkpoint fields win, new YAML fields added
+        ckpt_field_names = {f.field_name for f in ckpt_fields}
+        yaml_field_names = {f.field_name for f in yaml_fields}
+
+        merged = list(ckpt_fields)
+        new_fields = [f for f in yaml_fields if f.field_name not in ckpt_field_names]
+        if new_fields:
+            logger.info(
+                f"fields: Adding {len(new_fields)} new fields from YAML: "
+                f"{[f.field_name for f in new_fields]}"
+            )
+            merged.extend(new_fields)
+
+        conflicting = yaml_field_names & ckpt_field_names
+        if conflicting:
+            logger.info(
+                f"fields: Using checkpoint config for existing fields: {sorted(conflicting)}"
+            )
+
+        return merged
+
+    def _merge_label_columns(
+        self,
+        ckpt_cols: list[LabelColumnInfo],
+        yaml_cols: list[LabelColumnInfo],
+        is_training: bool,
+    ) -> list[LabelColumnInfo]:
+        """Merge label_columns: checkpoint-authoritative for test/predict, YAML for training."""
+        if not ckpt_cols:
+            return yaml_cols
+
+        if not is_training:
+            # Explicit empty list in YAML = embedding-only mode (cross-dataset)
+            if yaml_cols is not None and len(yaml_cols) == 0:
+                logger.info(
+                    "label_columns: Using empty list from YAML (embedding-only mode)"
+                )
+                return yaml_cols
+
+            # Use checkpoint columns (normal same-dataset prediction)
+            if yaml_cols and yaml_cols != ckpt_cols:
+                logger.warning(
+                    "label_columns: Ignoring YAML config in test/predict mode. "
+                    "Using checkpoint label_columns to match trained model."
+                )
+            return ckpt_cols
+
+        # Training: YAML-authoritative
+        return yaml_cols if yaml_cols else ckpt_cols
+
+    def _merge_configs_from_checkpoint(self):
+        """Merge configs from checkpoint with YAML configs based on task type."""
         from bmfm_targets.models import download_ckpt_from_huggingface
 
         checkpoint = self._get_checkpoint()
         if not checkpoint:
             return
+
         if not os.path.isfile(checkpoint):
             checkpoint = download_ckpt_from_huggingface(checkpoint)
-        ckpt_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        if self.fields is None:
-            self.fields = ckpt_dict["hyper_parameters"]["model_config"].fields
-        if isinstance(self.task, TestTaskConfig) and self.label_columns is None:
-            self.label_columns = getattr(
-                ckpt_dict["hyper_parameters"]["model_config"], "label_columns", None
-            )
 
-    @staticmethod
-    def _instantiate_model_config(partial_model, data_module, fields, label_columns):
-        return partial_model(
-            fields=fields,
-            label_columns=label_columns,
-            pad_token_id=data_module.tokenizer.pad_token_id,
+        ckpt_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        ckpt_hyper = ckpt_dict["hyper_parameters"]
+
+        is_training = isinstance(self.task, TrainingTaskConfig)
+        is_predict = isinstance(self.task, PredictTaskConfig)
+
+        # Access checkpoint hyperparameters (can be dict or object)
+        ckpt_model_config = getattr(ckpt_hyper, "model_config", None) or ckpt_hyper.get(
+            "model_config"
         )
+        ckpt_trainer_config = getattr(
+            ckpt_hyper, "trainer_config", None
+        ) or ckpt_hyper.get("trainer_config")
+
+        # Merge fields (always merge, needed for model instantiation)
+        if ckpt_model_config:
+            ckpt_fields = getattr(
+                ckpt_model_config, "fields", None
+            ) or ckpt_model_config.get("fields")
+            if ckpt_fields:
+                self.fields = self._merge_fields(ckpt_fields, self.fields, is_training)
+
+        # Merge label_columns (skip in predict mode for cross-dataset prediction)
+        if not is_predict and ckpt_model_config:
+            ckpt_label_columns = getattr(
+                ckpt_model_config, "label_columns", None
+            ) or ckpt_model_config.get("label_columns")
+            if ckpt_label_columns:
+                self.label_columns = self._merge_label_columns(
+                    ckpt_label_columns, self.label_columns, is_training
+                )
+
+        # Merge trainer config
+        if ckpt_trainer_config and self.trainer:
+            self.trainer = self.trainer.merge_from_checkpoint(ckpt_trainer_config)
 
     @staticmethod
     def _instantiate_and_setup_data_module(

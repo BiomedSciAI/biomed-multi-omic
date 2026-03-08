@@ -109,18 +109,20 @@ def test_convert_mlm_to_multitask(minimal_mlm_config):
     mlm_state = scbert.SCBertForMaskedLM(minimal_mlm_config).state_dict()
     multitask_state = convert_mlm_to_multitask(mlm_state)
 
-    # Verify key structure changes
-    assert any("cls.predictions.predictions" in k for k in multitask_state)
+    # Verify key structure changes: old cls.predictions.* → cls.predictions.predictions.*
+    assert any(k.startswith("cls.predictions.predictions") for k in multitask_state)
     assert not any(
-        "cls.predictions" in k and "cls.predictions.predictions" not in k
+        k.startswith("cls.predictions")
+        and not k.startswith("cls.predictions.predictions")
         for k in multitask_state
-        if "cls" in k
     )
 
     # Verify weights preserved
     for old_key, val in mlm_state.items():
-        if "cls.predictions" in old_key:
-            new_key = old_key.replace("cls.predictions", "cls.predictions.predictions")
+        if old_key.startswith("cls.predictions"):
+            new_key = old_key.replace(
+                "cls.predictions", "cls.predictions.predictions", 1
+            )
             assert torch.allclose(val, multitask_state[new_key])
         else:
             assert torch.allclose(val, multitask_state[old_key])
@@ -169,7 +171,54 @@ def test_convert_seqlabel_to_multitask(minimal_mlm_config):
     """Test SeqLabel → Multitask conversion."""
     seqlabel_state = scbert.SCBertForSequenceLabeling(minimal_mlm_config).state_dict()
     multitask_state = convert_seqlabel_to_multitask(seqlabel_state)
-    assert any("cls.predictions.predictions" in k for k in multitask_state)
+    assert any(k.startswith("cls.predictions.predictions") for k in multitask_state)
+
+
+def test_detect_mlm_with_label_predictions_not_confused_as_multitask():
+    """
+    Regression test: MLM checkpoint with label_predictions keys must not be
+    detected as already-multitask due to 'cls.predictions.predictions' being a
+    substring of 'cls.label_predictions.predictions'.
+    """
+    # Simulate a hybrid checkpoint: old MLM head + label decoder keys
+    # (e.g. wced.v1 which has label_predictions but old-format cls.predictions.*)
+    state_dict = {
+        "scbert.embeddings.word_embeddings.weight": torch.zeros(100, 128),
+        "cls.predictions.transform.dense.weight": torch.zeros(128, 128),
+        "cls.predictions.transform.dense.bias": torch.zeros(128),
+        "cls.predictions.decoder.field_decoders.expressions_wced.weight": torch.zeros(
+            100, 128
+        ),
+        # label_predictions keys — these contain "cls.predictions.predictions" as substring
+        "cls.label_predictions.predictions.label_decoders.cell_type.decoder.weight": torch.zeros(
+            10, 128
+        ),
+        "cls.label_predictions.predictions.label_decoders.cell_type.decoder.bias": torch.zeros(
+            10
+        ),
+    }
+
+    ckpt_type, label = detect_checkpoint_type(state_dict)
+    # Must be detected as mlm_or_seqlabel, NOT multitask
+    assert ckpt_type == "mlm_or_seqlabel", (
+        f"Expected 'mlm_or_seqlabel' but got '{ckpt_type}'. "
+        "The 'cls.label_predictions.predictions' substring was incorrectly matched as multitask."
+    )
+
+    # Migration must rename cls.predictions.* but NOT cls.label_predictions.*
+    migrated = convert_mlm_to_multitask(state_dict)
+    assert "cls.predictions.predictions.transform.dense.weight" in migrated
+    assert (
+        "cls.label_predictions.predictions.label_decoders.cell_type.decoder.weight"
+        in migrated
+    )
+    # Old key must be gone
+    assert "cls.predictions.transform.dense.weight" not in migrated
+    # label_predictions must be unchanged (not double-nested)
+    assert (
+        "cls.label_predictions.predictions.predictions.label_decoders.cell_type.decoder.weight"
+        not in migrated
+    )
 
 
 def test_mlm_conversion_preserves_encoder_weights(minimal_mlm_config):

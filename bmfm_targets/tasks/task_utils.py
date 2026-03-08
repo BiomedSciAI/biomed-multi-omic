@@ -3,10 +3,10 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import anndata
 import clearml
@@ -196,28 +196,51 @@ def predict_run(pl_trainer, task_config, model_config, data_module, trainer_conf
         save_embeddings_results(task_config.default_root_dir, results)
 
 
-def merge_trainer_configs(
-    checkpoint_config: config.TrainerConfig | None,
-    override_config: config.TrainerConfig | None,
-) -> config.TrainerConfig:
+def merge_configs(
+    checkpoint_config: Any | None,
+    override_config: Any | None,
+    config_name: str,
+    checkpoint_authoritative: bool = True,
+    merge_fn: Callable | None = None,
+) -> Any:
     """
-    Merge trainer configs from checkpoint and override.
+    General config merging with explicit checkpoint/YAML precedence.
 
-    - override is None: use checkpoint config
-    - override.losses is None: inherit checkpoint's losses (zero-shot)
-    - override.losses is []: no losses (embedding-only)
-    - override.losses is [...]: use override's losses (fine-tune)
+    Args:
+    ----
+        checkpoint_config: Config from checkpoint hyper_parameters
+        override_config: Config from YAML/CLI
+        config_name: Name for logging (e.g., "model_config", "label_dict")
+        checkpoint_authoritative: If True, checkpoint wins when both present.
+                                  If False, override wins when both present.
+        merge_fn: Optional custom merge function(ckpt, override) -> merged.
+                  If provided, used when both configs present.
+
+    Returns:
+    -------
+        Merged config with explicit precedence logging
+
     """
-    if override_config is None:
-        return checkpoint_config
+    if checkpoint_config is None and override_config is None:
+        return None
     if checkpoint_config is None:
+        logger.info(f"{config_name}: Using YAML config (no checkpoint config)")
         return override_config
-    if override_config.losses is None:
+    if override_config is None:
+        logger.info(f"{config_name}: Using checkpoint config (no YAML override)")
+        return checkpoint_config
+
+    # Both present - use custom merge or precedence
+    if merge_fn is not None:
+        return merge_fn(checkpoint_config, override_config)
+    elif checkpoint_authoritative:
         logger.info(
-            f"Inheriting {len(checkpoint_config.losses)} losses from checkpoint config"
+            f"{config_name}: Using checkpoint config (checkpoint-authoritative)"
         )
-        override_config.losses = checkpoint_config.losses
-    return override_config
+        return checkpoint_config
+    else:
+        logger.info(f"{config_name}: Using YAML config (YAML-authoritative)")
+        return override_config
 
 
 def instantiate_module_from_checkpoint(
@@ -254,8 +277,20 @@ def instantiate_module_from_checkpoint(
     ckpt_hyper = ckpt["hyper_parameters"]
 
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
-    merged_trainer_config = merge_trainer_configs(
-        ckpt_hyper.get("trainer_config"), trainer_config
+
+    # Merge trainer_config with loss inheritance
+    def _merge_trainer_losses(ckpt_trainer, yaml_trainer):
+        if yaml_trainer and yaml_trainer.losses is None and ckpt_trainer:
+            logger.info(f"Inheriting {len(ckpt_trainer.losses)} losses from checkpoint")
+            yaml_trainer.losses = ckpt_trainer.losses
+        return yaml_trainer if yaml_trainer else ckpt_trainer
+
+    merged_trainer_config = merge_configs(
+        ckpt_hyper.get("trainer_config"),
+        trainer_config,
+        "trainer_config",
+        checkpoint_authoritative=False,
+        merge_fn=_merge_trainer_losses,
     )
     extra_kwargs["trainer_config"] = merged_trainer_config
     extra_kwargs["config_is_loaded_from_ckpt"] = True
