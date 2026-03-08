@@ -73,6 +73,7 @@ def convert_mlm_to_multitask(state_dict: dict) -> dict:
     model_prefix = "scmodernbert" if is_modernbert else "scbert"
 
     # Initialize pooler as identity to preserve first-token behavior
+    # MLM models don't have pooler (add_pooling_layer=False), but multitask models need it
     # Infer hidden_size from embeddings
     hidden_size = None
     for key, value in state_dict.items():
@@ -81,8 +82,20 @@ def convert_mlm_to_multitask(state_dict: dict) -> dict:
             break
 
     if hidden_size is not None:
-        new_state_dict[f"{model_prefix}.pooler.dense.weight"] = torch.eye(hidden_size)
-        new_state_dict[f"{model_prefix}.pooler.dense.bias"] = torch.zeros(hidden_size)
+        pooler_weight = torch.eye(hidden_size)
+        pooler_bias = torch.zeros(hidden_size)
+
+        # Add pooler under submodule name (e.g., scbert.pooler or scmodernbert.pooler)
+        new_state_dict[f"{model_prefix}.pooler.dense.weight"] = pooler_weight
+        new_state_dict[f"{model_prefix}.pooler.dense.bias"] = pooler_bias
+
+        # ModernBERT multitask model inherits from SCModernBertModel, so it has BOTH:
+        # - Inherited attributes: pooler.* (from parent class)
+        # - Submodule attributes: scmodernbert.pooler.* (explicit submodule)
+        # We need to add pooler at both locations for ModernBERT
+        if is_modernbert:
+            new_state_dict["pooler.dense.weight"] = pooler_weight.clone()
+            new_state_dict["pooler.dense.bias"] = pooler_bias.clone()
 
     return new_state_dict
 

@@ -558,7 +558,13 @@ def test_pooler_embeddings_consistency_after_migration(
 
 
 def test_modernbert_mlm_migration_uses_correct_pooler_prefix():
-    """Test that ModernBERT MLM checkpoints get scmodernbert.pooler, not scbert.pooler."""
+    """
+    Test that ModernBERT MLM checkpoints get pooler at BOTH locations.
+
+    ModernBERT multitask model inherits from SCModernBertModel, so it has:
+    - Inherited attributes: pooler.* (from parent class)
+    - Submodule attributes: scmodernbert.pooler.* (explicit submodule)
+    """
     # Create a minimal ModernBERT-style state dict
     # ModernBERT has "layers.X.attn.Wqkv" keys (not "encoder.layer.X.attention")
     modernbert_state = {
@@ -579,15 +585,23 @@ def test_modernbert_mlm_migration_uses_correct_pooler_prefix():
 
     migrated = convert_mlm_to_multitask(modernbert_state)
 
-    # Must have scmodernbert.pooler, NOT scbert.pooler
+    # Must have scmodernbert.pooler (submodule)
     assert "scmodernbert.pooler.dense.weight" in migrated
     assert "scmodernbert.pooler.dense.bias" in migrated
+
+    # Must ALSO have pooler.* (inherited from parent class)
+    assert "pooler.dense.weight" in migrated
+    assert "pooler.dense.bias" in migrated
+
+    # Must NOT have scbert.pooler
     assert "scbert.pooler.dense.weight" not in migrated
     assert "scbert.pooler.dense.bias" not in migrated
 
-    # Verify pooler is identity matrix
+    # Verify both poolers are identity matrices
     assert torch.allclose(migrated["scmodernbert.pooler.dense.weight"], torch.eye(128))
     assert torch.allclose(migrated["scmodernbert.pooler.dense.bias"], torch.zeros(128))
+    assert torch.allclose(migrated["pooler.dense.weight"], torch.eye(128))
+    assert torch.allclose(migrated["pooler.dense.bias"], torch.zeros(128))
 
 
 def test_scbert_mlm_migration_uses_scbert_pooler_prefix():
