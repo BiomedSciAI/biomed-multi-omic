@@ -67,6 +67,11 @@ def convert_mlm_to_multitask(state_dict: dict) -> dict:
         else:
             new_state_dict[key] = value
 
+    # Detect model type from checkpoint keys
+    # ModernBERT has "layers.X.attn.Wqkv", scBERT has "encoder.layer.X.attention"
+    is_modernbert = any("layers." in k and ".attn.Wqkv" in k for k in state_dict.keys())
+    model_prefix = "scmodernbert" if is_modernbert else "scbert"
+
     # Initialize pooler as identity to preserve first-token behavior
     # Infer hidden_size from embeddings
     hidden_size = None
@@ -76,8 +81,8 @@ def convert_mlm_to_multitask(state_dict: dict) -> dict:
             break
 
     if hidden_size is not None:
-        new_state_dict["scbert.pooler.dense.weight"] = torch.eye(hidden_size)
-        new_state_dict["scbert.pooler.dense.bias"] = torch.zeros(hidden_size)
+        new_state_dict[f"{model_prefix}.pooler.dense.weight"] = torch.eye(hidden_size)
+        new_state_dict[f"{model_prefix}.pooler.dense.bias"] = torch.zeros(hidden_size)
 
     return new_state_dict
 

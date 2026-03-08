@@ -552,3 +552,122 @@ def test_pooler_embeddings_consistency_after_migration(
 
 
 # Made with Bob
+
+
+# --- Tests for ModernBERT Migration Fix ---
+
+
+def test_modernbert_mlm_migration_uses_correct_pooler_prefix():
+    """Test that ModernBERT MLM checkpoints get scmodernbert.pooler, not scbert.pooler."""
+    # Create a minimal ModernBERT-style state dict
+    # ModernBERT has "layers.X.attn.Wqkv" keys (not "encoder.layer.X.attention")
+    modernbert_state = {
+        "embeddings.dna_chunks_embeddings.weight": torch.zeros(100, 128),
+        "embeddings.LayerNorm.weight": torch.ones(128),
+        "embeddings.LayerNorm.bias": torch.zeros(128),
+        "layers.0.attn.Wqkv.weight": torch.zeros(384, 128),
+        "layers.0.attn.Wo.weight": torch.zeros(128, 128),
+        "layers.0.mlp.Wi.weight": torch.zeros(512, 128),
+        "layers.0.mlp.Wo.weight": torch.zeros(128, 512),
+        "final_norm.weight": torch.ones(128),
+        "cls.predictions.transform.dense.weight": torch.zeros(128, 128),
+        "cls.predictions.transform.dense.bias": torch.zeros(128),
+        "cls.predictions.decoder.field_decoders.dna_chunks_token_scores.weight": torch.zeros(
+            100, 128
+        ),
+    }
+
+    migrated = convert_mlm_to_multitask(modernbert_state)
+
+    # Must have scmodernbert.pooler, NOT scbert.pooler
+    assert "scmodernbert.pooler.dense.weight" in migrated
+    assert "scmodernbert.pooler.dense.bias" in migrated
+    assert "scbert.pooler.dense.weight" not in migrated
+    assert "scbert.pooler.dense.bias" not in migrated
+
+    # Verify pooler is identity matrix
+    assert torch.allclose(migrated["scmodernbert.pooler.dense.weight"], torch.eye(128))
+    assert torch.allclose(migrated["scmodernbert.pooler.dense.bias"], torch.zeros(128))
+
+
+def test_scbert_mlm_migration_uses_scbert_pooler_prefix():
+    """Test that scBERT MLM checkpoints still get scbert.pooler (not scmodernbert)."""
+    # Create a minimal scBERT-style state dict
+    # scBERT has "encoder.layer.X.attention" keys (not "layers.X.attn")
+    scbert_state = {
+        "scbert.embeddings.word_embeddings.weight": torch.zeros(100, 128),
+        "scbert.embeddings.LayerNorm.weight": torch.ones(128),
+        "scbert.embeddings.LayerNorm.bias": torch.zeros(128),
+        "scbert.encoder.layer.0.attention.self.query.weight": torch.zeros(128, 128),
+        "scbert.encoder.layer.0.attention.self.key.weight": torch.zeros(128, 128),
+        "scbert.encoder.layer.0.attention.self.value.weight": torch.zeros(128, 128),
+        "scbert.encoder.layer.0.output.dense.weight": torch.zeros(128, 128),
+        "cls.predictions.transform.dense.weight": torch.zeros(128, 128),
+        "cls.predictions.transform.dense.bias": torch.zeros(128),
+        "cls.predictions.decoder.field_decoders.expressions_token_scores.weight": torch.zeros(
+            100, 128
+        ),
+    }
+
+    migrated = convert_mlm_to_multitask(scbert_state)
+
+    # Must have scbert.pooler, NOT scmodernbert.pooler
+    assert "scbert.pooler.dense.weight" in migrated
+    assert "scbert.pooler.dense.bias" in migrated
+    assert "scmodernbert.pooler.dense.weight" not in migrated
+    assert "scmodernbert.pooler.dense.bias" not in migrated
+
+
+# --- Tests for Label Columns Without Weights Fix ---
+
+
+def test_mlm_checkpoint_with_label_columns_in_hyperparams_but_no_weights():
+    """
+    Regression test for label_columns fix.
+
+    Test that MLM checkpoint with label_columns in hyperparameters but no
+    label decoder weights can be loaded without RuntimeError.
+
+    This simulates the original bug where predict mode failed with:
+    RuntimeError: Missing key(s) in state_dict: "model.cls.label_predictions..."
+    """
+    # Create a checkpoint with label_columns in config but no label decoder weights
+    config = SCBertConfig(
+        fields=[FieldInfo(field_name="genes", vocab_size=100)],
+        label_columns=[
+            LabelColumnInfo(label_column_name="cell_type", n_unique_values=10),
+            LabelColumnInfo(label_column_name="tissue", n_unique_values=5),
+        ],
+        hidden_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+    )
+
+    # Create MLM model (no label decoders)
+    mlm_model = scbert.SCBertForMaskedLM(config)
+    mlm_state = mlm_model.state_dict()
+
+    # Verify no label decoder weights exist
+    assert not any("label_predictions" in k for k in mlm_state.keys())
+
+    # But config has label_columns
+    assert config.label_columns is not None
+    assert len(config.label_columns) == 2
+
+    # Migrate to multitask format
+    migrated_state = convert_mlm_to_multitask(mlm_state)
+
+    # Try to load into multitask model with label_columns
+    # This would fail without the fix because model expects label decoder weights
+    multitask_model = scbert.SCBertForMultiTaskModeling(config)
+
+    # Load with strict=False to allow missing label_predictions keys
+    missing, unexpected = multitask_model.load_state_dict(migrated_state, strict=False)
+
+    # Should have missing label_predictions keys (expected)
+    assert any("label_predictions" in k for k in missing)
+    # Should have no unexpected keys
+    assert len(unexpected) == 0
+
+    # The fix in task_utils.py detects this condition and clears label_columns
+    # before instantiation, preventing the RuntimeError
