@@ -162,20 +162,25 @@ class SCBertMainConfig:
     def _merge_fields(
         self,
         ckpt_fields: list[FieldInfo],
-        yaml_fields: list[FieldInfo],
+        yaml_fields: list[FieldInfo] | None,
         is_training: bool,
     ) -> list[FieldInfo]:
         """Merge fields: checkpoint wins for existing, new YAML fields added in training."""
         if not ckpt_fields:
-            return yaml_fields
+            return yaml_fields if yaml_fields else []
 
         # Test/predict: checkpoint only
         if not is_training:
-            if yaml_fields != ckpt_fields:
+            if yaml_fields and yaml_fields != ckpt_fields:
                 logger.warning(
                     "fields: Ignoring YAML config in test/predict mode. "
                     "Using checkpoint fields to match trained model."
                 )
+            return ckpt_fields
+
+        # If no YAML fields during training, just use checkpoint fields
+        if not yaml_fields:
+            logger.info("fields: No YAML fields specified, using checkpoint fields")
             return ckpt_fields
 
         # Training: merge - checkpoint fields win, new YAML fields added
