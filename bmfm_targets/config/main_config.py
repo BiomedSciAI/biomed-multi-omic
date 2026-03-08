@@ -255,17 +255,17 @@ class SCBertMainConfig:
 
         # Merge fields (always merge, needed for model instantiation)
         if ckpt_model_config:
-            ckpt_fields = getattr(
-                ckpt_model_config, "fields", None
-            ) or ckpt_model_config.get("fields")
+            ckpt_fields = getattr(ckpt_model_config, "fields", None)
+            if ckpt_fields is None and hasattr(ckpt_model_config, "get"):
+                ckpt_fields = ckpt_model_config.get("fields")
             if ckpt_fields:
                 self.fields = self._merge_fields(ckpt_fields, self.fields, is_training)
 
         # Merge label_columns (skip in predict mode for cross-dataset prediction)
         if not is_predict and ckpt_model_config:
-            ckpt_label_columns = getattr(
-                ckpt_model_config, "label_columns", None
-            ) or ckpt_model_config.get("label_columns")
+            ckpt_label_columns = getattr(ckpt_model_config, "label_columns", None)
+            if ckpt_label_columns is None and hasattr(ckpt_model_config, "get"):
+                ckpt_label_columns = ckpt_model_config.get("label_columns")
             if ckpt_label_columns:
                 self.label_columns = self._merge_label_columns(
                     ckpt_label_columns, self.label_columns, is_training
