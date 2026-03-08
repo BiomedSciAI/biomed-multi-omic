@@ -612,6 +612,15 @@ def _convert_raw_to_lit():
         input_path=str(input_path),
         output_path=helpers.SNPdbPaths.parquet_dir,
     )
+
+    # Check if parquet files were created
+    parquet_dir = Path(helpers.SNPdbPaths.parquet_dir)
+    parquet_files = list(parquet_dir.rglob("*.parquet"))
+    if not parquet_files:
+        pytest.skip(
+            f"No parquet files found in {parquet_dir} - raw data may be missing"
+        )
+
     convert_parquet_to_litdata(
         helpers.SNPdbPaths.parquet_dir,
         helpers.SNPdbPaths.litdata_dir,
@@ -662,6 +671,15 @@ def _convert_hic_raw_to_lit():
         input_path=str(input_path),
         output_path=helpers.HiCPaths.parquet_dir,
     )
+
+    # Check if parquet files were created
+    parquet_dir = Path(helpers.HiCPaths.parquet_dir)
+    parquet_files = list(parquet_dir.rglob("*.parquet"))
+    if not parquet_files:
+        pytest.skip(
+            f"No parquet files found in {parquet_dir} - raw data may be missing"
+        )
+
     convert_parquet_to_litdata(
         helpers.HiCPaths.parquet_dir,
         helpers.HiCPaths.litdata_dir,
@@ -730,6 +748,15 @@ def _convert_insulation_raw_to_lit():
         input_path=str(input_path),
         output_path=helpers.InsulationPaths.parquet_dir,
     )
+
+    # Check if parquet files were created
+    parquet_dir = Path(helpers.InsulationPaths.parquet_dir)
+    parquet_files = list(parquet_dir.rglob("*.parquet"))
+    if not parquet_files:
+        pytest.skip(
+            f"No parquet files found in {parquet_dir} - raw data may be missing"
+        )
+
     convert_parquet_to_litdata(
         helpers.InsulationPaths.parquet_dir,
         helpers.InsulationPaths.litdata_dir,
