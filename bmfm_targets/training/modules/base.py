@@ -70,6 +70,15 @@ class BaseTrainingModule(pl.LightningModule):
         if "config_is_loaded_from_ckpt" in kwargs.keys():
             model_config.checkpoint = None
 
+        # In predict mode, clear label_columns if checkpoint has no label decoder weights
+        if "clear_label_columns_for_predict" in kwargs.keys():
+            if hasattr(model_config, "label_columns") and model_config.label_columns:
+                logger.info(
+                    f"Clearing {len(model_config.label_columns)} label_columns for predict mode "
+                    "(checkpoint has no label decoder weights)"
+                )
+                model_config.label_columns = []
+
         # this is needed when model_config is loaded from old checkpoints which don't contain the label_columns item in "hyperparameter" section
         if (
             not hasattr(model_config, "label_columns")
@@ -273,28 +282,6 @@ class BaseTrainingModule(pl.LightningModule):
 
         if ckpt_type == "mlm_or_seqlabel":
             migrated = convert_mlm_to_multitask(cleaned)
-            # Check if checkpoint actually has label prediction weights
-            has_label_weights = any(
-                "cls.label_predictions" in k for k in migrated.keys()
-            )
-
-            # Only remove label_columns if weights are actually missing
-            # (true MLM-only checkpoint, not a checkpoint with both MLM + label heads)
-            if (
-                not has_label_weights
-                and "hyper_parameters" in checkpoint
-                and "model_config" in checkpoint["hyper_parameters"]
-            ):
-                model_config = checkpoint["hyper_parameters"]["model_config"]
-                if (
-                    hasattr(model_config, "label_columns")
-                    and model_config.label_columns
-                ):
-                    logger.info(
-                        f"Removing {len(model_config.label_columns)} label_columns from MLM checkpoint config "
-                        "(weights not present in state_dict)"
-                    )
-                    model_config.label_columns = []
         elif ckpt_type in ("sequence_classification", "multitask_classifier"):
             migrated = convert_seqcls_to_multitask(cleaned, label_name=label_name)
         else:

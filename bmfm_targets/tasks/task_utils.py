@@ -22,6 +22,7 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
 from bmfm_targets import config
+from bmfm_targets.config import PredictTaskConfig
 from bmfm_targets.models import download_ckpt_from_huggingface
 from bmfm_targets.training.data_module import DataModule
 from bmfm_targets.training.metrics import (
@@ -277,6 +278,25 @@ def instantiate_module_from_checkpoint(
     ckpt_hyper = ckpt["hyper_parameters"]
 
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
+
+    # In predict mode, if checkpoint has label_columns but no label weights,
+    # pass a flag to clear them in __init__ before model instantiation
+    if isinstance(task_config, PredictTaskConfig):
+        has_label_weights = any(
+            "label_predictions" in k for k in ckpt["state_dict"].keys()
+        )
+        if not has_label_weights:
+            model_config = ckpt_hyper.get("model_config")
+            if model_config:
+                ckpt_label_columns = getattr(model_config, "label_columns", None)
+                if ckpt_label_columns is None and hasattr(model_config, "get"):
+                    ckpt_label_columns = model_config.get("label_columns")
+                if ckpt_label_columns:
+                    logger.info(
+                        f"Checkpoint has {len(ckpt_label_columns)} label_columns but no label decoder weights. "
+                        "Will clear label_columns for predict mode."
+                    )
+                    extra_kwargs["clear_label_columns_for_predict"] = True
 
     # Merge trainer_config with loss inheritance
     def _merge_trainer_losses(ckpt_trainer, yaml_trainer):

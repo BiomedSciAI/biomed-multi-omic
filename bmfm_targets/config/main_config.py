@@ -270,6 +270,22 @@ class SCBertMainConfig:
                 self.label_columns = self._merge_label_columns(
                     ckpt_label_columns, self.label_columns, is_training
                 )
+        elif is_predict and ckpt_model_config:
+            # In predict mode, check if checkpoint has label decoder weights
+            # If not, explicitly clear label_columns to prevent model instantiation with label heads
+            has_label_weights = any(
+                "label_predictions" in k for k in ckpt_dict["state_dict"].keys()
+            )
+            if not has_label_weights:
+                ckpt_label_columns = getattr(ckpt_model_config, "label_columns", None)
+                if ckpt_label_columns is None and hasattr(ckpt_model_config, "get"):
+                    ckpt_label_columns = ckpt_model_config.get("label_columns")
+                if ckpt_label_columns:
+                    logger.warning(
+                        f"fields: Checkpoint has {len(ckpt_label_columns)} label_columns in config "
+                        "but no label decoder weights. Clearing label_columns for predict mode."
+                    )
+                    self.label_columns = []
 
         # Merge trainer config
         if ckpt_trainer_config and self.trainer:
