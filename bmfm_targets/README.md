@@ -55,13 +55,6 @@ fields:
 
 The data module settings selects which data to use and also what kind of task will be executed. The dataset can refer to one of the packaged datasets or a generic h5ad file based dataset.
 
-By selecting a `collation_strategy`, the same dataset can be used for different tasks.
-The recommended option is `"multitask"` which supports masked language modeling and sequence classification/regression simoultaniously.
-To perform just MLM `"language_modeling"` can be used and `"sequence_classification"` for just sequence classification.
-In "multitask" mode, any combination of field and label_column losses is supported.
-
-The `"sequence_labeling"` option is only supported for datasets with paired "control" and perturbed cells.
-
 Full documentation can be found in [data_module.py](./training/data_module.py)
 
 #### Package datasets
@@ -71,7 +64,6 @@ data_module:
   _target_: bmfm_targets.datasets.zheng68k.Zheng68kDataModule
   _partial_: true
   num_workers: 8
-  collation_strategy: "multitask"
   batch_size: 20
   max_length: 512
   pad_to_multiple_of: 16
@@ -95,7 +87,6 @@ data_module:
   _partial_: true
   num_workers: 8
   mlm: true
-  collation_strategy: "language_modeling"
   batch_size: 2
   transform_datasets: false
   dataset_kwargs:
@@ -117,7 +108,6 @@ data_module:
   _target_: bmfm_targets.training.data_module.DataModule
   _partial_: true
   num_workers: 8
-  collation_strategy: "sequence_classification"
   batch_size: 2
   transform_datasets: true
   num_workers: 8

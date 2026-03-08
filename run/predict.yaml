@@ -13,7 +13,6 @@ data_module:
     label_dict_path: ${working_dir}/labels.json
   limit_genes: protein_coding #could be null, protein_coding, or tokenizer
   transform_datasets: false
-  collation_strategy: multitask
   log_normalize_transform: true
 
 task:

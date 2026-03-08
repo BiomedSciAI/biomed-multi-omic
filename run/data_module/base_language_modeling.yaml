@@ -1,7 +1,6 @@
 _partial_: true
 _target_: bmfm_targets.training.data_module.DataModule
 num_workers: 8
-collation_strategy: "language_modeling"
 batch_size: 20
 max_length: 512
 limit_dataset_samples: null

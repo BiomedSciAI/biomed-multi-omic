@@ -15,7 +15,7 @@ The program will produce embeddings in `working_dir/embeddings.csv` and predicti
 ### MLM+RDA
 
 ```bash
-bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1
+bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1
 ```
 
 ### MLM+Multitask
@@ -33,7 +33,7 @@ bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoin
 ### WCED 10 pct
 
 ```bash
-bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.collation_strategy=language_modeling checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1
+bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1
 ```
 
 ## scRNA fine-tuning

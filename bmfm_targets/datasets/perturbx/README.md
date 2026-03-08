@@ -21,7 +21,6 @@ data_module:
   max_length: 4096
   sequence_order: sorted
   batch_size: 20
-  collation_strategy: "sequence_labeling"
   transform_datasets: false
   log_normalize_transform: false
   limit_genes: tokenizer
@@ -61,7 +60,6 @@ data_module:
   max_length: 4096
   sequence_order: sorted
   batch_size: 2
-  collation_strategy: "sequence_labeling"
   transform_datasets: false
   log_normalize_transform: false
   limit_genes: tokenizer
