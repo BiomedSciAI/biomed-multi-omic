@@ -27,30 +27,32 @@ def detect_checkpoint_type(state_dict: dict) -> tuple[str, str | None]:
     """
     keys = set(state_dict.keys())
 
-    # Check for MultiTaskClassifier wrapper (handles both base_model.model. and base_model.)
-    if any("base_model." in k for k in keys):
-        # This is a MultiTaskClassifier checkpoint - extract label name
+    # Modern multitask has nested predictions head (with or without base_model prefix from LoRA)
+    if any("cls.predictions.predictions" in k for k in keys):
+        return ("multitask", None)
+
+    # Old multitask_classifier has classifiers.{label_name} structure
+    if any("classifiers." in k for k in keys):
+        # Extract label name from first classifier key
         for key in keys:
             if "classifiers." in key:
-                # Extract label name from: classifiers.{label_name}.weight or model.classifiers.{label_name}.weight
                 parts = key.split(".")
-                if "classifiers" in parts:
-                    idx = parts.index("classifiers")
-                    if idx + 1 < len(parts):
-                        label_name = parts[idx + 1]
-                        return ("multitask_classifier", label_name)
+                idx = parts.index("classifiers")
+                if idx + 1 < len(parts):
+                    return ("multitask_classifier", parts[idx + 1])
         return ("multitask_classifier", None)
 
-    if any(k.startswith("cls.predictions.predictions") for k in keys):
-        return ("multitask", None)
-    elif any("classifier" in k for k in keys):
+    # Old sequence_classification has classifier (singular) head
+    if any("classifier" in k for k in keys):
         return ("sequence_classification", None)
-    elif any(k.startswith("cls.predictions") for k in keys):
-        # MLM and sequence_labeling have identical state dicts
-        # Both convert the same way, so we use a combined type
+
+    # Old MLM/SeqLabel has cls.predictions (but not nested)
+    if any(
+        "cls.predictions" in k and "cls.predictions.predictions" not in k for k in keys
+    ):
         return ("mlm_or_seqlabel", None)
-    else:
-        raise ValueError(f"Unknown checkpoint type. Keys: {list(keys)[:10]}")
+
+    raise ValueError(f"Unknown checkpoint type. Keys: {list(keys)[:10]}")
 
 
 def convert_mlm_to_multitask(state_dict: dict) -> dict:

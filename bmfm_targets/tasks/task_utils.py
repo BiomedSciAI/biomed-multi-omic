@@ -312,6 +312,20 @@ def instantiate_module_from_checkpoint(
         checkpoint_authoritative=False,
         merge_fn=_merge_trainer_losses,
     )
+
+    # Check if checkpoint was trained with LoRA
+    # If so, we need to ensure LoRA config is preserved for loading
+    ckpt_trainer_config = ckpt_hyper.get("trainer_config")
+    if ckpt_trainer_config and hasattr(ckpt_trainer_config, "lora_config"):
+        ckpt_lora_config = ckpt_trainer_config.lora_config
+        if ckpt_lora_config is not None:
+            logger.info(
+                "Checkpoint was trained with LoRA - preserving LoRA config for loading"
+            )
+            # Ensure merged config has the LoRA config from checkpoint
+            if merged_trainer_config.lora_config is None:
+                merged_trainer_config.lora_config = ckpt_lora_config
+
     extra_kwargs["trainer_config"] = merged_trainer_config
     extra_kwargs["config_is_loaded_from_ckpt"] = True
     if merged_trainer_config.enable_perturbation_metrics:

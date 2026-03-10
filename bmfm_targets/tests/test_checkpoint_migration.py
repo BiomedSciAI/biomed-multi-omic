@@ -18,6 +18,73 @@ from run.migrate_checkpoints_to_multitask import (
 
 
 @pytest.fixture()
+def llama_lora_config(gene2vec_unmasked_fields):
+    """Create minimal LLaMA config with LoRA for testing."""
+    from bmfm_targets import config
+    from bmfm_targets.config import LoraConfigWrapper
+    from bmfm_targets.models.predictive.llama import LlamaForMultiTaskConfig
+    from bmfm_targets.training.losses import CrossEntropyObjective, LossTask
+
+    label_columns = [
+        config.LabelColumnInfo(label_column_name="cell_type", n_unique_values=3)
+    ]
+
+    model_config = LlamaForMultiTaskConfig(
+        fields=gene2vec_unmasked_fields,
+        label_columns=label_columns,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        hidden_size=64,
+        max_position_embeddings=128,
+        attention="torch",
+    )
+
+    lora_config = LoraConfigWrapper(
+        r=4,
+        lora_alpha=8,
+        target_modules=["c_attn", "proj"],
+        lora_dropout=0.1,
+    )
+
+    trainer_config = config.TrainerConfig(
+        learning_rate=1e-3,
+        lora_config=lora_config,
+        losses=[LossTask.from_label("cell_type", objective=CrossEntropyObjective())],
+    )
+
+    return model_config, trainer_config
+
+
+@pytest.fixture()
+def pl_sciplex3_dm(gene2vec_unmasked_fields):
+    """Create minimal SciPlex3 data module for testing."""
+    from bmfm_targets import config
+    from bmfm_targets.datasets import sciplex3
+    from bmfm_targets.tests import helpers
+    from bmfm_targets.tokenization import load_tokenizer
+
+    label_columns = [
+        config.LabelColumnInfo(label_column_name="cell_type", classifier_depth=1)
+    ]
+    dm = sciplex3.SciPlex3DataModule(
+        dataset_kwargs={
+            "data_dir": helpers.SciPlex3Paths.root,
+            "split_column": "split_random",
+        },
+        tokenizer=load_tokenizer("gene2vec"),
+        fields=gene2vec_unmasked_fields,
+        label_columns=label_columns,
+        batch_size=3,
+        max_length=8,
+        pad_to_multiple_of=2,
+        limit_dataset_samples=3,
+    )
+    dm.setup("fit")
+    helpers.update_label_columns(label_columns, dm.label_dict)
+    return dm
+
+
+@pytest.fixture()
 def minimal_mlm_config():
     """Create minimal MLM config for testing."""
     return SCBertConfig(
@@ -241,6 +308,103 @@ def test_conversion_preserves_pooler(minimal_seqcls_config):
     pooler_keys = [k for k in seqcls_state if "pooler" in k]
     for key in pooler_keys:
         assert torch.allclose(seqcls_state[key], multitask_state[key])
+
+
+def test_lora_checkpoint_loads_correctly(llama_lora_config, pl_sciplex3_dm):
+    """
+    Test LoRA checkpoint loading in train→test flow.
+
+    Verifies that LoRA parameters are correctly saved and loaded when using
+    update_task_from_trainer pattern (critical for two-stage jobs).
+    """
+    import tempfile
+    from pathlib import Path
+
+    from omegaconf import DictConfig
+
+    from bmfm_targets import config
+    from bmfm_targets.tasks.task_utils import (
+        make_trainer_for_task,
+        train,
+        update_task_from_trainer,
+    )
+    from bmfm_targets.training.modules import MultiTaskTrainingModule
+
+    model_config, trainer_config = llama_lora_config
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Train with LoRA
+        task_config = config.TrainingTaskConfig(
+            max_epochs=1,
+            default_root_dir=tmpdir,
+            accelerator="cpu",
+            devices=1,
+            enable_progress_bar=False,
+            enable_model_summary=False,
+        )
+
+        pl_trainer = make_trainer_for_task(task_config)
+        pl_module = MultiTaskTrainingModule(
+            model_config,
+            trainer_config,
+            tokenizer=pl_sciplex3_dm.tokenizer,
+            label_dict=pl_sciplex3_dm.label_dict,
+        )
+
+        # Verify LoRA applied and get trained params
+        assert hasattr(pl_module.model, "peft_config")
+        train(
+            pl_trainer,
+            pl_data_module=pl_sciplex3_dm,
+            pl_module=pl_module,
+            task_config=task_config,
+        )
+
+        trained_lora_params = {
+            name: param.detach().clone()
+            for name, param in pl_module.model.named_parameters()
+            if "lora" in name.lower()
+        }
+        assert len(trained_lora_params) > 0
+
+        # Load via update_task_from_trainer pattern (two-stage job simulation)
+        test_task = update_task_from_trainer(
+            DictConfig(
+                {
+                    "_target_": "bmfm_targets.config.TestTaskConfig",
+                    "checkpoint": "best",
+                    "accelerator": "cpu",
+                    "devices": 1,
+                }
+            ),
+            pl_trainer,
+        )
+        assert test_task.checkpoint
+        assert Path(test_task.checkpoint).exists()
+
+        loaded_module = MultiTaskTrainingModule.load_from_checkpoint(
+            test_task.checkpoint,
+            tokenizer=pl_sciplex3_dm.tokenizer,
+            trainer_config=trainer_config,
+            weights_only=False,
+        )
+
+        # Verify LoRA params loaded correctly
+        assert hasattr(loaded_module.model, "peft_config")
+        loaded_lora_params = {
+            name: param.detach().clone()
+            for name, param in loaded_module.model.named_parameters()
+            if "lora" in name.lower()
+        }
+
+        assert set(loaded_lora_params.keys()) == set(trained_lora_params.keys())
+        for name in trained_lora_params:
+            assert torch.allclose(
+                loaded_lora_params[name], trained_lora_params[name], atol=1e-6
+            )
+            assert loaded_module.model.get_parameter(
+                name
+            ).requires_grad  # LoRA params trainable
 
 
 # --- Real Checkpoint Tests ---
