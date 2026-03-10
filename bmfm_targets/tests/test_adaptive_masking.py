@@ -19,7 +19,7 @@ from bmfm_targets.training.masking.adaptive_strategy import (
     AdaptiveMaskingStrategy,
     AdaptiveWCEDMasker,
 )
-from bmfm_targets.training.modules import MLMTrainingModule
+from bmfm_targets.training.modules import MultiTaskTrainingModule
 
 
 def test_can_update_masking_probs(pl_zheng_mlm_raw_counts):
@@ -60,7 +60,6 @@ def test_updatable_token_masking_prob_masking_strategy_inside_masker(
         batch_size=4,
         limit_dataset_samples={"train": 32, "dev": 256},
         mlm=True,
-        collation_strategy="language_modeling",
         rda_transform=2000,
         sequence_order="random",
         max_length=64,
@@ -108,7 +107,7 @@ def test_updatable_token_masking_prob_masking_strategy_inside_masker(
         task_config.max_epochs = 5
         task_config.max_steps = -1
         pl_trainer = make_trainer_for_task(task_config)
-        pl_module = MLMTrainingModule(model_config, trainer_config, dm.tokenizer)
+        pl_module = MultiTaskTrainingModule(model_config, trainer_config, dm.tokenizer)
         train(
             pl_trainer, pl_data_module=dm, pl_module=pl_module, task_config=task_config
         )
@@ -133,7 +132,6 @@ def test_masking_strategy_can_be_turned_off_in_val(pl_zheng_mlm_raw_counts):
         batch_size=4,
         limit_dataset_samples={"train": 32, "dev": 256},
         mlm=True,
-        collation_strategy="language_modeling",
         rda_transform=2000,
         sequence_order="random",
         max_length=64,
@@ -183,7 +181,6 @@ def test_wced_adaptive_masking(
         limit_dataset_samples={"train": 32, "dev": 256},
         mlm=True,
         sequence_dropout_factor=0.3,
-        collation_strategy="language_modeling",
         rda_transform=2000,
         sequence_order="random",
         max_length=64,
@@ -240,7 +237,7 @@ def test_wced_adaptive_masking(
     with tempfile.TemporaryDirectory() as tmpdir:
         task_config = get_test_task_config(tmpdir)
         pl_trainer = make_trainer_for_task(task_config)
-        pl_module = MLMTrainingModule(model_config, trainer_config, dm.tokenizer)
+        pl_module = MultiTaskTrainingModule(model_config, trainer_config, dm.tokenizer)
         train(
             pl_trainer, pl_data_module=dm, pl_module=pl_module, task_config=task_config
         )
@@ -284,7 +281,6 @@ def test_wced_adaptive_masking_can_be_turned_off_in_val(
         limit_dataset_samples={"train": 32, "dev": 256},
         mlm=True,
         sequence_dropout_factor=0.3,
-        collation_strategy="language_modeling",
         rda_transform=2000,
         sequence_order="random",
         max_length=64,
@@ -341,7 +337,7 @@ def test_wced_adaptive_masking_can_be_turned_off_in_val(
     with tempfile.TemporaryDirectory() as tmpdir:
         task_config = get_test_task_config(tmpdir)
         pl_trainer = make_trainer_for_task(task_config)
-        pl_module = MLMTrainingModule(model_config, trainer_config, dm.tokenizer)
+        pl_module = MultiTaskTrainingModule(model_config, trainer_config, dm.tokenizer)
         train(
             pl_trainer, pl_data_module=dm, pl_module=pl_module, task_config=task_config
         )

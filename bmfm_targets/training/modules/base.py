@@ -16,7 +16,7 @@ from torchmetrics.wrappers import MultitaskWrapper
 
 from bmfm_targets.config import LabelColumnInfo, TrainerConfig
 from bmfm_targets.config.model_config import SCModelConfigBase
-from bmfm_targets.models import get_model_from_config, instantiate_classification_model
+from bmfm_targets.models import get_model_from_config
 from bmfm_targets.models.model_utils import SequenceClassifierOutputWithEmbeddings
 from bmfm_targets.models.predictive.layers import get_embeddings_from_outputs
 from bmfm_targets.tokenization import MultiFieldTokenizer
@@ -48,8 +48,6 @@ logger = logging.getLogger(__name__)
 
 
 class BaseTrainingModule(pl.LightningModule):
-    MODELING_STRATEGY = ""  # set in base class to "mlm", "sequence_labeling" etc
-
     def __init__(
         self,
         model_config: SCModelConfigBase,
@@ -71,6 +69,15 @@ class BaseTrainingModule(pl.LightningModule):
 
         if "config_is_loaded_from_ckpt" in kwargs.keys():
             model_config.checkpoint = None
+
+        # In predict mode, clear label_columns if checkpoint has no label decoder weights
+        if "clear_label_columns_for_predict" in kwargs.keys():
+            if hasattr(model_config, "label_columns") and model_config.label_columns:
+                logger.info(
+                    f"Clearing {len(model_config.label_columns)} label_columns for predict mode "
+                    "(checkpoint has no label decoder weights)"
+                )
+                model_config.label_columns = []
 
         # this is needed when model_config is loaded from old checkpoints which don't contain the label_columns item in "hyperparameter" section
         if (
@@ -121,14 +128,27 @@ class BaseTrainingModule(pl.LightningModule):
         self.kwargs = kwargs
 
         self.initialize_metrics()
-        if self.MODELING_STRATEGY == "sequence_classification":
-            self.model = instantiate_classification_model(
-                self.model_config, self.loss_tasks, self.device
+        self.model = get_model_from_config(self.model_config)
+
+        # Load checkpoint with automatic migration
+        if self.model_config.checkpoint and "config_is_loaded_from_ckpt" not in kwargs:
+            from bmfm_targets.models.model_utils import migrate_checkpoint_if_needed
+
+            label_name = (
+                self.model_config.label_columns[0].label_column_name
+                if self.model_config.label_columns
+                else None
             )
-        else:
-            self.model = get_model_from_config(
-                self.model_config, modeling_strategy=self.MODELING_STRATEGY
+            ckpt = migrate_checkpoint_if_needed(
+                self.model_config.checkpoint, label_name
             )
+            state_dict = ckpt.get("state_dict", ckpt)
+            cleaned = {
+                k[6:] if k.startswith("model.") else k: v for k, v in state_dict.items()
+            }
+
+            self.model.load_state_dict(cleaned, strict=False)
+            self.model_config.checkpoint = None
 
         self.lora_config = self.trainer_config.get_lora_config()
         if self.lora_config:
@@ -171,6 +191,8 @@ class BaseTrainingModule(pl.LightningModule):
             loss_task.extract_metric_inputs(outputs.logits, labels)
             for loss_task in self.loss_tasks
         ]
+        # Filter out None results (e.g., from conditional decoders like MVC)
+        metric_inputs = [mi for mi in metric_inputs if mi is not None]
 
         duplicated_metric_keys = [
             k for k, v in Counter([i[0] for i in metric_inputs]).items() if v > 1
@@ -188,7 +210,23 @@ class BaseTrainingModule(pl.LightningModule):
                 task_outputs = task_outputs[ignore_mask]
             model_outputs[metric_key] = task_outputs
             gt_labels[metric_key] = task_labels
-        return self.split_metrics(split)(model_outputs, gt_labels)
+
+        # Filter out metric keys that don't have predictions
+        # (e.g., MVC decoders may not produce outputs if embeddings not provided)
+        if not model_outputs:
+            return {}
+
+        # Call metrics individually for keys that have data
+        metrics_wrapper = self.split_metrics(split)
+        results = {}
+        for metric_key in model_outputs.keys():
+            if metric_key in metrics_wrapper.task_metrics:
+                metric = metrics_wrapper.task_metrics[metric_key]
+                results[metric_key] = metric(
+                    model_outputs[metric_key], gt_labels[metric_key]
+                )
+
+        return results
 
     def initialize_metrics(self):
         # Count how many tasks share each metric_key
@@ -218,6 +256,38 @@ class BaseTrainingModule(pl.LightningModule):
 
     def on_validation_start(self) -> None:
         self.val_batch_predictions.clear()
+
+    def on_load_checkpoint(self, checkpoint: dict) -> None:
+        """Migrate old checkpoint formats before Lightning loads them."""
+        if "state_dict" not in checkpoint:
+            return
+
+        from run.migrate_checkpoints_to_multitask import (
+            convert_mlm_to_multitask,
+            convert_seqcls_to_multitask,
+            detect_checkpoint_type,
+        )
+
+        # Remove "model." prefix for detection
+        cleaned = {
+            k[6:] if k.startswith("model.") else k: v
+            for k, v in checkpoint["state_dict"].items()
+        }
+
+        ckpt_type, label_name = detect_checkpoint_type(cleaned)
+        if ckpt_type == "multitask":
+            return
+
+        logger.info(f"Migrating {ckpt_type} checkpoint")
+
+        if ckpt_type == "mlm_or_seqlabel":
+            migrated = convert_mlm_to_multitask(cleaned)
+        elif ckpt_type in ("sequence_classification", "multitask_classifier"):
+            migrated = convert_seqcls_to_multitask(cleaned, label_name=label_name)
+        else:
+            raise ValueError(f"Unknown checkpoint type: {ckpt_type}")
+
+        checkpoint["state_dict"] = {f"model.{k}": v for k, v in migrated.items()}
 
     def split_batch_predictions(self, split):
         if split == "test":
@@ -484,6 +554,10 @@ class BaseTrainingModule(pl.LightningModule):
             logger.info(f"dumping batch predictions {split}")
 
             self.dump_batch_predictions(split)
+        if self.trainer_config.batch_prediction_behavior == "dump_token_level_errors":
+            for metric_key, gene_level_error in self.token_level_errors.items():
+                ofname = f"{split}_token_level_errors_{metric_key}_iteration_{self.global_step}.csv"
+                gene_level_error.to_csv(Path(self.logger.log_dir) / ofname)
 
     def log_token_level_errors_for_split(self, split):
         if len(self.get_supported_field_metric_keys()) == 0:
@@ -571,7 +645,7 @@ class BaseTrainingModule(pl.LightningModule):
         for source_name, lt in active_keys.items():
             if isinstance(lt.source, FieldSource):
                 columns = field_predictions_df_columns(
-                    self.model_config.fields, lt.field, self.MODELING_STRATEGY
+                    self.model_config.fields, lt.field
                 )
                 include_nonmasked = not isinstance(lt.source, WCEDFieldSource)
                 preds_df = self._get_field_predictions_df(
@@ -787,9 +861,7 @@ class BaseTrainingModule(pl.LightningModule):
     def process_batch_predictions(self, split):
         for metric_key in self.get_supported_field_metric_keys():
             field = [f.field for f in self.loss_tasks if f.metric_key == metric_key][0]
-            columns = field_predictions_df_columns(
-                self.model_config.fields, field, self.MODELING_STRATEGY
-            )
+            columns = field_predictions_df_columns(self.model_config.fields, field)
             preds_df = self._get_field_predictions_df(
                 split, metric_key, include_nonmasked=False, columns=columns
             )

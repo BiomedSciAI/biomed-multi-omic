@@ -373,7 +373,7 @@ def test_tokenize_xyz(test_tokenizer: MultiFieldTokenizer):
 
 
 def test_special_token_mask_with_special_tokens(
-    test_tokenizer: MultiFieldTokenizer, test_tokenizer_fields
+    test_tokenizer: MultiFieldTokenizer, gene2vec_fields
 ):
     data1 = [
         MultiFieldInstance(
@@ -394,7 +394,7 @@ def test_special_token_mask_with_special_tokens(
     encoding = test_tokenizer(
         mfi=data1,
         mfi_pair=data2,
-        fields=test_tokenizer_fields,
+        fields=gene2vec_fields,
         return_attention_mask=True,
         return_special_tokens_mask=True,
         padding="max_length",
@@ -426,14 +426,14 @@ def test_special_token_ids(test_tokenizer: MultiFieldTokenizer):
     assert x == [0, 1, 2, 3, 4]
 
 
-def test_truncation(test_tokenizer_fields):
+def test_truncation(gene2vec_fields):
     n_samples = 5
     max_length = 3
     tokenizer = load_test_tokenizer()
     dataset = generate_dataset(n_samples, 4, 8, seed=42, tokenizer=tokenizer)
     encoding = tokenizer(
         dataset[:],
-        fields=test_tokenizer_fields,
+        fields=gene2vec_fields,
         # return_id="local",
         return_attention_mask=True,
         padding="max_length",

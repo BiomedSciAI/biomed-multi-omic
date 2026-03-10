@@ -1,6 +1,5 @@
 _partial_: true
 num_workers: 8
-collation_strategy: "sequence_classification"
 _target_: bmfm_targets.training.data_module.DataModule
 batch_size: 20
 max_length: 512

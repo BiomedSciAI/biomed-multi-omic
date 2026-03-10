@@ -170,7 +170,6 @@ class StreamingHiCDataModule(StreamingDataModule):
             max_length=self.max_length,
             padding=self.padding,
             truncation=self.truncation,
-            collation_strategy=self.collation_strategy,
         )
 
 
@@ -280,7 +279,6 @@ class StreamingInsulationDataModule(StreamingDataModule):
             max_length=self.max_length,
             padding=self.padding,
             truncation=self.truncation,
-            collation_strategy=self.collation_strategy,
         )
 
 

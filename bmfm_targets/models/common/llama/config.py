@@ -3,7 +3,6 @@ from pydantic import TypeAdapter
 from bmfm_targets.config import (
     FieldInfo,
     LabelColumnInfo,
-    ModelingStrategy,
     SCModelConfigBase,
 )
 from bmfm_targets.models.common.hf_registration import (
@@ -55,26 +54,9 @@ class LlamaConfig(SCModelConfigBase):
             seq_classes=[LlamaForSequenceClassificationModel],
         )
 
-    def build_model(self, strategy: ModelingStrategy):
-        if strategy == ModelingStrategy.MULTITASK:
-            from bmfm_targets.models.predictive.llama.model import (
-                LlamaForMultiTaskModel,
-            )
+    def build_model(self):
+        from bmfm_targets.models.predictive.llama.model import (
+            LlamaForMultiTaskModel,
+        )
 
-            return LlamaForMultiTaskModel(config=self)
-
-        if strategy == ModelingStrategy.MLM:
-            from bmfm_targets.models.predictive.llama.model import (
-                LlamaForMaskedLMModel,
-            )
-
-            return LlamaForMaskedLMModel(config=self)
-
-        if strategy == ModelingStrategy.SEQUENCE_CLASSIFICATION:
-            from bmfm_targets.models.predictive.llama.model import (
-                LlamaForSequenceClassificationModel,
-            )
-
-            return LlamaForSequenceClassificationModel(config=self)
-
-        raise ValueError(f"Strategy {strategy} is not supported by LLama model.")
+        return LlamaForMultiTaskModel(config=self)

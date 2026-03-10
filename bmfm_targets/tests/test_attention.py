@@ -17,7 +17,7 @@ from bmfm_targets.tests.helpers import (
     default_mlm_losses_from_fields,
     get_test_task_config,
 )
-from bmfm_targets.training.modules import MLMTrainingModule
+from bmfm_targets.training.modules import MultiTaskTrainingModule
 
 _attention_pars = [
     {"attention": "torch"},
@@ -85,7 +85,7 @@ def test_torch_attention_train_scbert(
         trainer_config = config.TrainerConfig(
             losses=default_mlm_losses_from_fields(pl_data_module_panglao.fields)
         )
-        mlm_training_module = MLMTrainingModule(
+        mlm_training_module = MultiTaskTrainingModule(
             attention_model_config, trainer_config, pl_data_module_panglao.tokenizer
         )
         pl_trainer = make_trainer_for_task(task_config)

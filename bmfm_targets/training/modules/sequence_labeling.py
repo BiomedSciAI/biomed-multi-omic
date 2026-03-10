@@ -16,7 +16,6 @@ DEFAULT_LABEL_SMOOTHING = 0.01
 
 class SequenceLabelingTrainingModule(BaseTrainingModule):
     DEFAULT_METRICS = {"pcc", "nonzero_confusion_matrix"}
-    MODELING_STRATEGY = "sequence_labeling"
 
     def _shared_test_val_on_end(self, split: str):
         super()._shared_test_val_on_end(split)

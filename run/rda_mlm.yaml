@@ -30,7 +30,6 @@ data_module:
     split_column_name: ${split_column_name}
   limit_genes: protein_coding #could be null, protein_coding, or tokenizer
   transform_datasets: false
-  collation_strategy: multitask
   rda_transform: downsample
 
 task:

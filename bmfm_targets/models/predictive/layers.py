@@ -553,6 +553,16 @@ class SCBaseFieldDecoder(nn.Module):
         for field_decoder_name, field_decoder in self.field_decoders.items():
             if "mvc" in field_decoder_name:
                 field_name = field_decoder_name.split("_")[0]
+                # MVC decoders MUST always produce output when configured
+                if (
+                    mvc_query_embeddings is None
+                    or field_name not in mvc_query_embeddings
+                ):
+                    raise ValueError(
+                        f"MVC decoder '{field_decoder_name}' is configured but mvc_query_embeddings "
+                        f"for field '{field_name}' not provided. Ensure the field has is_input=True "
+                        f"and is being processed correctly."
+                    )
                 field_logits[field_decoder_name] = field_decoder(
                     pooled_output, mvc_query_embeddings[field_name]
                 )
@@ -567,9 +577,11 @@ class SCClassificationDecoder(nn.Module):
         self.config = config
         self.label_decoders = nn.ModuleDict()
 
-        for label_column in self.config.label_columns:
-            label_decoder = LabelDecoder(config, label_column)
-            self.label_decoders[label_column.label_column_name] = label_decoder
+        # Handle case where label_columns is None (e.g., pure MLM models)
+        if self.config.label_columns is not None:
+            for label_column in self.config.label_columns:
+                label_decoder = LabelDecoder(config, label_column)
+                self.label_decoders[label_column.label_column_name] = label_decoder
 
     def forward(
         self, pooled_output: torch.Tensor, sequence_output: torch.Tensor | None = None
@@ -649,7 +661,7 @@ class SCOnlyMLMHead(nn.Module):
         self,
         sequence_output: torch.Tensor,
         pooled_output: torch.Tensor | None = None,
-        mvc_query_embeddings: torch.Tensor | None = None,
+        mvc_query_embeddings: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         prediction_scores = self.predictions(
             sequence_output, pooled_output, mvc_query_embeddings
@@ -708,9 +720,11 @@ class SCMultiTaskHead(nn.Module):
         self,
         sequence_output: torch.Tensor,
         pooled_output: torch.Tensor,
-        mvc_query_embeddings: torch.Tensor | None = None,
+        mvc_query_embeddings: dict[str, torch.Tensor] | None = None,
     ):
-        predictions = self.predictions(sequence_output, mvc_query_embeddings)
+        predictions = self.predictions(
+            sequence_output, pooled_output, mvc_query_embeddings
+        )
         predictions.update(self.label_predictions(pooled_output, sequence_output))
         return predictions
 

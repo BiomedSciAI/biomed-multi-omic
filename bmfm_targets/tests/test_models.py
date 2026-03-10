@@ -13,10 +13,7 @@ from bmfm_targets.models.predictive import (
     scmodernbert,
     scnystromformer,
 )
-from bmfm_targets.models.predictive.llama import (
-    LlamaForMaskedLMConfig,
-    LlamaForMultiTaskConfig,
-)
+from bmfm_targets.models.predictive.llama import LlamaForMultiTaskConfig
 from bmfm_targets.models.predictive.scnystromformer.modeling_scnystromformer import (
     SCNystromformerSelfAttention,
 )
@@ -39,7 +36,7 @@ from bmfm_targets.training.metrics.metric_functions import (
     mse_loss,
     token_value_loss,
 )
-from bmfm_targets.training.modules import MLMTrainingModule
+from bmfm_targets.training.modules import MultiTaskTrainingModule
 
 
 def test_nystromformer_forward():
@@ -61,7 +58,7 @@ def test_nystromformer_forward():
         fields=fields,
         max_position_embeddings=sequence_len,
     )
-    model = scnystromformer.SCNystromformerForMaskedLM(model_config)
+    model = scnystromformer.SCNystromformerForMultiTaskModeling(model_config)
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -110,7 +107,7 @@ def test_scbert_forward():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -293,7 +290,7 @@ def test_scbert_forward_dummy_data():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
 
     dataloader = DataLoader(dataset=dataset, collate_fn=collator, batch_size=batch_size)
 
@@ -1021,7 +1018,7 @@ def generate_and_train(
     )
     if isinstance(model_config, config.SCNystromformerConfig):
         model_config.max_position_embeddings = collator_sequence_len
-    pl_module = MLMTrainingModule(model_config, trainer_config, tokenizer)
+    pl_module = MultiTaskTrainingModule(model_config, trainer_config, tokenizer)
     if return_init_gene_weights:
         base_model = getattr(pl_module.model, pl_module.model.base_model_prefix)
         gene_embeddings = base_model.embeddings.genes_embeddings
@@ -1098,7 +1095,7 @@ def test_scbert_forward_with_continuous_value_encoder():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -1154,7 +1151,7 @@ def test_scbert_forward_with_scale_adapt():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -1238,7 +1235,7 @@ def test_scmodernbert_forward():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scmodernbert.SCModernBertForMaskedLM(model_config)
+    model = scmodernbert.SCModernBertForMultiTaskModeling(model_config)
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -1303,7 +1300,7 @@ def test_scmodernbert_forward_with_continuous_value_encoder():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scmodernbert.SCModernBertForMaskedLM(model_config)
+    model = scmodernbert.SCModernBertForMultiTaskModeling(model_config)
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -1472,7 +1469,7 @@ def test_llama_multitask_forward():
         fields=fields,
         label_columns=label_columns,
     )
-    model = model_config.build_model(config.ModelingStrategy.MULTITASK)
+    model = model_config.build_model()
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -1527,7 +1524,7 @@ def test_llama_forward_with_continuous_value_encoder():
         fields=fields,
         label_columns=label_columns,
     )
-    model = model_config.build_model(config.ModelingStrategy.MULTITASK)
+    model = model_config.build_model()
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))
@@ -1547,64 +1544,6 @@ def test_llama_forward_with_continuous_value_encoder():
         batch_size,
         sequence_len,
         1,
-    )
-
-
-def test_llama_mlm_forward():
-    vocab_size = 100
-    batch_size = 3
-    sequence_len = 10
-    fields = [
-        config.FieldInfo("genes", vocab_size),
-        config.FieldInfo(
-            "expressions", vocab_size, is_masked=True, decode_modes={"token_scores": {}}
-        ),
-    ]
-
-    model_config = LlamaForMaskedLMConfig(
-        num_hidden_layers=2,
-        num_attention_heads=2,
-        fields=fields,
-    )
-    model = model_config.build_model(config.ModelingStrategy.MLM)
-
-    input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
-    attention_mask = torch.ones((batch_size, sequence_len))
-    labels = torch.randint(0, 99, (batch_size, 1, sequence_len))
-
-    outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
-    total_ce_loss = ce_loss(
-        logits=outputs.logits["expressions_token_scores"].reshape(-1, vocab_size),
-        labels=labels[:, 0].reshape(-1),
-        label_smoothing=0.01,
-    )
-    assert not total_ce_loss.isinf()
-    assert total_ce_loss > 0
-
-    total_focal_loss = focal_loss(
-        logits=outputs.logits["expressions_token_scores"].reshape(-1, vocab_size),
-        labels=labels[:, 0].reshape(-1),
-    )
-    assert not total_focal_loss.isinf()
-    assert total_focal_loss > 0
-
-    total_token_value_loss = token_value_loss(
-        logits=outputs.logits["expressions_token_scores"],
-        labels=labels[:, 0],
-        token_values=np.arange(vocab_size),
-    )
-
-    assert not total_token_value_loss.isinf()
-    assert total_token_value_loss > 0
-
-    loss = total_ce_loss + total_token_value_loss
-    assert loss is not None
-
-    loss.backward()
-    assert tuple(outputs.logits["expressions_token_scores"].shape) == (
-        batch_size,
-        sequence_len,
-        vocab_size,
     )
 
 
@@ -1637,7 +1576,7 @@ def test_llama_nomask(mock_clearml_logger):
     tokenizer = load_tokenizer("protein_coding")
     for field in fields:
         field.update_vocab_size(tokenizer)
-    model_config = LlamaForMaskedLMConfig(
+    model_config = LlamaForMultiTaskConfig(
         num_hidden_layers=2,
         num_attention_heads=2,
         hidden_size=32,
@@ -1700,7 +1639,7 @@ def test_llama_train_with_no_tokenization(gene2vec_fields_regression_no_tokeniza
     trainer_config = config.TrainerConfig(losses=losses)
     tokenizer = load_tokenizer("gene2vec")
 
-    model_config = LlamaForMaskedLMConfig(
+    model_config = LlamaForMultiTaskConfig(
         num_hidden_layers=2,
         num_attention_heads=2,
         intermediate_size=64,
@@ -1754,7 +1693,7 @@ def test_llama_with_all_valid_losses():
     tokenizer = helpers.load_test_tokenizer()
     for field in fields:
         field.update_vocab_size(tokenizer)
-    model_config = LlamaForMaskedLMConfig(
+    model_config = LlamaForMultiTaskConfig(
         num_hidden_layers=2,
         num_attention_heads=2,
         hidden_size=32,
@@ -1767,7 +1706,7 @@ def test_llama_with_all_valid_losses():
     assert set(trainer.logged_metrics.keys()) == expected_metrics
 
 
-def test_lllama_forward_with_scale_adapt():
+def test_llama_forward_with_scale_adapt():
     vocab_size = 100
     num_special_tokens = 5
     batch_size = 3
@@ -1795,12 +1734,12 @@ def test_lllama_forward_with_scale_adapt():
         ),
     ]
 
-    model_config = LlamaForMaskedLMConfig(
+    model_config = LlamaForMultiTaskConfig(
         num_hidden_layers=2,
         num_attention_heads=2,
         fields=fields,
     )
-    model = model_config.build_model(strategy="mlm")
+    model = model_config.build_model()
 
     input_ids = torch.randint(0, 99, (batch_size, 2, sequence_len))
     attention_mask = torch.ones((batch_size, sequence_len))

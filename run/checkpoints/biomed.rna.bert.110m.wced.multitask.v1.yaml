@@ -36,7 +36,6 @@ data_module:
   _partial_: true
   num_workers: 24
   mlm: true
-  collation_strategy: multitask
   shuffle: true
   max_length: 1024
   sequence_order: random

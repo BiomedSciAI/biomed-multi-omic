@@ -170,7 +170,6 @@ def test_data_module_setup_predict_gives_all_splits(
         fields=pl_data_module_zheng68k_seq_cls.fields,
         label_columns=pl_data_module_zheng68k_seq_cls.label_columns,
         transform_datasets=False,
-        collation_strategy="sequence_classification",
         batch_size=1,
         max_length=32,
     )
@@ -195,7 +194,6 @@ def test_data_module_setup_test_gives_test_only(
         fields=pl_data_module_zheng68k_seq_cls.fields,
         label_columns=pl_data_module_zheng68k_seq_cls.label_columns,
         transform_datasets=False,
-        collation_strategy="sequence_classification",
         batch_size=1,
         max_length=32,
     )
@@ -274,7 +272,6 @@ def test_data_module_init_with_generic_dataset_seq_cls_transform_true(
             tokenizer=load_tokenizer(),
             fields=gene2vec_fields,
             label_columns=zheng68k_label_columns,
-            collation_strategy="sequence_classification",
             dataset_kwargs={
                 "processed_data_source": Path(d) / "processed.h5ad",
                 "label_dict_path": Path(d) / "label_dict.json",
@@ -306,7 +303,6 @@ def test_data_module_init_with_generic_dataset_seq_cls_transform_false(
             tokenizer=tokenizer,
             fields=fields,
             label_columns=label_columns,
-            collation_strategy="sequence_classification",
             dataset_kwargs={
                 "processed_data_source": processed_path,
             },
@@ -324,7 +320,6 @@ def test_data_module_init_with_generic_dataset_mlm(gene2vec_fields):
         dm = DataModule(
             tokenizer=load_tokenizer(),
             fields=gene2vec_fields,
-            collation_strategy="language_modeling",
             mlm=True,
             dataset_kwargs={
                 "processed_data_source": Path(d) / "processed.h5ad",

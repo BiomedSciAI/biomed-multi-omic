@@ -167,7 +167,6 @@ def test_double_masking_prevented(pl_zheng_mlm_raw_counts):
         batch_size=16,
         limit_dataset_samples=64,
         mlm=True,
-        collation_strategy="language_modeling",
         sequence_order="random",
         max_length=64,
         pad_to_multiple_of=2,

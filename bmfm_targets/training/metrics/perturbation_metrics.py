@@ -156,7 +156,7 @@ def get_aggregated_perturbation_metrics(grouped_predictions: pd.DataFrame):
     ----------
     grouped_predictions : pd.DataFrame
         Observed expressions with rows as genes and columns including
-        'predicted_expressions', 'label_expressions', and "control_expressions".
+        'predicted_expressions', 'label_expressions', and "input_expressions".
         Already averaged across samples with the same perturbation (pseudobulk).
 
     Returns
@@ -169,11 +169,11 @@ def get_aggregated_perturbation_metrics(grouped_predictions: pd.DataFrame):
         }
     """
     deltas = grouped_predictions.subtract(
-        grouped_predictions["control_expressions"], axis=0
-    ).drop(columns=["control_expressions"])
+        grouped_predictions["input_expressions"], axis=0
+    ).drop(columns=["input_expressions"])
 
     predicted = grouped_predictions["predicted_expressions"]
-    control = grouped_predictions["control_expressions"]
+    control = grouped_predictions["input_expressions"]
     gt = grouped_predictions["label_expressions"]
 
     predicted_delta = deltas["predicted_expressions"]
@@ -219,7 +219,7 @@ def get_grouped_predictions(
     -------
         pd.DataFrame: A DataFrame with a MultiIndex of (perturbed_genes, input_genes)
         and columns for 'predicted_expressions' and 'label_expressions'.
-        Also included are "control_expressions" and "baseline_expressions" for downstream
+        Also included are "input_expressions" and "baseline_expressions" for downstream
         metric calculation.
 
     """
@@ -241,7 +241,7 @@ def get_grouped_predictions(
     # Use np.tile to repeat the baseline array for each perturbation
     initial_data = {
         "predicted_expressions": np.tile(baseline.to_numpy(), len(perts)),
-        "control_expressions": np.tile(
+        "input_expressions": np.tile(
             grouped_ground_truth["Control"].to_numpy(), len(perts)
         ),
         "baseline_expressions": np.tile(baseline.to_numpy(), len(perts)),

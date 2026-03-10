@@ -25,4 +25,4 @@ def test_czi_benchhmark(dummy_embeddings):
 
     results = callback_obj.execute_czi_cell_type_classification_benchmark(adata_emb)
     assert results.shape[0] > 0
-    assert "knn" in results.columns
+    assert "lr" in results.columns

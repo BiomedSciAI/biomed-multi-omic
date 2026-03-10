@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,7 @@ from scipy.stats import ttest_1samp
 from transformers import PreTrainedModel
 
 from bmfm_targets.config.model_config import SCModelConfigBase
-from bmfm_targets.models import get_model_from_config, instantiate_classification_model
+from bmfm_targets.models import get_model_from_config
 from bmfm_targets.tokenization import MultiFieldTokenizer
 from bmfm_targets.training.losses import get_loss_tasks
 
@@ -47,18 +47,16 @@ class SequenceClassificationAttributionModule(pl.LightningModule):
         label_dict: dict[str, dict[str, int]],
         attribute_kwargs: dict[str, Any] | None = None,
         attribute_filter: dict[str, Any] | None = None,
-        modeling_strategy: Literal["multitask"]
-        | Literal["sequence_classification"] = "sequence_classification",
         **kwargs,
     ):
         """
-        Pytorch Lightning module for training a masked language model.
+        Pytorch Lightning module for attribution/interpretation.
 
         Args:
         ----
-            model_config_dict (dict): Dictionary containing the model configuration.
-            trainer_config (TrainerConfig): Training configuration.
-            label_dict (dict[dict[str, int]]): a nested label dictionary
+            model_config: Model configuration
+            tokenizer: Tokenizer for the model
+            label_dict: Nested label dictionary mapping label column names to label values
 
         """
         super().__init__()
@@ -67,7 +65,7 @@ class SequenceClassificationAttributionModule(pl.LightningModule):
         self.tokenizer = tokenizer
         self.label_dict = label_dict
         self.label_output_size_dict = {i: len(k) for i, k in self.label_dict.items()}
-        self.modeling_strategy = modeling_strategy
+
         if "trainer_config" in kwargs:
             losses = kwargs["trainer_config"].losses
         else:
@@ -78,16 +76,9 @@ class SequenceClassificationAttributionModule(pl.LightningModule):
             fields=self.model_config.fields,
             label_columns=self.model_config.label_columns,
         )
-        if self.modeling_strategy == "sequence_classification":
-            self.model = instantiate_classification_model(
-                self.model_config, self.loss_tasks
-            )
-        elif self.modeling_strategy == "multitask":
-            self.model = get_model_from_config(
-                self.model_config, modeling_strategy=self.modeling_strategy
-            )
-        else:
-            raise ValueError(f"Interpret not supported for {modeling_strategy}")
+
+        # Always use multitask model
+        self.model = get_model_from_config(self.model_config)
         self.train_labels = [*self.label_dict.keys()]
         self.attribute_kwargs = attribute_kwargs if attribute_kwargs is not None else {}
         self.attribute_filter = attribute_filter if attribute_filter is not None else {}
