@@ -1,12 +1,12 @@
-declare -a datasets=("coreprom" "covid" "splice" "promoter_dnabert2" "mpra") # "snv_TeWhey_split_by_pairs")
-#declare -a datasets=("tf")
-declare -a label_column_names=( "label" "label" "label" "label" "mean_value")
+declare -a datasets=("tf" "coreprom" "covid" "promoter_dnabert2" ) # "snv_TeWhey_split_by_pairs")
+declare -a datasets=("tf")
+declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
 #declare -a label_column_names=("label")
 
 EST_TIME=$(TZ="America/New_York" date +"%Y%m%d_%H%M")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 TOKENIZER="snp2vec"
-BS=64
+BS=32
 LEARNING_RATE=0.0001
 MODEL_PE=128
 MODEL_WD=0.01
@@ -15,9 +15,12 @@ MODEL_NAME="modernbert_wo_lora"
 
 CHKPT_NAME="hic_3celllines_multipleckpts_v2_"
 CHKPT_REFS=(
-  "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=10-step=218790-val_loss=4.41.ckpt\'"
-  "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=15-step=318240-val_loss=4.36.ckpt\'"
-  "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+#   "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=3-step=79560-val_loss=4.52.ckpt\'"
+#   "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=5-step=119340-val_loss=4.47.ckpt\'"
+#   "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=10-step=218790-val_loss=4.41.ckpt\'"
+#   "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=15-step=318240-val_loss=4.36.ckpt\'"
+#    "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
 )
 
 
@@ -40,12 +43,13 @@ CHKPT_REFS=(
 #   "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines/backup_ckpt/epoch=14-step=298350-val_loss=4.37.ckpt\'"
 # )
 
-CHKPT_NAME="human_genome_multipleckpts"
-CHKPT_REFS=(
-    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_v2/backup_ckpt/epoch=10-step=240273-val_loss=4.36.ckpt\'"
-    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_v2/backup_ckpt/epoch=15-step=349488-val_loss=4.32.ckpt'"
-    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_v2/backup_ckpt/epoch=21-step=480546-val_loss=4.26.ckpt\'"
-)
+# CHKPT_NAME="human_genome_multipleckpts_v2_"
+# CHKPT_REFS=(
+#     "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_rc_1kb_10kb_10x_v2/epoch=3-step=79560-val_loss=4.52.ckpt\'"
+#     "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_rc_1kb_10kb_10x_v2/epoch=5-step=119340-val_loss=4.47.ckpt'"
+#     "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_rc_1kb_10kb_10x_v2/epoch=10-step=218790-val_loss=4.41.ckpt\'"
+#     "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_rc_1kb_10kb_10x_v2/epoch=15-step=318240-val_loss=4.36.ckpt\'"
+#)
 
 
 # CHKPT_NAME="human_genome_multipleckpts"
@@ -88,8 +92,8 @@ for ind in "${!CHKPT_REFS[@]}"; do
         # Set Dataset_name to default dataset
         DATASET_NAME=$DATASET
         if [[ "$DATASET" == 'tf' || "$DATASET" == 'promoter' ]]; then
-            for fold in "fold1" "fold2" "fold3" "fold4" "fold5"; do
-                for version in "ref_genome" "snp_genome"; do
+            for fold in "fold5"; do
+                for version in "ref_genome"; do
                     DATASET_NAME="${DATASET}_${fold}_${version}"
                     #rm -rf $OUTPUT_DIR/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
                     mkdir -p ../output_logs/${MODEL_NAME}_${NEW_CHKPT_NAME}/${DATASET_NAME}
@@ -108,7 +112,7 @@ for ind in "${!CHKPT_REFS[@]}"; do
                         learning_rate=$LEARNING_RATE \
                         output_directory=$OUTPUT_DIR \
                         extra_tag=$NEW_EXTRA_TAG \
-                        max_finetuning_epochs=5 \
+                        max_finetuning_epochs=2 \
                         $SUFFIX_CMD\"" ;
                     #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET dataset_name=$DATASET_WITH_FOLD fold=$fold label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
                 done

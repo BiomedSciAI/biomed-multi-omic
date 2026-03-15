@@ -121,9 +121,9 @@ for i in "${!datasets[@]}"; do
             #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
         done
     elif [ "$DATASET" == "snv_Tewhey" ]; then
-        SPLIT_TYPE="split_Gosai_and_mpra"
-        for cell in 'K562' ; do
-            fold="${cell}_snpified_v3_ref_gen"
+        SPLIT_TYPE="split_Gosai_minus_mpratest"
+        for cell in 'HEPG2' ; do
+            fold="${cell}_original" #"${cell}_snpified_v3_ref_gen"
             INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/snv_mpra_Tewhey/${SPLIT_TYPE}/${fold}"
             DATASET_NAME=${DATASET}_${SPLIT_TYPE}_${fold}
             LABEL_COLUMN_NAME="${cell}_log2FC"
