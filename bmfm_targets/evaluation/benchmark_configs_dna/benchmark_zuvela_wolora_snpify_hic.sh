@@ -14,7 +14,7 @@ MODEL="modernbert" # Makesure it is passed on config.yaml as MODEL
 MODEL_NAME="modernbert_wo_lora" # by default is wo_lora...
 CHKPT_NAME="hic_3Cells_v5.5"  #"genome_hic_hepg2_multi_v3.5" # Used for naming output directory and clearml project
 
-CHKPT_REF="\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
 # CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/old_ref_snp_hic_3celllines/backup_ckpt/epoch=5-step=119340-val_loss=4.43.ckpt\'" This is for version 4.5
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=18-step=138282-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'"
