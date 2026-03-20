@@ -2,7 +2,7 @@ defaults:
  - base_seq_cls
 
 _target_: bmfm_targets.datasets.dnaseq.DNASeqMPRADataModule
-max_length: 128
+max_length: 320
 dataset_kwargs:
   processed_data_source: ${input_directory}/lenti_mpra_regression/${fold}
   dataset_name: ${dataset_name} # it should contain both the name and fold
