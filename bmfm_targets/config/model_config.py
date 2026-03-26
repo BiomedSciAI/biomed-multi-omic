@@ -19,23 +19,6 @@ FeatureGenerationAlgorithm = Enum(
 )
 
 
-class ModelingStrategy(str, Enum):
-    """
-    Enumeration of all  modeling strategies.
-
-    Members:
-        MLM: mask language modeling
-        SEQUENCE_CLASSIFICATION: sequence-level classification
-        SEQUENCE_LABELING: token-level labeling
-        MULTITASK: multitask learning
-    """
-
-    SEQUENCE_LABELING = "sequence_labeling"
-    MLM = "mlm"
-    MULTITASK = "multitask"
-    SEQUENCE_CLASSIFICATION = "sequence_classification"
-
-
 class SCModelConfigBase(PretrainedConfig):
     def to_dict(self):
         """Serializes class to a Python dictionary."""

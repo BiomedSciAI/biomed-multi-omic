@@ -110,7 +110,6 @@ def mlm_predictions_list(pl_zheng_mlm_raw_counts):
         batch_size=2,
         fields=pl_zheng_mlm_raw_counts.fields,
         mlm=True,
-        collation_strategy="language_modeling",
         rda_transform=2000,
         max_length=128,
         pad_to_multiple_of=2,
@@ -151,9 +150,7 @@ def mlm_predictions_df(pl_zheng_mlm_raw_counts, mlm_predictions_list):
     cell_names, predictions = mlm_predictions_list
     id2gene = {v: k for k, v in tokenizer.get_field_vocab("genes").items()}
     field = [f for f in dm.fields if f.field_name == "expressions"][0]
-    columns = batch_prediction_metrics.field_predictions_df_columns(
-        dm.fields, field, "mlm"
-    )
+    columns = batch_prediction_metrics.field_predictions_df_columns(dm.fields, field)
     preds = batch_prediction_metrics.create_field_predictions_df(
         predictions, id2gene, columns=columns, sample_names=cell_names
     )
@@ -172,7 +169,7 @@ def perturbations_predictions_df(perturbations_predictions_list):
         id2gene,
         columns=[
             "gene_id",
-            "control_expressions",
+            "input_expressions",
             "is_perturbed",
             "predicted_expressions",
             "label_expressions",
@@ -196,10 +193,12 @@ def test_gene_level_errors(mlm_predictions_df):
         mlm_predictions_df
     )
     assert gene_level_error.shape[0] > 5
+
     gene_metrics = batch_prediction_metrics.get_gene_metrics_from_gene_errors(
         gene_level_error
     )
-    assert all(isinstance(x, float) for x in gene_metrics.values())
+    for k, v in gene_metrics.items():
+        assert isinstance(v, float | np.floating), f"key: {k}, value: {v}"
 
 
 def test_perturbation_grouped_df(

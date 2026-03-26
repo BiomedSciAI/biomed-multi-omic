@@ -1,5 +1,6 @@
 import logging
 import warnings
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -96,7 +97,26 @@ def get_gene_level_expression_error(exp_preds: pd.DataFrame) -> pd.DataFrame:
     metrics["gene_err_nz_null"] = grouped_nz["nz_null_diff"].mean()
     metrics["gene_err"] = grouped_all["abs_diff"].mean()
     metrics["gene_err_null"] = grouped_all["null_diff"].mean()
+    # baseline values for rescaling error (or replacing with train null)
+    metrics["gene_avg_expressions"] = grouped_all["label_expressions"].mean()
+    metrics["gene_avg_nz_expressions"] = grouped_nz["label_expressions"].mean()
+    # baseline std for z-scoring errors if desired
+    metrics["gene_std_expressions"] = grouped_all["label_expressions"].std()
+    metrics["gene_std_nz_expressions"] = grouped_nz["label_expressions"].std()
 
+    # average predictions for verification and post facto recalculation
+    metrics["gene_predicted_avg_expressions"] = grouped_all[
+        "predicted_expressions"
+    ].mean()
+    metrics["gene_predicted_std_expressions"] = grouped_all[
+        "predicted_expressions"
+    ].std()
+    metrics["gene_predicted_avg_nz_expressions"] = grouped_nz[
+        "predicted_expressions"
+    ].mean()
+    metrics["gene_predicted_std_nz_expressions"] = grouped_nz[
+        "predicted_expressions"
+    ].std()
     # === Zero classification ===
     is_label_zero = exp_preds["label_expressions"] == 0
     is_pred_zero = exp_preds["predicted_expressions"] == 0
@@ -146,7 +166,7 @@ def get_best_and_worst_genes(
         > gene_level_err.gene_nz_freq.quantile(commonness_quantile)
     ]
     common_genes = common_genes.assign(
-        gene_err_avg=0.5 * (gene_level_err["gene_err_nz"] + gene_level_err["gene_err"])
+        gene_err_avg=0.5 * (common_genes["gene_err_nz"] + common_genes["gene_err"])
     )
     worst_genes = common_genes.sort_values("gene_err_avg", ascending=False).head(topk)
     best_genes = common_genes.sort_values("gene_err_avg").head(topk)
@@ -256,6 +276,38 @@ def create_field_predictions_df(
         assert len(sample_names) == len(
             {*sample_names}
         ), "Sample names must be unique. Did you accidentally set task_config.n_bootstrap_runs >=1?"
+
+    if len(predictions_list) == 0:
+        raise ValueError("predictions_list is empty")
+
+    shapes = [t.shape[1] for t in predictions_list]  # dim 1 is sequence_length
+    shape_counts = Counter(shapes)
+
+    # Use most common size, breaking ties by choosing largest
+    expected_seq_len = max(shape_counts.keys(), key=lambda x: (shape_counts[x], x))
+
+    # Build mask for which batches to keep
+    keep_mask = [t.shape[1] == expected_seq_len for t in predictions_list]
+    filtered_list = [t for t, keep in zip(predictions_list, keep_mask) if keep]
+
+    n_dropped = len(predictions_list) - len(filtered_list)
+    if n_dropped > 0:
+        logging.warning(
+            f"Dropped {n_dropped}/{len(predictions_list)} batches due to size mismatch. "
+            f"Expected sequence_length={expected_seq_len}. "
+            f"Sequence lengths found: {dict(shape_counts)}"
+        )
+        # Filter sample_names and sample_level_metadata to match
+        if sample_names is not None:
+            sample_names = [s for s, keep in zip(sample_names, keep_mask) if keep]
+        if sample_level_metadata is not None:
+            for key in sample_level_metadata:
+                sample_level_metadata[key] = [
+                    v for v, keep in zip(sample_level_metadata[key], keep_mask) if keep
+                ]
+
+    predictions_list = filtered_list
+
     predictions_array = torch.concat([*predictions_list]).to(torch.float32).numpy()
     reshaped = predictions_array.reshape(-1, predictions_array.shape[-1])
     logging.info(
@@ -324,8 +376,11 @@ def create_field_predictions_df(
             preds_df[key] = values
 
     preds_df = preds_df.set_index("sample_id")
+    gene_col = (
+        "input_genes" if "input_genes" in preds_df.columns else "dna_chunk_tokens"
+    )
     logging.info(
-        f"Final predictions_df shape: {preds_df.shape}, num cells: {preds_df.index.nunique()}, num unique genes {preds_df['input_genes'].nunique()}"
+        f"Final predictions_df shape: {preds_df.shape}, num cells: {preds_df.index.nunique()}, num unique genes {preds_df[gene_col].nunique()}"
     )
     return preds_df
 
@@ -402,9 +457,9 @@ def concat_label_loss_batch_tensors(
     return batch_tensor
 
 
-def field_predictions_df_columns(fields, this_field, modeling_strategy):
+def field_predictions_df_columns(fields, this_field):
     """
-    Generate column names for prediction DataFrame based on modeling strategy and field configuration.
+    Generate column names for prediction DataFrame based on field configuration.
 
     Used to produce the `columns` argument for `create_field_predictions_df`.
 
@@ -414,8 +469,6 @@ def field_predictions_df_columns(fields, this_field, modeling_strategy):
         All fields in the model, including input fields (is_input=True) and target field.
     this_field : FieldInfo
         Target field being predicted, with field_name and decode_modes attributes.
-    modeling_strategy : str
-        One of 'mlm'/'multitask' (masked language modeling) or 'sequence_labeling'.
 
     Returns
     -------
@@ -424,7 +477,8 @@ def field_predictions_df_columns(fields, this_field, modeling_strategy):
 
     Notes
     -----
-    - Input columns map field names to dataframe column names via field_column_map
+    - Input columns use standardized names: genes→gene_id, expressions→input_expressions,
+      perturbations→is_perturbed, dna_chunks→dna_chunks
     - WCED decode mode uses only gene_id input and custom logit outputs. These are not true
       input fields, but behave like input fields in terms of DataFrame structure and
       downstream metric calculations.
@@ -433,19 +487,14 @@ def field_predictions_df_columns(fields, this_field, modeling_strategy):
       are more than 1D (e.g., token scores) they are omitted.
     """
     one_dim_decode_modes = ["regression", "is_zero", "mvc_regression", "mvc_is_zero"]
+
+    # Standardized column name mapping (no longer varies by modeling strategy)
     field_column_map = {
-        "mlm": {
-            "genes": "gene_id",
-            "expressions": "input_expressions",
-            "dna_chunks": "dna_chunks",
-        },
-        "sequence_labeling": {
-            "genes": "gene_id",
-            "expressions": "control_expressions",
-            "perturbations": "is_perturbed",
-        },
+        "genes": "gene_id",
+        "expressions": "input_expressions",
+        "perturbations": "is_perturbed",
+        "dna_chunks": "dna_chunks",
     }
-    field_column_map["multitask"] = field_column_map["mlm"]
 
     this_field_name = this_field.field_name
 
@@ -463,9 +512,7 @@ def field_predictions_df_columns(fields, this_field, modeling_strategy):
         input_columns = ["gene_id"]
     else:
         input_field_names = [f.field_name for f in fields if f.is_input]
-        input_columns = [
-            field_column_map[modeling_strategy].get(fn, fn) for fn in input_field_names
-        ]
+        input_columns = [field_column_map.get(fn, fn) for fn in input_field_names]
 
     if "label_" == this_field_name[:6]:
         this_field_name = this_field_name[6:]

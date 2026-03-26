@@ -9,7 +9,6 @@ seed:
 
 data_module:
   shuffle: false
-  collation_strategy: language_modeling
   dataset_kwargs:
     processed_data_source: "${input_directory}/${input_filename}"
     dataset_name: ${dataset_name}

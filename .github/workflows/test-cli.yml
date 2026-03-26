@@ -61,7 +61,7 @@ jobs:
     - name: Test MLM+RDA (inference, finetune, pretrain)
       run: |
         # inference
-        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.collation_strategy=language_modeling data_module.log_normalize_transform=false data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1 task.accelerator=cpu task.precision=32
+        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.log_normalize_transform=false data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1 task.accelerator=cpu task.precision=32
         rm -rf /tmp/runs/*
         # finetune
         bmfm-targets-run -cd run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.log_normalize_transform=false checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0
@@ -100,7 +100,7 @@ jobs:
     - name: Test WCED (inference, finetune)
       run: |
         # inference
-        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.collation_strategy=language_modeling data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
+        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.max_length=256 checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
         rm -rf /tmp/runs/*
         # finetune
         bmfm-targets-run -cd run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false

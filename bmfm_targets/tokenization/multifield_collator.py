@@ -39,12 +39,6 @@ class MultiFieldCollator:
         tokenizer: MultiFieldTokenizer,
         fields: list[FieldInfo],
         label_columns: list[LabelColumnInfo] | None = None,
-        collation_strategy: Literal[
-            "sequence_labeling",
-            "sequence_classification",
-            "language_modeling",
-            "multitask",
-        ] = "language_modeling",
         label_dict: dict[str, dict[str, int]] | None = None,
         max_mfi_data_len: int | None = None,
         max_length: int | None = None,
@@ -112,7 +106,7 @@ class MultiFieldCollator:
         self.rda_transform = rda_transform
         self.log_normalize_transform = log_normalize_transform
         self.median_normalization = median_normalization
-        self.collation_strategy = collation_strategy
+
         self.label_dict = label_dict
         self.map_orthologs = map_orthologs
         self.tokenize_kwargs = tokenize_kwargs if tokenize_kwargs is not None else {}
@@ -231,6 +225,27 @@ class MultiFieldCollator:
         logger.warning(f"Unknown label '{val_str}' for column '{col}', using -100.")
         return -100
 
+    def _infer_collation_behavior(self) -> dict[str, bool]:
+        """
+        Infer what to pack based on fields, label_columns, and masker.
+
+        Returns
+        -------
+            dict with keys:
+                - pack_masked_labels: True if masker is present
+                - pack_label_ids: True if label_columns are present
+                - pack_field_labels: True if there are non-input fields (sequence labeling)
+        """
+        return {
+            "pack_masked_labels": self.masker is not None,
+            "pack_label_ids": (
+                self.label_columns is not None
+                and len(self.label_columns) > 0
+                and self.label_dict is not None
+            ),
+            "pack_field_labels": len(self.label_field_names) > 0,
+        }
+
     @property
     def selective_dropout_weights(self):
         return getattr(self.masker, "selective_dropout_weights", None)
@@ -276,13 +291,11 @@ class MultiFieldCollator:
                 if key in examples[0].metadata:
                     batch[key] = [mfi.metadata.get(key) for mfi in examples]
 
-        # TODO: Here we assume that the first multi-field instance of the pair is the one that contains the labels
-        if (
-            self.collation_strategy in ["multitask", "sequence_classification"]
-            and self.label_dict is not None
-            and self.label_columns is not None
-            and len(self.label_columns) > 0
-        ):
+        # Infer behavior instead of checking collation_strategy
+        behavior = self._infer_collation_behavior()
+
+        # Pack label_ids if we have label_columns (classification/multitask)
+        if behavior["pack_label_ids"]:
             batch["label_ids"] = self.read_label_ids(examples)
 
         self._encode_continuous_value_special_tokens(batch, self.fields)
@@ -335,10 +348,11 @@ class MultiFieldCollator:
 
         return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
 
-        # MLM masking / WCED label extraction for language_modeling, multitask
-        # and WCED sequence_labeling
+        # Infer behavior instead of checking collation_strategy
+        behavior = self._infer_collation_behavior()
 
-        if self.masker is not None:
+        # Pack masked labels if masker is present (MLM/WCED)
+        if behavior["pack_masked_labels"]:
             input_ids, labels, attention_mask = self.masker.mask_inputs(
                 self.fields, batch
             )
@@ -349,23 +363,23 @@ class MultiFieldCollator:
                     "attention_mask": attention_mask,
                 }
             )
-        # Sequence labeling labels
-        elif self.collation_strategy == "sequence_labeling":
+        # Pack field labels if there are non-input fields (sequence labeling)
+        elif behavior["pack_field_labels"]:
             special_tokens_mask = batch[self.input_field_names[0]][
                 "special_tokens_mask"
             ].bool()
+            # Only include label fields that actually exist in the batch
             labels = {
-                field: batch[field]["input_ids"] for field in self.label_field_names
+                field: batch[field]["input_ids"]
+                for field in self.label_field_names
+                if field in batch
             }
             for field_labels in labels.values():
                 field_labels[special_tokens_mask] = -100
             return_dict["labels"] = labels
 
-        # Classification labels for sequence_classification and multitask
-        if (
-            self.collation_strategy in ["sequence_classification", "multitask"]
-            and "label_ids" in batch
-        ):
+        # Pack label_ids if we have label_columns (classification/multitask)
+        if behavior["pack_label_ids"] and "label_ids" in batch:
             if "labels" in return_dict:
                 return_dict["labels"].update(batch["label_ids"])
             else:

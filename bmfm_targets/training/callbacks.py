@@ -518,10 +518,11 @@ class CziBenchmarkCallback(pl.Callback):
         # take ground-truth labels from the dataset
         prediction_task_input = MetadataLabelPredictionTaskInput(
             labels=adata_with_embeddings.obs[self.target_column_name],
+            classifiers=["lr"],
             n_folds=self.n_folds,
         )
 
-        # evaluate embeddings against the ground-truth labels using finetuning with classifcal ML classifiers.
+        # evaluate embeddings against the ground-truth labels using fine-tuning with classifcal logistic regression classifier.
         results = label_prediction_task.run(
             cell_representation=adata_with_embeddings.obsm[MODEL_EMBED_KEY],
             task_input=prediction_task_input,
@@ -539,6 +540,9 @@ class CziBenchmarkCallback(pl.Callback):
             aggfunc="mean",
             observed=False,
         )
+        results_table_wide = results_table_wide[
+            ["lr"]
+        ]  # remove the "mean" column cause we asked only the lr classifier
         return results_table_wide
 
 

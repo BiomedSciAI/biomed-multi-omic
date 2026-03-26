@@ -27,7 +27,6 @@ from .config import (
     LlamaConfig,
     LlamaForMaskedLMConfig,
     LlamaForMultiTaskConfig,
-    LlamaForSequenceClassification,
     LlamaWithPoolingHeadConfig,
 )
 
@@ -179,14 +178,19 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_hidden_states: bool | None = None,
+        output_attentions: bool | None = None,  # Added for PEFT compatibility
+        return_dict: bool | None = None,  # Added for PEFT compatibility
     ) -> SequenceClassifierOutputWithEmbeddings:
+        # Llama doesn't support output_attentions, but accept it for PEFT compatibility
+        if output_attentions:
+            raise ValueError("Llama model does not support output_attentions")
         outputs: BaseModelOutputWithPoolingAndCrossAttentions = self.core(
             input_ids,
             attention_mask,
             inputs_embeds,
             output_hidden_states=output_hidden_states,
         )
-        cls_embeddings = outputs.pooler_output
+        pooler_output = outputs.pooler_output
 
         mvc_query_embeddings = {}
         mvc_field_names = {
@@ -203,10 +207,10 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
                 mvc_query_embeddings[field.field_name] = embeds
 
         if len(mvc_query_embeddings) == 0:
-            logits = self.cls(outputs.last_hidden_state, cls_embeddings)
+            logits = self.cls(outputs.last_hidden_state, pooler_output)
         else:
             logits = self.cls(
-                outputs.last_hidden_state, cls_embeddings, mvc_query_embeddings
+                outputs.last_hidden_state, pooler_output, mvc_query_embeddings
             )
 
         return SequenceClassifierOutputWithEmbeddings(
@@ -257,12 +261,13 @@ class LlamaForSequenceClassificationModel(nn.Module, CheckpointMixin, InitWeight
         )
 
 
-register_autoconfig(config_classes=[LlamaForMaskedLMConfig])
+# Register multitask model for both MLM and SeqCls
+# This is correct since multitask models handle both tasks
+register_autoconfig(config_classes=[LlamaForMultiTaskConfig])
 register_automodel_for_maskedLM(
-    config_classes=[LlamaForMaskedLMConfig], lm_classes=[LlamaForMaskedLMModel]
+    config_classes=[LlamaForMultiTaskConfig], lm_classes=[LlamaForMultiTaskModel]
 )
-
 register_automodel_for_sequence_classification(
-    config_classes=[LlamaForSequenceClassification],
-    seq_classes=[LlamaForSequenceClassificationModel],
+    config_classes=[LlamaForMultiTaskConfig],
+    seq_classes=[LlamaForMultiTaskModel],
 )

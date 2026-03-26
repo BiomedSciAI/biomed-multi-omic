@@ -65,7 +65,7 @@ def test_geneformer_collator(geneformer_gene2vec_fields):
             assert instance_input_ids.tolist() != instance_sorted_input_ids.tolist()
 
 
-def test_collator(fields):
+def test_collator(gene2vec_fields):
     seq_len = 116
     batch_size = 16
     n_fields = 2
@@ -79,7 +79,7 @@ def test_collator(fields):
         tokenizer,
         masker=masker,
         pad_to_multiple_of=10,
-        fields=fields,
+        fields=gene2vec_fields,
     )
     data_loader = DataLoader(
         dataset, collate_fn=data_collator, batch_size=batch_size, shuffle=True
@@ -96,7 +96,7 @@ def test_collator(fields):
         )
 
 
-def test_prevent_attention_to_masked(fields):
+def test_prevent_attention_to_masked(gene2vec_fields):
     seq_len = 10
     batch_size = 1
     n_fields = 2
@@ -114,7 +114,7 @@ def test_prevent_attention_to_masked(fields):
         tokenizer,
         masker=masker,
         pad_to_multiple_of=10,
-        fields=fields,
+        fields=gene2vec_fields,
     )
     data_loader = DataLoader(
         dataset, collate_fn=data_collator, batch_size=batch_size, shuffle=True
@@ -135,13 +135,15 @@ def test_prevent_attention_to_masked(fields):
         assert (labels["expressions"] == -100).numpy().mean() > 0
 
 
-def test_collator_no_masking(fields):
+def test_collator_no_masking(gene2vec_fields):
     seq_len = 120
     batch_size = 16
     n_fields = 2
     tokenizer = load_test_tokenizer()
     dataset = generate_dataset(batch_size * 10, seq_len, seq_len, seed=42)
-    data_collator = MultiFieldCollator(tokenizer, pad_to_multiple_of=10, fields=fields)
+    data_collator = MultiFieldCollator(
+        tokenizer, pad_to_multiple_of=10, fields=gene2vec_fields
+    )
     data_loader = DataLoader(
         dataset, collate_fn=data_collator, batch_size=batch_size, shuffle=True
     )
@@ -156,7 +158,7 @@ def test_collator_no_masking(fields):
         )
 
 
-def test_padding_on_samples_of_different_length(test_tokenizer_fields):
+def test_padding_on_samples_of_different_length(gene2vec_fields):
     batch_size = 16
     n_fields = 2
     min_seq_len = 4
@@ -171,7 +173,7 @@ def test_padding_on_samples_of_different_length(test_tokenizer_fields):
         masker=masker,
         padding=PaddingStrategy.LONGEST,
         pad_to_multiple_of=4,
-        fields=test_tokenizer_fields,
+        fields=gene2vec_fields,
     )
     data_loader = DataLoader(
         dataset, collate_fn=data_collator, batch_size=batch_size, shuffle=True
@@ -182,14 +184,14 @@ def test_padding_on_samples_of_different_length(test_tokenizer_fields):
         assert input_ids.shape == (batch_size, n_fields, 12)
 
 
-def test_masking(fields, test_tokenizer_fields_multimask):
+def test_masking(gene2vec_fields, test_tokenizer_fields_multimask):
     seq_len = 120
     batch_size = 16
     tokenizer = load_test_tokenizer()
     dataset = generate_dataset(batch_size * 100, seq_len, seq_len, seed=42)
 
     pre_data_collator = MultiFieldCollator(
-        tokenizer, pad_to_multiple_of=10, fields=fields
+        tokenizer, pad_to_multiple_of=10, fields=gene2vec_fields
     )
 
     masking_masker = Masker(
@@ -211,7 +213,7 @@ def test_masking(fields, test_tokenizer_fields_multimask):
     )
 
     collator = lambda masker: MultiFieldCollator(
-        tokenizer, masker=masker, pad_to_multiple_of=10, fields=fields
+        tokenizer, masker=masker, pad_to_multiple_of=10, fields=gene2vec_fields
     )
 
     comask_fields_collator = lambda masker: MultiFieldCollator(
@@ -316,7 +318,6 @@ def test_sequence_labeling_collator(perturbation_fields_tokenized):
         tokenizer,
         pad_to_multiple_of=10,
         fields=perturbation_fields_tokenized,
-        collation_strategy="sequence_labeling",
     )
     data_loader = DataLoader(
         dataset, collate_fn=data_collator, batch_size=batch_size, shuffle=True
@@ -352,7 +353,6 @@ def test_downsample_sequence_labeling_collator(
         pad_to_multiple_of=2,
         fields=label_expression_fields_gene2vec,
         rda_transform="downsample",
-        collation_strategy="sequence_labeling",
         max_length=16,
     )
     data_loader = DataLoader(
@@ -405,7 +405,6 @@ def test_downsample_language_modeling_collator_batchwise_pad_interleave_half_zer
         tokenizer,
         pad_to_multiple_of=2,
         fields=all_genes_fields_with_rda_regression_masking,
-        collation_strategy="language_modeling",
         pad_zero_expression_strategy={
             "strategy": "batch_wise",
             "interleave_zero_ratio": 0.5,
@@ -494,7 +493,6 @@ def test_hic_collator(snp2vec_fields):
             LabelColumnInfo(label_column_name="hic_contact", is_regression_label=True)
         ],
         label_dict=label_dict,
-        collation_strategy="multitask",
     )
     data_loader = DataLoader(
         dataset, collate_fn=data_collator, batch_size=batch_size, shuffle=True
@@ -568,7 +566,6 @@ def test_sequence_classification_labels_exposed_correctly():
         fields,
         label_dict=label_dict,
         label_columns=labels,
-        collation_strategy="sequence_classification",
     )
     cols = mfc(dataset[:])
     observed_label_ids = {*cols["labels"]["test_label"].numpy()}
@@ -587,7 +584,6 @@ def test_sequence_classification_silent_labels_identified_correctly():
         fields,
         label_dict=label_dict,
         label_columns=labels,
-        collation_strategy="sequence_classification",
     )
     cols = mfc(dataset[:])
     observed_label_ids = {*cols["labels"]["test_label"].numpy()}

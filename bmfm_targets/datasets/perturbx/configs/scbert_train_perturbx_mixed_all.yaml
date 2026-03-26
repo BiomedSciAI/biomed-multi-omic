@@ -42,7 +42,6 @@ data_module:
   max_length: 4096
   sequence_order: random
   batch_size: 20
-  collation_strategy: "sequence_labeling"
   transform_datasets: false
   log_normalize_transform: false
   limit_genes: tokenizer

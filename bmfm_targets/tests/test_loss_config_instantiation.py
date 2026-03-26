@@ -134,6 +134,7 @@ def test_loss_task_properties():
         objective=CrossEntropyObjective(),
         weight=1.0,
         loss_group="test_group",
+        metrics=[{"name": "accuracy"}, {"name": "confusion_matrix"}],
     )
 
     # Bind to set up properties
@@ -148,6 +149,9 @@ def test_loss_task_properties():
     # LabelSource gets decoder_key with suffix from objective
     assert loss_task.decoder_key == "cell_type_token_scores"
     assert loss_task.logit_key == "cell_type_token_scores"  # Alias for decoder_key
+
+    metrics = loss_task.get_metrics()
+    assert metrics is not None
 
 
 def test_regression_objective_output_size():

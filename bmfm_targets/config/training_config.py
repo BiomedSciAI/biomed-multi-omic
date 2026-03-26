@@ -3,9 +3,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytorch_lightning.callbacks
-from peft import (
-    LoraConfig as PeftLoraConfig,
-)
+from peft import LoraConfig as PeftLoraConfig
 
 
 def default_callbacks():
@@ -184,8 +182,10 @@ class TrainerConfig:
             focal_gamma (float) defaults to 2.0
         pooling_method: which pooling method to use to generate embeddings (if requested)
             the options are "pooling_layer", "first_token" or "mean_pooling".
-            Note that "pooling_layer" will only give meaningful output with sequence
-            classification.
+            Default is "first_token" which is always valid.
+            "pooling_layer" should only be used when the pooler has been trained
+            (e.g., from sequence classification checkpoints with label prediction tasks).
+            Pure MLM checkpoints have untrained poolers and should use "first_token".
         batch_prediction_behavior (str|int|None): whether to track batch_predictions, track and dump or
             do not track at all.
               "dump" - dump every batch to disk (uses lots of hd space and lots of memory)
@@ -197,6 +197,28 @@ class TrainerConfig:
 
     """
 
+    def merge_from_checkpoint(
+        self, checkpoint_trainer: "TrainerConfig | None"
+    ) -> "TrainerConfig":
+        """
+        Merge trainer config with checkpoint trainer config.
+
+        Special handling for losses: if yaml.losses is None, inherit from checkpoint.
+        """
+        if not checkpoint_trainer:
+            return self
+
+        if self.losses is None and checkpoint_trainer.losses:
+            from transformers.utils import logging
+
+            logger = logging.get_logger(__name__)
+            logger.info(
+                f"Inheriting {len(checkpoint_trainer.losses)} losses from checkpoint"
+            )
+            self.losses = checkpoint_trainer.losses
+
+        return self
+
     betas: tuple[float, float] = (0.9, 0.99)
     epsilon: float = 1e-8
     learning_rate: float = 1e-4
@@ -204,14 +226,16 @@ class TrainerConfig:
     lr_decay_steps: int | None = None
     warmup_steps: int = 0
     weight_decay: float | None = None
-    pooling_method: str | int = "pooling_layer"
+    pooling_method: str | int = "first_token"
     batch_prediction_behavior: str | int | None = None
     lora_config: Any = None
+    enable_perturbation_metrics: bool = False
 
     def __setstate__(self, state):
         # Handle removed fields from old checkpoints
         state.pop("metrics", None)
         state.pop("batch_size", None)
+        state.setdefault("enable_perturbation_metrics", False)
         self.__dict__.update(state)
 
     def get_lora_config(self) -> LoraConfigWrapper:

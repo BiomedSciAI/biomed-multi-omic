@@ -5,7 +5,6 @@ _target_: bmfm_targets.training.data_module.DataModule
 transform_datasets: false
 processed_name: processed_pass_through
 limit_genes: protein_coding
-collation_strategy: multitask
 log_normalize_transform: true
 dataset_kwargs:
   processed_data_source: ${data_module.data_dir}/h5ad/original.h5ad

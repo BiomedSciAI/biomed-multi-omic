@@ -1516,11 +1516,6 @@ class SCPerformerForMultiTaskModeling(SCPerformerPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
-        cls_embeddings = (
-            outputs.pooler_output
-            if outputs.pooler_output is not None
-            else outputs.last_hidden_state[:, 0, :]
-        )
         pooler_output = self.dropout(outputs.pooler_output)
 
         mvc_query_embeddings = {}
@@ -1537,10 +1532,10 @@ class SCPerformerForMultiTaskModeling(SCPerformerPreTrainedModel):
                 )
                 mvc_query_embeddings[field.field_name] = embeds.squeeze(1)
         if len(mvc_query_embeddings) == 0:
-            logits = self.cls(outputs.last_hidden_state, cls_embeddings)
+            logits = self.cls(outputs.last_hidden_state, pooler_output)
         else:
             logits = self.cls(
-                outputs.last_hidden_state, cls_embeddings, mvc_query_embeddings
+                outputs.last_hidden_state, pooler_output, mvc_query_embeddings
             )
 
         return SequenceClassifierOutputWithEmbeddings(

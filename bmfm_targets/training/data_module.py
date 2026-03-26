@@ -65,12 +65,6 @@ class DataModule(pl.LightningDataModule):
         sequence_order: str | None = None,
         sequence_dropout_factor: int | float | None = None,
         pad_zero_expression_strategy: str | dict | None = None,
-        collation_strategy: Literal[
-            "language_modeling",
-            "sequence_classification",
-            "sequence_labeling",
-            "multitask",
-        ] = "language_modeling",
         mlm: bool = False,
         change_ratio: float = 0.15,
         mask_ratio: float = 1.0,
@@ -169,12 +163,6 @@ class DataModule(pl.LightningDataModule):
             - interleave_zero_ratio (float): Interleave a fixed ratio of zeros
               (0 means first include all nonzero values, 1 means put all zeros first)
             If no strategy is supplied, all zeros will be exposed.
-        collation_strategy : "language_modeling" | "sequence_classification" | "sequence_labeling" | "multitask", optional
-            Strategy for collating samples into batches, by default "language_modeling".
-            - "language_modeling": For masked language modeling and causal language modeling tasks.
-            - "sequence_classification": For classification tasks on entire sequences.
-            - "sequence_labeling": For token-level classification/labeling tasks.
-            - "multitask": For multi-task learning with multiple objectives.
         mlm : bool, optional
             Whether to use masked language modeling, by default False.
         change_ratio : float, optional
@@ -264,7 +252,6 @@ class DataModule(pl.LightningDataModule):
             )
             pad_zero_expression_strategy = {"strategy": pad_zero_expression_strategy}
         self.pad_zero_expression_strategy = pad_zero_expression_strategy
-        self.collation_strategy = collation_strategy
         if isinstance(masking_strategy, partial):
             masking_strategy = masking_strategy(tokenizer=tokenizer)
         self.masking_strategy = masking_strategy
@@ -794,7 +781,6 @@ class DataModule(pl.LightningDataModule):
             fields=self.fields,
             label_columns=self.label_columns,
             truncation=self.truncation,
-            collation_strategy=self.collation_strategy,
             max_mfi_data_len=self.max_mfi_data_len,
             max_length=self.max_length,
             masker=self.masker,
@@ -832,9 +818,6 @@ class PerturbationDataModule(DataModule):
         padding: PaddingStrategy | str | bool = "max_length",
         truncation: TruncationStrategy | bool = True,
         pad_to_multiple_of: int = 16,
-        collation_strategy: Literal[
-            "language_modeling", "sequence_classification", "sequence_labeling"
-        ] = "sequence_labeling",
         limit_dataset_samples: int | Mapping[str, int] | None = None,
         shuffle: bool = False,
         sequence_order: str | None = None,
@@ -862,7 +845,6 @@ class PerturbationDataModule(DataModule):
             padding=padding,
             truncation=truncation,
             pad_to_multiple_of=pad_to_multiple_of,
-            collation_strategy=collation_strategy,
             mlm=False,
             limit_dataset_samples=limit_dataset_samples,
             shuffle=shuffle,
@@ -961,11 +943,6 @@ class DNASeqDataModule(pl.LightningDataModule):
         padding: PaddingStrategy | str | bool = "max_length",
         truncation: TruncationStrategy | bool = True,
         pad_to_multiple_of: int = 16,
-        collation_strategy: Literal[
-            "language_modeling",
-            "sequence_classification",
-            "sequence_labeling",
-        ] = "sequence_classification",
         limit_dataset_samples: int | Mapping[str, int] | None = None,
         sequence_order: str | None = None,
         shuffle: bool = False,
@@ -1019,7 +996,6 @@ class DNASeqDataModule(pl.LightningDataModule):
         self.truncation = truncation
         self.limit_dataset_samples = limit_dataset_samples
         self.sequence_order = sequence_order
-        self.collation_strategy = collation_strategy
         self.train_dataset = None
         self.dev_dataset = None
         self.test_dataset = None
@@ -1332,6 +1308,5 @@ class DNASeqDataModule(pl.LightningDataModule):
             truncation=self.truncation,
             sequence_order=self.sequence_order,
             sequence_dropout_factor=self.sequence_dropout_factor,
-            collation_strategy=self.collation_strategy,
             masker=self.masker,
         )

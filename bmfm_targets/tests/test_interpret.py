@@ -12,7 +12,7 @@ from bmfm_targets.evaluation import interpret
 from bmfm_targets.tasks import task_utils
 from bmfm_targets.tests import helpers
 from bmfm_targets.tokenization import load_tokenizer
-from bmfm_targets.training.modules import SequenceClassificationTrainingModule
+from bmfm_targets.training.modules import MultiTaskTrainingModule
 
 
 def test_interpret_run(pl_data_module_zheng68k_seq_cls):
@@ -61,7 +61,6 @@ def test_interpret_run_regression(gene2vec_fields):
         fields=gene2vec_fields,
         label_columns=label_columns,
         mlm=False,
-        collation_strategy="sequence_classification",
         batch_size=1,
         max_length=32,
         limit_dataset_samples=3,
@@ -150,7 +149,6 @@ def prepare_interpret_run_on_fresh_model(pl_data_module_zheng68k_seq_cls):
         tokenizer=tokenizer,
         fields=pl_data_module_zheng68k_seq_cls.fields,
         label_columns=pl_data_module_zheng68k_seq_cls.label_columns,
-        collation_strategy="sequence_classification",
         batch_size=1,
         max_length=32,
         limit_dataset_samples=3,
@@ -228,7 +226,7 @@ def test_instantiate_module_from_seq_cls_ckpt(zheng_seq_cls_ckpt):
         tokenizer=tokenizer,
         weights_only=False,
     )
-    seq_cls_module = SequenceClassificationTrainingModule.load_from_checkpoint(
+    seq_cls_module = MultiTaskTrainingModule.load_from_checkpoint(
         zheng_seq_cls_ckpt, weights_only=False
     )
     attr_model = module.model
@@ -308,7 +306,6 @@ def test_interpret_run_using_different_data_from_ckpt(
         max_length=8,
         pad_to_multiple_of=2,
         limit_dataset_samples=3,
-        collation_strategy="sequence_classification",
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         task_config = config.InterpretTaskConfig(
@@ -347,7 +344,6 @@ def test_interpret_run_from_seq_cls_multitask_ckpt(sciplex3_seqcls_mt_model_and_
         max_length=8,
         pad_to_multiple_of=2,
         limit_dataset_samples={"train": 2, "dev": 2, "predict": 3},
-        collation_strategy="sequence_classification",
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         task_config = config.InterpretTaskConfig(
@@ -386,7 +382,6 @@ def test_interpret_run_from_multitask_ckpt(sciplex3_mt_model_and_ckpt):
         max_length=8,
         pad_to_multiple_of=2,
         limit_dataset_samples={"train": 2, "dev": 2, "predict": 3},
-        collation_strategy="multitask",
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         task_config = config.InterpretTaskConfig(

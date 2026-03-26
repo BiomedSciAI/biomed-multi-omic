@@ -100,8 +100,6 @@ def test_mse_loss(batch_size, sequence_len):
 
 
 class MetricsTestingTrainingModule(BaseTrainingModule):
-    MODELING_STRATEGY = "multitask"
-
     def training_step(self, batch, batch_idx):
         labels = batch["labels"]
         outputs = batch["outputs"]

@@ -6,7 +6,6 @@ data_module:
   _partial_: true
   num_workers: 8
   mlm: true
-  collation_strategy: multitask
   shuffle: true
   change_ratio: 0.3
   mask_ratio: 0.95

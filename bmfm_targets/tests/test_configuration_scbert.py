@@ -9,17 +9,11 @@ from bmfm_targets import config
 from bmfm_targets.config.main_config import get_label_output_size_for_model_config
 from bmfm_targets.datasets.cellxgene import CellXGeneDataModule
 from bmfm_targets.datasets.panglaodb import PanglaoDBDataModule
-from bmfm_targets.datasets.zheng68k import Zheng68kDataModule
 from bmfm_targets.models import get_model_from_config
-from bmfm_targets.models.predictive import scbert, scnystromformer, scperformer
+from bmfm_targets.models.predictive import scbert
 from bmfm_targets.models.predictive.layers import GradientReversal
 from bmfm_targets.tests import helpers
 from bmfm_targets.tokenization import get_gene2vec_tokenizer
-from bmfm_targets.training.modules import (
-    MLMTrainingModule,
-    SequenceClassificationTrainingModule,
-    get_training_module_class_for_data_module,
-)
 
 
 @pytest.fixture()
@@ -74,76 +68,6 @@ def test_can_dump_config_to_json(all_model_configs):
     for model_config in all_model_configs:
         with tempfile.NamedTemporaryFile("w") as f:
             model_config.to_json_file(f.name)
-
-
-def test_can_choose_correct_sc_performer_model(sc_performer_config):
-    mlm_model = get_model_from_config(sc_performer_config, modeling_strategy="mlm")
-    seq_cls_model = get_model_from_config(sc_performer_config, modeling_strategy="mlm")
-    seq_label_model = get_model_from_config(
-        sc_performer_config, modeling_strategy="sequence_labeling"
-    )
-    seq_cls_model = get_model_from_config(
-        sc_performer_config, modeling_strategy="sequence_classification"
-    )
-    assert isinstance(mlm_model, scperformer.SCPerformerForMaskedLM)
-    assert isinstance(seq_cls_model, scperformer.SCPerformerForSequenceClassification)
-    assert isinstance(seq_label_model, scperformer.SCPerformerForSequenceLabeling)
-
-
-def test_can_choose_correct_scbert_model(sc_bert_config):
-    mlm_model = get_model_from_config(sc_bert_config, modeling_strategy="mlm")
-    seq_cls_model = get_model_from_config(
-        sc_bert_config, modeling_strategy="sequence_classification"
-    )
-    seq_label_model = get_model_from_config(
-        sc_bert_config, modeling_strategy="sequence_labeling"
-    )
-
-    assert isinstance(mlm_model, scbert.SCBertForMaskedLM)
-    assert isinstance(seq_cls_model, scbert.SCBertForSequenceClassification)
-    assert isinstance(seq_label_model, scbert.SCBertForSequenceLabeling)
-
-
-def test_can_choose_correct_scnystromformer_model(sc_nystromformer_config):
-    mlm_model = get_model_from_config(sc_nystromformer_config, modeling_strategy="mlm")
-    seq_cls_model = get_model_from_config(
-        sc_nystromformer_config, modeling_strategy="sequence_classification"
-    )
-    seq_label_model = get_model_from_config(
-        sc_nystromformer_config, modeling_strategy="sequence_labeling"
-    )
-
-    assert isinstance(mlm_model, scnystromformer.SCNystromformerForMaskedLM)
-    assert isinstance(
-        seq_cls_model, scnystromformer.SCNystromformerForSequenceClassification
-    )
-    assert isinstance(
-        seq_label_model, scnystromformer.SCNystromformerForSequenceLabeling
-    )
-
-
-def test_can_choose_training_module_for_data_module(fields, label_columns):
-    mlm_data_module = Zheng68kDataModule(
-        tokenizer=get_gene2vec_tokenizer(),
-        fields=fields,
-        collation_strategy="language_modeling",
-        mlm=True,
-        transform_datasets=False,
-    )
-
-    classification_data_module = Zheng68kDataModule(
-        tokenizer=get_gene2vec_tokenizer(),
-        fields=fields,
-        label_columns=label_columns,
-        collation_strategy="sequence_classification",
-        transform_datasets=False,
-    )
-    mlm_training_module = get_training_module_class_for_data_module(mlm_data_module)
-    assert mlm_training_module == MLMTrainingModule
-    classification_training_module = get_training_module_class_for_data_module(
-        classification_data_module
-    )
-    assert classification_training_module == SequenceClassificationTrainingModule
 
 
 def test_can_derive_output_size_scbert_config(
@@ -275,7 +199,7 @@ def test_instantiate_model_with_continuous_value_encoder():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
     from bmfm_targets.models.predictive.layers import (
         ContinuousValueEncoderWithSpecialTokenEmbeddings,
     )
@@ -317,7 +241,7 @@ def test_instantiate_model_with_scale_adapt_encoder():
         num_attention_heads=2,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
     from bmfm_targets.models.predictive.layers import (
         ScaleAdaptEncoder,
     )
@@ -351,15 +275,17 @@ def test_instantiate_model_with_is_zero_decoder():
         intermediate_size=32,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
 
     # we want 1d output for this, just like regression
     assert (
-        model.cls.predictions.decoder.field_decoders.expressions_is_zero.weight.shape[0]
+        model.cls.predictions.predictions.decoder.field_decoders.expressions_is_zero.weight.shape[
+            0
+        ]
         == 1
     )
     assert (
-        model.cls.predictions.decoder.field_decoders.expressions_regression.weight.shape[
+        model.cls.predictions.predictions.decoder.field_decoders.expressions_regression.weight.shape[
             0
         ]
         == 1
@@ -392,7 +318,7 @@ def test_instantiate_model_with_zero_as_special_token():
         intermediate_size=32,
         fields=fields,
     )
-    model = scbert.SCBertForMaskedLM(model_config)
+    model = scbert.SCBertForMultiTaskModeling(model_config)
 
     # we want 1d output for this, just like regression
     assert (
@@ -408,7 +334,30 @@ def test_instantiate_model_with_zero_as_special_token():
     assert (output[0][1] == output[1][2]).all()
 
 
-def test_instantiate_gradient_reversal_layer(all_genes_fields):
+def test_instantiate_gradient_reversal_layer():
+    # Inline all_genes_fields
+    from bmfm_targets.tokenization import get_all_genes_tokenizer
+
+    field_dicts = [
+        {
+            "field_name": "genes",
+            "pretrained_embedding": None,
+            "is_masked": False,
+            "vocab_update_strategy": "static",
+        },
+        {
+            "field_name": "expressions",
+            "pretrained_embedding": None,
+            "is_masked": True,
+            "vocab_update_strategy": "static",
+            "decode_modes": ["token_scores"],
+        },
+    ]
+    all_genes_fields = [config.FieldInfo(**fd) for fd in field_dicts]
+    tokenizer = get_all_genes_tokenizer()
+    for field in all_genes_fields:
+        field.update_vocab_size(tokenizer)
+
     cat_grl_coef = 0.1
     reg_grl_coef = 0.2
     label_columns = [
@@ -428,7 +377,7 @@ def test_instantiate_gradient_reversal_layer(all_genes_fields):
     model_config = config.SCBertConfig(
         fields=all_genes_fields, label_columns=label_columns
     )
-    model = get_model_from_config(model_config, modeling_strategy="multitask")
+    model = get_model_from_config(model_config)
 
     decoders = model.cls.label_predictions.predictions.label_decoders
     assert isinstance(decoders["bad_cat_label"].decoder[0], GradientReversal)
