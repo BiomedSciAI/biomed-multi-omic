@@ -111,25 +111,25 @@ jobs:
         rm -rf ~/.cache/huggingface/hub/models--ibm-research--biomed.rna.bert.110m.wced.v1
 
     # Mar 2026 new MLM+Multitask checkpoint tests (inference, finetune)
-    - name: Test thrumbel MLM+Multitask (inference, finetune)
+    - name: Test LLaMa MLM+Multitask (inference, finetune)
       run: |
         # inference
-        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.max_length=256 checkpoint=thrumbel/biomed.rna.llama.110m.mlm.multitask.v1-test task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
+        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.max_length=256 checkpoint=ibm-research/biomed.rna.llama.35m.mlm.multitask.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
         rm -rf /tmp/runs/*
         # finetune
-        bmfm-targets-run -cd run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=thrumbel/biomed.rna.llama.110m.mlm.multitask.v1-test accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false
+        bmfm-targets-run -cd run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=ibm-research/biomed.rna.llama.35m.mlm.multitask.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false
         rm -rf /tmp/runs/*
         # clear checkpoint from cache
-        rm -rf ~/.cache/huggingface/hub/models--thrumbel--biomed.rna.llama.110m.mlm.multitask.v1-test
+        rm -rf ~/.cache/huggingface/hub/models--ibm-research--biomed.rna.llama.35m.mlm.multitask.v1
 
     # Mar 2026 new WCED+Multitask checkpoint tests (inference, finetune)
-    - name: Test thrumbel WCED+Multitask (inference, finetune)
+    - name: Test LLaMa WCED+Multitask (inference, finetune)
       run: |
         # inference
-        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.max_length=256 checkpoint=thrumbel/biomed.rna.llama.110m.wced.multitask.v1-test task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
+        bmfm-targets-run -cd run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp/runs data_module.max_length=256 checkpoint=ibm-research/biomed.rna.llama.35m.wced.multitask.v1 task.accelerator=cpu task.precision=32 data_module.log_normalize_transform=false
         rm -rf /tmp/runs/*
         # finetune
-        bmfm-targets-run -cd run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=thrumbel/biomed.rna.llama.110m.wced.multitask.v1-test accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false
+        bmfm-targets-run -cd run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp/runs checkpoint=ibm-research/biomed.rna.llama.35m.wced.multitask.v1 accelerator=cpu data_module.max_length=256 max_epochs=2 val_check_interval=null data_module.num_workers=0 data_module.log_normalize_transform=false
         rm -rf /tmp/runs/*
         # clear checkpoint from cache
-        rm -rf ~/.cache/huggingface/hub/models--thrumbel--biomed.rna.llama.110m.wced.multitask.v1-test
+        rm -rf ~/.cache/huggingface/hub/models--ibm-research--biomed.rna.llama.35m.wced.multitask.v1
