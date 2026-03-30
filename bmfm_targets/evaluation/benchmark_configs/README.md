@@ -8,14 +8,82 @@ Ensure that you have installed the package before running the commands. It is as
 
 ## Usage
 
-To run the benchmark, use:
+### Single Checkpoint Run
+
+Run benchmarks for a single checkpoint with command-line arguments:
 
 ```bash
-#if running from repo root
-bash bmfm_targets/evaluation/benchmark_configs/benchmark_run.sh
+# Basic usage
+bash bmfm_targets/evaluation/benchmark_configs/benchmark_run.sh \
+  --name=my_model \
+  --ckpt=/path/to/checkpoint.ckpt
+
+# With options
+bash bmfm_targets/evaluation/benchmark_configs/benchmark_run.sh \
+  --name=my_model \
+  --ckpt=/path/to/checkpoint.ckpt \
+  --rda=true \
+  --pooling=[0,1] \
+  --tag=custom_run \
+  --do_zs=true \
+  --do_ft=false \
+  --extra_args="data_module.max_length=4096"
 ```
 
+**Options:**
+- `--name`: Model identifier for ClearML tracking
+- `--ckpt`: Path to checkpoint file
+- `--rda`: Enable RDA transform (true/false, default: false)
+- `--pooling`: Pooling method (e.g., 0, 1, [0,1], [0,1,2])
+- `--tag`: Tag for ClearML project naming
+- `--do_zs`: Run zero-shot evaluation (default: true)
+- `--do_ft`: Run fine-tuning (default: false)
+- `--extra_args`: Additional bmfm-targets-scbert arguments
+
+### Multiple Checkpoints from CSV
+
+Automated workflow for managing and benchmarking multiple checkpoints:
+
+1. **Update checkpoint tracking**: Scan directories and update `ckpts.csv`:
+   ```bash
+   python bmfm_targets/evaluation/benchmark_configs/update_ckpts_from_runs.py [OPTIONS]
+   ```
+
+   **Options:**
+   - `--dry-run`: Preview changes without updating CSV
+   - `--preserve-benchmarking-flag`: Keep `run_benchmarking_on_updates` flag for unchanged checkpoints
+   - `--csv-path FILE`: Path to ckpts.csv (default: ./ckpts.csv)
+   - `--runs-dir DIR [DIR ...]`: Checkpoint directories to scan (can specify multiple)
+
+   This discovers new/updated checkpoints by comparing versions and timestamps, extracts metadata from `llama_train.yaml` configs, and sets `run_benchmarking_on_updates=1` for changed checkpoints.
+
+2. **Run benchmarks**: Process checkpoints marked for benchmarking:
+   ```bash
+   bash bmfm_targets/evaluation/benchmark_configs/run_benchmarks_from_csv.sh
+   ```
+
+   This iterates through `ckpts.csv` and runs benchmarks for entries where `run_benchmarking_on_updates=1`. Provides interactive confirmation ([y]es/[n]o/[a]ll/[q]uit) before running each benchmark.
+
+**CSV Format (`ckpts.csv`):**
+- `name`: Checkpoint identifier
+- `folder`: Checkpoint folder path
+- `ckpt_path`: Relative path to checkpoint file (e.g., data/last-v2.ckpt)
+- `ckpt_timestamp`: File modification timestamp
+- `config_path`: Path to training config (llama_train.yaml)
+- `hidden_size`: Model hidden dimension (384/768)
+- `max_length`: Maximum sequence length (1024/4096/8192)
+- `has_decode_from_1`: Pooling method flag (0/1)
+- `is_rda`: RDA transform flag (0/1)
+- `is_logn`: Log normalization flag (0/1)
+- `for_benchmarking`: General benchmarking flag (0/1)
+- `run_benchmarking_on_updates`: Auto-set to 1 when checkpoint updates (0/1)
+- `comments`: Optional notes
+
+The workflow automatically detects checkpoint updates by comparing version numbers (last.ckpt < last-v1.ckpt < last-v2.ckpt) and timestamps. See `update_ckpts_from_runs.py` docstring for detailed logic.
+
 ## Instructions
+
+### Single Checkpoint Configuration
 
 When a new checkpoint is obtained, modify the `bmfm_targets/evaluation/benchmark_configs/config.yaml` fields:
 - `checkpoint_path` path to ckpt file eg `/dccstor/bmfm-targets/models/omics/transcriptome/scRNA/pretrain/bmfm.targets.slate.bert.110m.scRNA.RDA.v1/last-v3.ckpt`
@@ -27,9 +95,10 @@ In `benchmark_run.sh` choose a way to launch your job by modifying the `PREFIX_C
 ### Key Configuration Details
 
 - The benchmarks run sequence classification (train and test) and embedding generation, using the main entry point for the scRNA foundation model, `bmfm-targets-scbert`.
-- Tasks will be created in ClearML `bmfm-targets/evaluation/{checkpoint_name}/${DATASET}ft` and ` bmfm-targets/evaluation/{checkpoint_name}/${DATASET}zero_shot`
-- If a job fails, users should check the ClearML dashboard for logs and debugging information.
-- Checkpoints can be overwritten; but note that the test runs that require the ckpts are run in the same session so the user does not need to keep track of them.
+- For the predict task, model settings are removed (`~model`) so everything is loaded from the checkpoint.
+- Tasks will be created in ClearML: `bmfm-targets/evaluation/{checkpoint_name}/{TIMESTAMP}_{TAG}/{DATASET}_ft` and `bmfm-targets/evaluation/{checkpoint_name}/{TIMESTAMP}_{TAG}/{DATASET}_zero_shot`
+- If a job fails, check the ClearML dashboard for logs and debugging information.
+- Checkpoints can be overwritten; test runs that require checkpoints are run in the same session so users don't need to track them separately.
 
 ## Managing Datasets
 

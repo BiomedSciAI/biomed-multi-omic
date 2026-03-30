@@ -1,0 +1,2 @@
+_target_: bmfm_targets.config.TokenizerConfig
+identifier: protein_coding

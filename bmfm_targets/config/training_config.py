@@ -132,17 +132,23 @@ class InterpretTaskConfig(BaseTaskConfig):
 
 @dataclass
 class LoraConfigWrapper:
-    r: int = 8
-    lora_alpha: int = 16
-    target_modules: list[str] | None = field(
-        default_factory=lambda: ["query", "key", "value", "dense"]
-    )
-    lora_dropout: float = 0.1
+    r: int = 16  # Increased default rank for bio-data complexity
+    lora_alpha: int = 32
+    target_modules: list[str] | None = None
+    lora_dropout: float = 0.05
     bias: Literal["none", "all", "lora_only"] = "none"
     task_type: str = "SEQ_CLS"
-    use_dora: bool = False
+    use_dora: bool = True  # Enable DoRA by default
+    layers_to_transform: list[int] | int | None = None
+    layers_pattern: list[str] | str | None = None
 
     def to_peft_config(self) -> PeftLoraConfig:
+        """Convert to a PeftLoraConfig."""
+        if self.target_modules is None:
+            raise ValueError(
+                "target_modules cannot be None. Please specify a model preset (scbert, llama, scmodernbert) or explicit modules."
+            )
+
         return PeftLoraConfig(
             r=self.r,
             lora_alpha=self.lora_alpha,
@@ -151,6 +157,8 @@ class LoraConfigWrapper:
             bias=self.bias,
             task_type=self.task_type,
             use_dora=self.use_dora,
+            layers_to_transform=self.layers_to_transform,
+            layers_pattern=self.layers_pattern,
         )
 
 
@@ -226,7 +234,7 @@ class TrainerConfig:
     lr_decay_steps: int | None = None
     warmup_steps: int = 0
     weight_decay: float | None = None
-    pooling_method: str | int = "first_token"
+    pooling_method: Any = "first_token"
     batch_prediction_behavior: str | int | None = None
     lora_config: Any = None
     enable_perturbation_metrics: bool = False
@@ -240,13 +248,30 @@ class TrainerConfig:
 
     def get_lora_config(self) -> LoraConfigWrapper:
         if isinstance(self.lora_config, str):
-            if self.lora_config == "default":
-                return LoraConfigWrapper()
+            if self.lora_config in ["scbert", "default"]:
+                # SCBert (Standard BERT-like naming)
+                return LoraConfigWrapper(
+                    target_modules=["query", "key", "value", "dense"]
+                )
+
             elif self.lora_config == "llama":
-                return LoraConfigWrapper(target_modules=["c_attn", "proj"])
+                # Llama (Custom Biomed implementation)
+                # c_attn = QKV, proj = Output
+                # c_fc1/c_fc2 = Gate/Value, c_proj = Output
+                return LoraConfigWrapper(
+                    target_modules=["c_attn", "proj", "c_fc1", "c_fc2", "c_proj"]
+                )
+
+            elif self.lora_config == "scmodernbert":
+                # SCModernBert
+                # Wqkv = QKV, Wo = Output (shared name for Attention and MLP output)
+                # Wi = MLP Input/Gate
+                return LoraConfigWrapper(target_modules=["Wqkv", "Wo", "Wi"])
+
             else:
                 raise ValueError(
-                    f"Unknown string value for lora_config: {self.lora_config}"
+                    f"Unknown string value for lora_config: {self.lora_config}. "
+                    "Available presets: 'scbert', 'llama', 'scmodernbert'."
                 )
         elif isinstance(self.lora_config, LoraConfigWrapper):
             return self.lora_config

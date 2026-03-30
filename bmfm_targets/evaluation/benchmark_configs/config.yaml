@@ -1,7 +1,7 @@
 defaults:
   - data_module: sceval_default
-  - tokenizer: all_genes
-  - fields: genes_expressions_wced
+  - tokenizer: protein_coding
+  - fields: genes_expressions_cve_scale_adapt
   - trainer: default
   - task: train
   - model: llama_384
@@ -26,13 +26,14 @@ trainer:
          average: macro
        - name: confusion_matrix
   # for rda models this should be set to `first_token`, for multitask 'pooling_layer' or 'mean_pooling'
-  pooling_method: pooling_layer
-  batch_prediction_behavior: track
+  pooling_method: 0
+
 
 track_clearml:
-  project_name: "bmfm-targets/evaluate/${checkpoint_name}"
+  project_name: "bmfm-targets/evaluate/${checkpoint_name}/${project_name_tag}"
   task_name: "${data_module.dataset_name}_ft"
   continue_last_task: False
+  reuse_last_task_id: False
 
 # to adapt all of the dataset input to the ckpt modify this section
 # in general it should match the pretraining config except for masking settings
@@ -46,7 +47,8 @@ data_module:
 max_finetuning_epochs: 10
 
 dataset_name: "" # do not modify, set by script
-checkpoint_path: /proj/bmfm/users/vgurev/runs/main_runs/llama/data/last-v1.ckpt
-checkpoint_name: llama_medium_cell_ontology_zuvela
+checkpoint_path: /proj/bmfm/users/vgurev/runs/main_runs/fin/protein_coding/balanced/768/wced_multitask/data/last.ckpt
+checkpoint_name: fin_protein_coding_balanced_768_wced_multitask
 # checkpoint_name: multitask_cellxgene
 output_directory: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/benchmarking
+project_name_tag: "" #override by script, eg to some specical_test_name or timestamp

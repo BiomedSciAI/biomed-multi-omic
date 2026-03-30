@@ -421,12 +421,16 @@ def train(
         getattr(pl_trainer, "callbacks", None) or []
     ) + pl_data_module.get_trainer_callbacks()
 
-    pl_trainer.fit(
-        model=pl_module,
-        datamodule=pl_data_module,
-        ckpt_path=checkpoint_path,
-        weights_only=False,
-    )
+    kwargs = {
+        "model": pl_module,
+        "datamodule": pl_data_module,
+        "ckpt_path": checkpoint_path,
+    }
+    # handle pytorch-lightning >=2.6.0 which requires weights_only and earlier which
+    # cannot have it as an arg
+    if "weights_only" in pl_trainer.test.__annotations__:
+        kwargs["weights_only"] = False
+    pl_trainer.fit(**kwargs)
 
 
 def test(
@@ -704,11 +708,20 @@ def start_clearml_logger(
     """
     if should_start_clearml_logger():
         try:
+            # Strip trailing slashes from project_name to avoid ClearML conflicts
+            if project_name:
+                project_name = project_name.rstrip("/")
+
+            # Automatically add LSF job information as tags if running under LSF
+            tags_list = list(tags) if tags else []
+            lsf_job_id = os.environ.get("LSB_JOBID")
+            if lsf_job_id:
+                tags_list.append(f"jobid:{lsf_job_id}")
             task = Task.init(
                 project_name=project_name,
                 task_name=task_name,
                 task_type=task_type,
-                tags=tags,
+                tags=tags_list if tags_list else None,
                 reuse_last_task_id=reuse_last_task_id,
                 continue_last_task=continue_last_task,
                 output_uri=output_uri,

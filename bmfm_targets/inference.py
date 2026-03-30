@@ -82,6 +82,8 @@ def inference(
     device: str = "auto",
     copy: bool = False,
     output_dir: str | None = None,
+    pooling_method: str | int | list[int | str] | None = None,
+    log_normalize_transform: bool = True,
     **kwargs,
 ) -> AnnData:
     """
@@ -118,6 +120,21 @@ def inference(
         Whether to return a copy of adata or modify in place. Default is False (in-place).
     output_dir : str, optional
         Directory for temporary outputs. If None, uses current directory.
+    pooling_method : str | int | list[int | str], optional
+        Pooling method for extracting embeddings. If None, uses the method from the
+        checkpoint's trainer_config. Options:
+        - "first_token": Use CLS token at position 0 (safe default for MLM checkpoints)
+        - "pooling_layer": Use trained pooler layer (only for checkpoints with trained pooler)
+        - "mean_pooling": Average all tokens except CLS
+        - int: Use token at specific position (e.g., 0 for first CLS, 1 for second position)
+        - list[int | str]: Concatenate embeddings from multiple methods
+            Examples:
+            * [0, 1, 2] - Concatenate positions 0, 1, and 2
+            * ["pooling_layer", "mean_pooling"] - Concatenate pooler and mean pooling
+            * [0, "pooling_layer", 1] - Mix positions and pooling methods
+        Default is None (use checkpoint's setting).
+    log_normalize_transform : bool, optional
+        Whether to apply log normalization transform to the embeddings. Default is False.
     **kwargs
         Additional arguments (reserved for future use)
 
@@ -192,6 +209,7 @@ def inference(
             mlm=False,
             data_dir=None,
             transform_datasets=False,
+            log_normalize_transform=log_normalize_transform,
         )
         data_module.setup("predict")
 
@@ -211,6 +229,11 @@ def inference(
         pl_module = task_utils.instantiate_module_from_checkpoint(
             task_config, data_module, trainer_config=None
         )
+
+        # Override pooling_method if user specified one
+        if pooling_method is not None:
+            logger.info(f"Using user-specified pooling_method: {pooling_method}")
+            pl_module.trainer_config.pooling_method = pooling_method
 
         logger.info("Running inference...")
         results = task_utils.predict(pl_trainer, pl_module, data_module)
@@ -247,7 +270,7 @@ def _add_results_to_adata(
         if "predictions" not in key:
             continue
 
-        if key == "donor_id_predictions" and not debug:
+        if key in ["donor_id_predictions", "sex_predictions"] and not debug:
             continue
 
         print(f"{key=}")
