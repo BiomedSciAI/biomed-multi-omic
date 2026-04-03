@@ -6,7 +6,7 @@ declare -a label_column_names=("label" "label" "label" "label" "label" "mean_val
 EST_TIME=$(TZ="America/New_York" date +"%Y%m%d_%H%M")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 TOKENIZER="snp2vec"
-BS=64
+BS=32
 LEARNING_RATE=0.0001
 MODEL_PE=128
 MODEL_WD=0.01
@@ -19,8 +19,8 @@ CHKPT_REFS=(
 #   "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=5-step=119340-val_loss=4.47.ckpt\'"
 #   "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=10-step=218790-val_loss=4.41.ckpt\'"
 #   "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=15-step=318240-val_loss=4.36.ckpt\'"
-    "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=21-step=437580-val_loss=4.31.ckpt\'"
-    #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+#    "\'/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/ref_snp_hic_3celllines_v2/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+    "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
 )
 
 
@@ -92,7 +92,7 @@ for ind in "${!CHKPT_REFS[@]}"; do
         # Set Dataset_name to default dataset
         DATASET_NAME=$DATASET
         if [[ "$DATASET" == 'tf' || "$DATASET" == 'promoter' ]]; then
-            for fold in  "fold5"; do
+            for fold in "fold5"; do
                 for version in "ref_genome"; do
                     DATASET_NAME="${DATASET}_${fold}_${version}"
                     #rm -rf $OUTPUT_DIR/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}

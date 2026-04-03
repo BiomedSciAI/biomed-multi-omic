@@ -1,5 +1,5 @@
 declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
-declare -a datasets=("snv_TeWhey" )
+declare -a datasets=("snv_Tewhey" )
 declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
 declare -a label_column_names=("mean_value")
 
@@ -140,8 +140,8 @@ for i in "${!datasets[@]}"; do
         done
     elif [ "$DATASET" == "snv_Tewhey" ]; then
         SPLIT_TYPE="split_Gosai_and_mpra"
-        for cell in 'K562' ; do
-            fold="${cell}_snpified_v3_ref_gen"
+        for cell in 'HEPG2' ; do
+            fold="${cell}_original" #"${cell}_snpified_v3_ref_gen"
             INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/snv_mpra_Tewhey/${SPLIT_TYPE}/${fold}"
             DATASET_NAME=${DATASET}_${SPLIT_TYPE}_${fold}
             LABEL_COLUMN_NAME="${cell}_log2FC"

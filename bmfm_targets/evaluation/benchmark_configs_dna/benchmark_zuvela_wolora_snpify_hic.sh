@@ -1,20 +1,21 @@
-declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
-#declare -a datasets=("mpra" )
+#declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
+declare -a datasets=("snv_Tewhey" )
 declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
 #declare -a label_column_names=("mean_value")
 
 EST_TIME=$(TZ="America/New_York" date +"%Y%m%d_%H%M")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 TOKENIZER="snp2vec"
-BS=32
+BS=64
 LEARNING_RATE=0.0001
 MODEL_PE=128
 MODEL_WD=0.01
 MODEL="modernbert" # Makesure it is passed on config.yaml as MODEL
-MODEL_NAME="modernbert" # by default is wo_lora...
-CHKPT_NAME="hic_3Cells_v4.5"  #"genome_hic_hepg2_multi_v3.5" # Used for naming output directory and clearml project
+MODEL_NAME="modernbert_wo_lora" # by default is wo_lora...
+CHKPT_NAME="hic_3Cells_v5.5"  #"genome_hic_hepg2_multi_v3.5" # Used for naming output directory and clearml project
 
-CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/old_ref_snp_hic_3celllines/backup_ckpt/epoch=5-step=119340-val_loss=4.43.ckpt\'"
+CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+# CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/old_ref_snp_hic_3celllines/backup_ckpt/epoch=5-step=119340-val_loss=4.43.ckpt\'" This is for version 4.5
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=18-step=138282-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=17-step=131004-val_loss=4.40.ckpt\'"
@@ -36,7 +37,7 @@ EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump"
 # set PREFIX_CMD to "jbsub -q x86_6h -cores 8+1 -mem 50g" or similar to submit on CCC
 # set PREFIX_CMD to a session-manager-ccc call with the command as a variable to be parsed
 # set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-run print the resolved yaml without running the code
-PREFIX_CMD="bsub -M 30G -n 16 -W 12:00 -gpu num=1:mode=exclusive_process "
+PREFIX_CMD="bsub -M 50G -n 16 -W 24:00 -gpu num=1:mode=exclusive_process "
 SUFFIX_CMD="" #  +trainer.lora_config=default" #"--cfg job --resolve"
 for i in "${!datasets[@]}"; do
     DATASET=${datasets[i]}
@@ -149,7 +150,39 @@ for i in "${!datasets[@]}"; do
                     "bash -c \"${CMD_STR} $SUFFIX_CMD \"";
             done
         done
-
+    elif [ "$DATASET" == "snv_Tewhey" ]; then
+        for SPLIT_TYPE in "split_Gosai_and_mpra" "split_Gosai_minus_mpratest"; do
+            for cell in 'HEPG2' 'K562'; do
+                if [ "$cell" == "K562" ]; then
+                    fold="${cell}_snpified_v3_ref_gen"
+                elif [ "$cell" == "HEPG2" ]; then
+                    fold="${cell}_original"
+                fi
+                INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/snv_mpra_Tewhey/${SPLIT_TYPE}/${fold}"
+                DATASET_NAME=${DATASET}_${SPLIT_TYPE}_${fold}
+                LABEL_COLUMN_NAME="${cell}_log2FC"
+                mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
+                $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
+                -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
+                "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                                label_columns=mpra \
+                                batch_size=$BS \
+                                tokenizer=$TOKENIZER \
+                                data_module=$DATASET  trainer=regression task=train model=$MODEL\
+                                max_finetuning_epochs=7 \
+                                dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
+                                model_name=$MODEL_NAME \
+                                model_pe=$MODEL_PE \
+                                model_wd=$MODEL_WD \
+                                checkpoint_path=$CHKPT_REF \
+                                checkpoint_name=$CHKPT_NAME \
+                                learning_rate=$LEARNING_RATE \
+                                input_directory=$INPUT_DIR \
+                                output_directory=$OUTPUT_DIR \
+                                extra_tag=$EXTRA_TAG \
+                $SUFFIX_CMD\""
+            done
+        done
     else
         mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
         $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
