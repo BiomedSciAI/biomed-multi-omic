@@ -65,7 +65,7 @@ CHKPT_REFS=(
 #     "\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x/backup_ckpt/epoch=8-step=196587-val_loss=4.34.ckpt\'"
 # )
 
-OUTPUT_DIR="/proj/bmfm/users/sanjoy/benchmarking/${CHKPT_NAME}"
+OUTPUT_DIR="/dccstor/bmfm-targets1/users/sanjoy/benchmarking/${CHKPT_NAME}" #"/proj/bmfm/users/sanjoy/benchmarking/${CHKPT_NAME}"
 EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump" # This can be used for saving benchmarking and also clearml logging
 
 # project_name: "bmfm-targets/evaluate_dna/${model_name}_${CHKPT_NAME}${extra_tag}"
