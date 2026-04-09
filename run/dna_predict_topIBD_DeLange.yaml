@@ -35,13 +35,34 @@ trainer:
       label_column_name: ${label_columns[0].label_column_name}
 
 
+# First setup of Feb5th
+# accelerator: cpu
+# working_dir: /proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump_predict
+# checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise_K562/epoch=3-step=73167-val_loss=0.56.ckpt'
 
+# working_dir: /proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump_predict
+# checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise_K562/epoch=3-step=73167-val_loss=0.56.ckpt'
+
+# batch_size: 32
+# dataset_name: topIBD_overlapped_203
+# label_column_name: K562_label
+# input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/IBD_De_Lange/
+# input_filename: "topIBD_overlapped_203.csv"
+# input_filename: topIBD_snps_with_sequences.csv #"topIBD_overlapped_203.csv"
+
+# Second setup of Mar 5th to get all predictions of 241 SNPs...
 accelerator: cpu
-working_dir: /proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump_predict
-checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise_K562/epoch=3-step=73167-val_loss=0.56.ckpt'
+cell: K562
+working_dir: "/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch48_lr0.0001_pe128_wd0.01_batch_dump_predict/snv_TeWhey_split_Gosai_chrwise717548_${cell}/${dataset_name}"
+checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch48_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise717548_K562/epoch=6-step=82662-val_loss=0.52.ckpt'
+#checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch48_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise717548_HepG2/epoch=6-step=76402-val_loss=0.41.ckpt'
+#checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch48_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise717548_SKNSH/epoch=4-step=60116-val_loss=0.53.ckpt'
 
-batch_size: 32
-dataset_name: topIBD_overlapped_203
-label_column_name: K562_label
-input_directory: /proj/bmfm/datasets/omics/genome/finetune_datasets/IBD_De_Lange/
-input_filename: "topIBD_overlapped_203.csv"
+# working_dir: "/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump_predict/${dataset_name}"
+# checkpoint: '/proj/bmfm/users/sanjoy/benchmarking/modernbert_wo_lora_ref_v3.3batch32_lr0.0001_pe128_wd0.01_batch_dump/snv_TeWhey_split_Gosai_chrwise_K562/epoch=3-step=73167-val_loss=0.56.ckpt'
+
+batch_size: 48
+dataset_name: topIBD_snps_241_hg38
+label_column_name: "${cell}_log2FC"
+input_directory: /proj/bmfm/datasets/omics/genome/sow_60 #/proj/bmfm/datasets/omics/genome/finetune_datasets/IBD_De_Lange/
+input_filename: topIBD_snps_with_sequences_hg38_flattened.csv

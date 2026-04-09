@@ -26,7 +26,7 @@ CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/b
 #"\'/proj/bmfm/users/sanjoy/benchmarking/ckpts/scbert/scbert_ref_rc_1kb_10kb_10x_change0.3/epoch=8-step=895320-val_loss=5.13.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=78612-val_loss=5.23.ckpt\'"
 #CHKPT_MODERNBERT_REF="/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=69877-val_loss=5.27.ckpt"
-OUTPUT_DIR="/dccstor/bmfm-targets1/users/sanjoy/benchmarking/"
+OUTPUT_DIR="/proj/bmfm/users/sanjoy/benchmarking/"
 EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump" # This can be used for saving benchmarking and also clearml logging
 
 # project_name: "bmfm-targets/evaluate_dna/${model_name}_${CHKPT_NAME}${extra_tag}"
@@ -173,7 +173,7 @@ for i in "${!datasets[@]}"; do
     elif [ "$DATASET" == "snv_Tewhey_v2" ]; then
         #SPLIT_TYPE="split_Gosai_and_mpra"
         for cell in 'K562' 'HEPG2' 'SKNSH'; do
-            #fold="${cell}_biallelic_200" 
+            #fold="${cell}_biallelic_200"
             fold=""
             INPUT_DIR="/dccstor/bmfm-targets1/data/omics/genome/finetune_datasets/snv_mpra_Tewhey_v2/"
             DATASET_NAME=${DATASET}_${cell}

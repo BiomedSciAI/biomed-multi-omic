@@ -154,7 +154,7 @@ for i in "${!datasets[@]}"; do
         for SPLIT_TYPE in "split_Gosai_and_mpra" "split_Gosai_minus_mpratest"; do
             for cell in 'HEPG2' 'K562'; do
                 if [ "$cell" == "K562" ]; then
-                    fold="${cell}_snpified_v3_ref_gen"
+                    fold="${cell}_biallelic_200"
                 elif [ "$cell" == "HEPG2" ]; then
                     fold="${cell}_original"
                 fi
