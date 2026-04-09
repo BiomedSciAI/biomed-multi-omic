@@ -1,6 +1,6 @@
 # declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
 #declare -a datasets=("snv_Tewhey" )
-declare -a datasets=("snv_Tewhey_v2" )
+declare -a datasets=("snv_mpra_Tewhey_v3_hg37" )
 # declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
 declare -a label_column_names=("mean_value")
 
@@ -25,7 +25,7 @@ CHKPT_REF="ibm-research/biomed.dna.snp.modernbert.113m"
 #"\'/proj/bmfm/users/sanjoy/benchmarking/ckpts/scbert/scbert_ref_rc_1kb_10kb_10x_change0.3/epoch=8-step=895320-val_loss=5.13.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=78612-val_loss=5.23.ckpt\'"
 #CHKPT_MODERNBERT_REF="/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=69877-val_loss=5.27.ckpt"
-OUTPUT_DIR="/dccstor/bmfm-targets1/users/sanjoy/benchmarking/"
+OUTPUT_DIR="/proj/bmfm/users/sanjoy/benchmarking/"
 EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump" # This can be used for saving benchmarking and also clearml logging
 
 # project_name: "bmfm-targets/evaluate_dna/${model_name}_${CHKPT_NAME}${extra_tag}"
@@ -139,39 +139,40 @@ for i in "${!datasets[@]}"; do
                     $SUFFIX_CMD\"" ;
             done
         done
-    elif [ "$DATASET" == "snv_Tewhey" || "$DATASET" == "snv_Tewhey_v3" ]; then
-        SPLIT_TYPE="split_Gosai_and_mpra"
-        for cell in 'K562' ; do
-            fold="${cell}_biallelic_200"
-            INPUT_DIR="/dccstor/bmfm-targets1/data/omics/genome/finetune_datasets/snv_mpra_Tewhey_v3/${SPLIT_TYPE}/${fold}"
-            DATASET_NAME=${DATASET}_v3_${SPLIT_TYPE}_${cell}
-            LABEL_COLUMN_NAME="${cell}_log2FC"
-            mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
-            $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
-                -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
-                "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
-                label_columns=mpra \
-                batch_size=$BS \
-                tokenizer=$TOKENIZER \
-                data_module=snv_Tewhey  trainer=regression task=train model=$MODEL\
-                max_finetuning_epochs=7 \
-                dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
-                model_name=$MODEL_NAME \
-                model_pe=$MODEL_PE \
-                model_wd=$MODEL_WD \
-                checkpoint_path=$CHKPT_REF \
-                checkpoint_name=$CHKPT_NAME \
-                learning_rate=$LEARNING_RATE \
-                input_directory=$INPUT_DIR \
-                output_directory=$OUTPUT_DIR \
-                extra_tag=$EXTRA_TAG \
-                $SUFFIX_CMD\"" ;
+    elif [[ "$DATASET" == "snv_Tewhey" || "$DATASET" == "snv_mpra_Tewhey_v3_hg37" ]]; then
+        for SPLIT_TYPE in "split_Gosai_and_mpra" "split_Gosai_minus_mpratest"; do
+            for cell in 'K562' ; do
+                fold="${cell}_biallelic_200"
+                INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/${DATASET}/${SPLIT_TYPE}/${fold}"
+                DATASET_NAME=${DATASET}_${SPLIT_TYPE}_${cell}
+                LABEL_COLUMN_NAME="${cell}_log2FC"
+                mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
+                $PREFIX_CMD -o ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.out \
+                    -e ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/$DATASET_NAME/train$EST_TIME.err \
+                    "bash -c \"bmfm-targets-run --config-path $SCRIPT_DIR -cn config \
+                    label_columns=mpra \
+                    batch_size=$BS \
+                    tokenizer=$TOKENIZER \
+                    data_module=snv_Tewhey  trainer=regression task=train model=$MODEL\
+                    max_finetuning_epochs=6 \
+                    dataset_name=${DATASET_NAME} fold=$fold label_column_name=$LABEL_COLUMN_NAME \
+                    model_name=$MODEL_NAME \
+                    model_pe=$MODEL_PE \
+                    model_wd=$MODEL_WD \
+                    checkpoint_path=$CHKPT_REF \
+                    checkpoint_name=$CHKPT_NAME \
+                    learning_rate=$LEARNING_RATE \
+                    input_directory=$INPUT_DIR \
+                    output_directory=$OUTPUT_DIR \
+                    extra_tag=$EXTRA_TAG \
+                    $SUFFIX_CMD\"" ;
+            done
             #$PREFIX_CMD bmfm-targets-run --config-path $SCRIPT_DIR -cn config data_module=$DATASET label_columns=$DATASET trainer=regression_drosophila_enhancer dataset_name=$DATASET label_column_name=$LABEL_COLUMN_NAME task=predict ~model track_clearml.task_name=${DATASET}_zero_shot $SUFFIX_CMD ;
         done
     elif [ "$DATASET" == "snv_Tewhey_v2" ]; then
         #SPLIT_TYPE="split_Gosai_and_mpra"
         for cell in 'K562' 'HEPG2' 'SKNSH'; do
-            #fold="${cell}_biallelic_200" 
+            #fold="${cell}_biallelic_200"
             fold=""
             INPUT_DIR="/dccstor/bmfm-targets1/data/omics/genome/finetune_datasets/snv_mpra_Tewhey_v2/"
             DATASET_NAME=${DATASET}_${cell}
