@@ -1,6 +1,6 @@
 # declare -a datasets=("tf" "coreprom" "covid" "splice" "promoter_dnabert2" "mpra" )
 #declare -a datasets=("snv_Tewhey" )
-declare -a datasets=("snv_Tewhey_v3" )
+declare -a datasets=("snv_mpra_Tewhey_v3")
 # declare -a label_column_names=("label" "label" "label" "label" "label" "mean_value")
 declare -a label_column_names=("mean_value")
 
