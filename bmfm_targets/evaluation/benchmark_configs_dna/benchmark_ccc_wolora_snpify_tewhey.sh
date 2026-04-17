@@ -13,10 +13,22 @@ MODEL_PE=128
 MODEL_WD=0.01
 MODEL="modernbert" # Makesure it is passed on config.yaml as MODEL
 MODEL_NAME="modernbert_wo_lora"
-CHKPT_NAME="refsnp_v3.5" #"hic_3Cells_v5.5"
+CHKPT_NAME="hic_3Cells_v5.5" #"refsnp_v3.5" #"hic_3Cells_v5.5"
 
-CHKPT_REF="ibm-research/biomed.dna.snp.modernbert.113m"
-#CHKPT_REF="\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+# Set OUTPUT_DIR based on hostname
+if [[ $(hostname) == *"zu"* ]]; then
+    OUTPUT_DIR="/proj/bmfm/users/sanjoy/benchmarking/"
+    CHKPT_INPUT_DIR="/proj/bmfm/users/hongyang/training_runs/"
+elif [[ $(hostname) == *"ccc"* ]]; then
+    OUTPUT_DIR="/dccstor/bmfm-targets1/users/sanjoy/benchmarking/"
+    CHKPT_INPUT_DIR="/dccstor/bmfm-targets1/users/sanjoy/training_runs/pre_trained_ckpts/"
+else
+    OUTPUT_DIR="/tmp/benchmarking/"
+fi
+
+#CHKPT_REF="ibm-research/biomed.dna.snp.modernbert.113m"
+CHKPT_REF="\'${CHKPT_INPUT_DIR}ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
+#"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_hic_3celllines_v2/backup_ckpt/epoch=21-step=437580-val_loss=4.31.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=18-step=138282-val_loss=4.40.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_snp_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=7-step=174744-val_loss=4.34.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_modernbert_v3/backup_ckpt/epoch=17-step=131004-val_loss=4.40.ckpt\'"
@@ -26,7 +38,7 @@ CHKPT_REF="ibm-research/biomed.dna.snp.modernbert.113m"
 #"\'/proj/bmfm/users/sanjoy/benchmarking/ckpts/scbert/scbert_ref_rc_1kb_10kb_10x_change0.3/epoch=8-step=895320-val_loss=5.13.ckpt\'"
 #"\'/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=78612-val_loss=5.23.ckpt\'"
 #CHKPT_MODERNBERT_REF="/proj/bmfm/users/hongyang/training_runs/ref_rc_1kb_10kb_10x_mb_1g/epoch=1-step=69877-val_loss=5.27.ckpt"
-OUTPUT_DIR="/proj/bmfm/users/sanjoy/benchmarking/"
+
 EXTRA_TAG="batch${BS}_lr${LEARNING_RATE}_pe${MODEL_PE}_wd${MODEL_WD}_batch_dump" # This can be used for saving benchmarking and also clearml logging
 
 # project_name: "bmfm-targets/evaluate_dna/${model_name}_${CHKPT_NAME}${extra_tag}"
@@ -140,11 +152,15 @@ for i in "${!datasets[@]}"; do
                     $SUFFIX_CMD\"" ;
             done
         done
-    elif [[ "$DATASET" == "snv_Tewhey" || "$DATASET" == "snv_mpra_Tewhey_v3" ]]; then
+    elif [[ "$DATASET" == "snv_Tewhey" || "$DATASET" == "snv_mpra_Tewhey_v3" || "$DATASET" == "snv_mpra_Tewhey_v3_hg37" ]]; then
         for SPLIT_TYPE in "split_Gosai_and_mpra" "split_Gosai_minus_mpratest"; do
             for cell in 'K562' 'HEPG2'; do
                 fold="${cell}_biallelic_200"
-                INPUT_DIR="/dccstor/bmfm-targets1/data/omics/genome/finetune_datasets/${DATASET}/${SPLIT_TYPE}/${fold}"
+                if [[ $(hostname) == *"ccc"* ]]; then
+                    INPUT_DIR="/dccstor/bmfm-targets1/data/omics/genome/finetune_datasets/${DATASET}/${SPLIT_TYPE}/${fold}"
+                elif [[ $(hostname) == *"zu"* ]]; then
+                    INPUT_DIR="/proj/bmfm/datasets/omics/genome/finetune_datasets/${DATASET}/${SPLIT_TYPE}/${fold}"
+                fi
                 DATASET_NAME=${DATASET}_${SPLIT_TYPE}_${cell}
                 LABEL_COLUMN_NAME="${cell}_log2FC"
                 mkdir -p ../output_logs/${MODEL_NAME}_${CHKPT_NAME}/${DATASET_NAME}
