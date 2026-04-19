@@ -98,8 +98,13 @@ def inference(
     adata : AnnData
         Input AnnData object containing single-cell expression data
     checkpoint_path : str
-        Path to model checkpoint (.ckpt file). The checkpoint contains all
-        necessary configuration for inference.
+        Path to model checkpoint (.ckpt file) or HuggingFace checkpoint ID.
+        The checkpoint contains all necessary configuration for inference.
+        Available checkpoints include:
+        - v1 BERT (110M): ibm-research/biomed.rna.bert.110m.wced.multitask.v1,
+          ibm-research/biomed.rna.bert.110m.mlm.multitask.v1, etc.
+        - v2 LLaMA: ibm-research/biomed.rna.llama.47m.wced.multitask.v1 (47M),
+          ibm-research/biomed.rna.llama.32m.mlm.multitask.v1 (32M)
     layer : str, optional
         Layer to use for expression values. If None, uses adata.X
     embedding_key : str, optional

@@ -47,10 +47,17 @@ uv pip install ".[bulk_rna,benchmarking,test,notebook]"
 
 The model's weights can be aquired from [IBM's HuggingFace collection](https://huggingface.co/ibm-research). The following scRNA models are avaliable:
 
+### v1 BERT Checkpoints (110M parameters)
+
 - MLM+RDA: [ibm-research/biomed.rna.bert.110m.mlm.rda.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.mlm.rda.v1)
 - MLM+Multitask: [ibm-research/biomed.rna.bert.110m.mlm.multitask.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.mlm.multitask.v1)
 - WCED+Multitask: [ibm-research/biomed.rna.bert.110m.wced.multitask.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.wced.multitask.v1)
 - WCED 10 pct: [ibm-research/biomed.rna.bert.110m.wced.v1](https://huggingface.co/ibm-research/biomed.rna.bert.110m.wced.v1)
+
+### v2 LLaMA Checkpoints
+
+- WCED+Multitask (47M parameters): [ibm-research/biomed.rna.llama.47m.wced.multitask.v1](https://huggingface.co/ibm-research/biomed.rna.llama.47m.wced.multitask.v1)
+- MLM+Multitask (32M parameters): [ibm-research/biomed.rna.llama.32m.mlm.multitask.v1](https://huggingface.co/ibm-research/biomed.rna.llama.32m.mlm.multitask.v1)
 
 For details on how the models were trained, please refer to [the BMFM-RNA preprint](https://arxiv.org/abs/2506.14861).
 

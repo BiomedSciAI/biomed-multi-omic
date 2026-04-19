@@ -209,10 +209,17 @@ exit 0
 
 
 
-# example
+# example - v1 BERT checkpoints (110M parameters)
 # bash benchmark_run.sh --ckpt="ibm-research/biomed.rna.bert.110m.wced.v1" --extra_args=" data_module.max_length=4096
 # data_module.sequence_order=sorted" --tag="4096_sorted" --do_zs=true --do_ft=false
 
 #bash benchmark_run.sh --ckpt="ibm-research/biomed.rna.bert.110m.wced.v1"
 # --extra_args="task.0.freeze_layers=false max_finetuning_epochs=4 trainer.learning_rate=2e-4 data_module.max_length=1024  task.0.accumulate_grad_batches=8 data_module.batch_size=1 data_module.sequence_order=sorted model=scbert fields=genes_expressions_wced"
 #--tag="freeze_false_epoch_4_lr2e4_sorted" --do_zs=false --do_ft=true
+
+# example - v2 LLaMA checkpoints
+# bash benchmark_run.sh --ckpt="ibm-research/biomed.rna.llama.47m.wced.multitask.v1" --extra_args=" data_module.max_length=4096
+# data_module.sequence_order=sorted" --tag="llama_47m_4096_sorted" --do_zs=true --do_ft=false
+
+# bash benchmark_run.sh --ckpt="ibm-research/biomed.rna.llama.32m.mlm.multitask.v1" --extra_args=" data_module.max_length=4096
+# data_module.sequence_order=sorted" --tag="llama_32m_4096_sorted" --do_zs=true --do_ft=false

@@ -12,28 +12,44 @@ export MY_DATA_FILE=# h5ad file with raw counts and genes identified by gene sym
 
 The program will produce embeddings in `working_dir/embeddings.csv` and predictions in `working_dir/predictions.csv` as csv files indexed with the same `obs` index as the initial h5ad file.
 
-### MLM+RDA
+### v1 BERT Checkpoints (110M parameters)
+
+#### MLM+RDA
 
 ```bash
 bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1
 ```
 
-### MLM+Multitask
+#### MLM+Multitask
 
 ```bash
 bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1
 ```
 
-### WCED+Multitask
+#### WCED+Multitask
 
 ```bash
 bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1
 ```
 
-### WCED 10 pct
+#### WCED 10 pct
 
 ```bash
 bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1
+```
+
+### v2 LLaMA Checkpoints
+
+#### WCED+Multitask (47M parameters)
+
+```bash
+bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.llama.47m.wced.multitask.v1
+```
+
+#### MLM+Multitask (32M parameters)
+
+```bash
+bmfm-targets-run -cn predict input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.llama.32m.mlm.multitask.v1
 ```
 
 ## scRNA fine-tuning
@@ -53,28 +69,44 @@ ad.write_h5ad(environ["MY_DATA_FILE"])
 
 If you use your own split column modify `split_column_name=null` below to your chosen column name, otherwise it will look for a `split_random` column, as created above.
 
-### MLM+RDA
+### v1 BERT Checkpoints (110M parameters)
+
+#### MLM+RDA
 
 ```bash
 bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp ++data_module.rda_transform=auto_align data_module.log_normalize_transform=false data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1
 ```
 
-### MLM+Multitask
+#### MLM+Multitask
 
 ```bash
 bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.bert.110m.mlm.multitask.v1
 ```
 
-### WCED+Multitask
+#### WCED+Multitask
 
 ```bash
 bmfm-targets-run  -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1
 ```
 
-### WCED 10 pct
+#### WCED 10 pct
 
 ```bash
 bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.bert.110m.wced.v1
+```
+
+### v2 LLaMA Checkpoints
+
+#### WCED+Multitask (47M parameters)
+
+```bash
+bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp checkpoint=ibm-research/biomed.rna.llama.47m.wced.multitask.v1
+```
+
+#### MLM+Multitask (32M parameters)
+
+```bash
+bmfm-targets-run -cn finetune label_column_name=celltype split_column_name=null input_file=$MY_DATA_FILE working_dir=/tmp data_module.max_length=4096 checkpoint=ibm-research/biomed.rna.llama.32m.mlm.multitask.v1
 ```
 
 ## scRNA Pre-training
