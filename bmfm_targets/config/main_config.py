@@ -349,6 +349,7 @@ class SCBertMainConfig:
         if self.model is None and ckpt_model_config is not None:
             self.model = ckpt_model_config
             self.model.checkpoint = checkpoint
+            self._apply_device_constraints()
 
         # Merge trainer config
         if ckpt_trainer_config and self.trainer:
@@ -464,6 +465,27 @@ class SCBertMainConfig:
             identifier = self.tokenizer.identifier
 
         return load_tokenizer(identifier, self.tokenizer.prepend_tokens)
+
+    def _apply_device_constraints(self) -> None:
+        """
+        Override device-specific model config flags when not on a CUDA-capable device.
+
+        GPU-first: auto/gpu/cuda keep checkpoint settings as-is.
+        CPU/MPS (and anything unrecognised) fall back to attention='torch' (SDPA),
+        since flex_attention only supports CUDA.
+        """
+        if self.model is None:
+            return
+        accelerator = getattr(self.task, "accelerator", "auto")
+        if accelerator in ("gpu", "cuda", "auto"):
+            return
+        if getattr(self.model, "attention", None) == "flex":
+            logger.warning(
+                "attention='flex' is not supported on accelerator='%s'. "
+                "Falling back to attention='torch' (SDPA).",
+                accelerator,
+            )
+            self.model.attention = "torch"
 
     def _get_checkpoint(self):
         task_ckpt = getattr(self.task, "checkpoint", None)
