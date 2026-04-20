@@ -74,6 +74,9 @@ class TrainingTaskConfig(BaseTaskConfig):
     # see https://github.com/Lightning-AI/pytorch-lightning/issues/13246
     resume_training_from_ckpt: bool = False
     checkpoints_every_n_train_steps: int | None = None
+    # pretrained checkpoint to initialize from (HuggingFace ID or local path)
+    # when set, model config and fields are loaded from the checkpoint (no model section needed in YAML)
+    checkpoint: str | None = None
     setup_stage = "fit"
 
 

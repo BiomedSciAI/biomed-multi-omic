@@ -8,6 +8,7 @@
   tf32_mode: medium  # permitted values: "highest", "high", "medium"
   freeze_layers: false
   resume_training_from_ckpt: false
+  checkpoint: "${checkpoint}"
 - _target_: bmfm_targets.config.TestTaskConfig
   default_root_dir: "${working_dir}"
   precision: 32

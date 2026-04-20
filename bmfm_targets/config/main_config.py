@@ -110,6 +110,10 @@ class SCBertMainConfig:
                 label_columns=self.label_columns,
                 pad_token_id=self.data_module.tokenizer.pad_token_id,
             )
+        elif self.model is not None:
+            # Model was loaded from checkpoint (no model section in YAML) — sync updated values
+            self.model.fields = self.fields
+            self.model.label_columns = self.label_columns
 
         if (
             isinstance(self.task, TrainingTaskConfig)
@@ -154,6 +158,9 @@ class SCBertMainConfig:
         is_training: bool,
     ) -> list[FieldInfo]:
         """Merge fields: checkpoint wins for existing, new YAML fields added in training."""
+        logger.info(
+            msg=f"Merging fields: checkpoint fields: {ckpt_fields} and {yaml_fields}"
+        )
         if not ckpt_fields:
             return yaml_fields if yaml_fields else []
 
@@ -221,7 +228,7 @@ class SCBertMainConfig:
         # Training: YAML-authoritative
         return yaml_cols if yaml_cols else ckpt_cols
 
-    def _merge_configs_from_checkpoint(self):
+    def _merge_configs_from_checkpoint(self) -> None:
         """Merge configs from checkpoint with YAML configs based on task type."""
         from bmfm_targets.models import download_ckpt_from_huggingface
 
@@ -266,11 +273,18 @@ class SCBertMainConfig:
         checkpoint = self._get_checkpoint()
         if not checkpoint:
             return
-
+        logger.info(f"Loading configs from checkpoint {checkpoint}")
         if not os.path.isfile(checkpoint):
             checkpoint = download_ckpt_from_huggingface(checkpoint)
 
-        ckpt_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        try:
+            ckpt_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load checkpoint from {checkpoint}: {e}")
+
+        if "hyper_parameters" not in ckpt_dict:
+            raise KeyError(f"Checkpoint {checkpoint} missing 'hyper_parameters' key")
+
         ckpt_hyper = ckpt_dict["hyper_parameters"]
 
         is_training = isinstance(self.task, TrainingTaskConfig)
@@ -284,11 +298,7 @@ class SCBertMainConfig:
 
         # Access checkpoint hyperparameters (can be dict or object)
         ckpt_model_config = _safe_get(ckpt_hyper, "model_config")
-        if ckpt_model_config is None:
-            ckpt_model_config = _safe_get(ckpt_hyper, "model")
         ckpt_trainer_config = _safe_get(ckpt_hyper, "trainer_config")
-        if ckpt_trainer_config is None:
-            ckpt_trainer_config = _safe_get(ckpt_hyper, "trainer")
 
         logger.info(
             "checkpoint merge: model config=%s; trainer config=%s",
@@ -296,6 +306,7 @@ class SCBertMainConfig:
             _summarize_config(ckpt_trainer_config),
         )
 
+        # Try model_config first (preferred), fall back to top-level hyper_parameters (legacy)
         ckpt_fields = _safe_get(ckpt_model_config, "fields")
         if ckpt_fields is None:
             ckpt_fields = _safe_get(ckpt_hyper, "fields")
@@ -304,7 +315,6 @@ class SCBertMainConfig:
             _summarize_fields(ckpt_fields),
             _summarize_fields(self.fields),
         )
-
         # Merge fields (always merge, needed for model instantiation)
         if ckpt_fields is not None:
             self.fields = self._merge_fields(ckpt_fields, self.fields, is_training)
@@ -334,6 +344,11 @@ class SCBertMainConfig:
                     "but no label decoder weights. Clearing label_columns for predict mode."
                 )
                 self.label_columns = []
+
+        # Populate model config from checkpoint when none was provided in YAML (e.g. finetune)
+        if self.model is None and ckpt_model_config is not None:
+            self.model = ckpt_model_config
+            self.model.checkpoint = checkpoint
 
         # Merge trainer config
         if ckpt_trainer_config and self.trainer:
@@ -435,9 +450,9 @@ class SCBertMainConfig:
         checkpoint = self._get_checkpoint()
         if checkpoint:
             if os.path.isfile(checkpoint):
-                identifier = os.path.dirname(checkpoint)
+                identifier: str = os.path.dirname(checkpoint)
             else:
-                identifier = download_tokenizer_from_huggingface(checkpoint)
+                identifier = str(download_tokenizer_from_huggingface(checkpoint))
             for f in self.fields:
                 if f.vocab_update_strategy == "dynamic":
                     logger.warning(
@@ -457,11 +472,11 @@ class SCBertMainConfig:
             if isinstance(self.model, functools.partial):
                 model_ckpt = self.model.keywords.get("checkpoint")
             else:
-                model_ckpt = self.model.checkpoint
+                model_ckpt = getattr(self.model, "checkpoint", None)
         if task_ckpt is not None:
-            if model_ckpt is not None:
+            if model_ckpt is not None and model_ckpt != task_ckpt:
                 logger.warning(
-                    "Found checkpoint in model config and task config, using task checkpoint"
+                    "Found different checkpoints in task and model config, using task checkpoint"
                 )
             return task_ckpt
         return model_ckpt
