@@ -490,7 +490,9 @@ class CziBenchmarkCallback(pl.Callback):
             )
             return
 
-        adata_emb = get_adata_with_embeddings(trainer, self.batch_column_name)
+        adata_emb = get_adata_with_embeddings(
+            trainer, batch_column_name=self.batch_column_name
+        )
         if self.target_column_name is None:
             self.target_column_name = trainer.datamodule.label_columns[
                 0
@@ -544,6 +546,162 @@ class CziBenchmarkCallback(pl.Callback):
             ["lr"]
         ]  # remove the "mean" column cause we asked only the lr classifier
         return results_table_wide
+
+
+class SGDCallback(pl.Callback):
+    """
+    Callback for evaluating cell type classification from extracted embeddings using SGDClassifier.
+
+    Uses the predefined train/dev/test splits from the data. It trains on train+dev splits
+    and evaluates on the test split.
+
+    Args:
+    ----
+        batch_column_name: Column name for batch information
+        target_column_name: Column name for target labels
+        split_column_name: Column name for train/dev/test splits
+        obsm_key: Key in obsm for embeddings
+        ci_method: Method for calculating confidence intervals. Options:
+            - "binomial": CI based on binomial distribution (default, good for proportions)
+            - "wilson": Wilson score interval (asymmetric, doesn't overshoot [0,1])
+    """
+
+    def __init__(
+        self,
+        batch_column_name: str | None = None,
+        target_column_name: str | None = None,
+        split_column_name: str = "split",
+        obsm_key: str = MODEL_EMBED_KEY,
+        ci_method: str = "binomial",
+    ):
+        super().__init__()
+        self.batch_column_name = batch_column_name
+        self.target_column_name = target_column_name
+        self.split_column_name = split_column_name
+        self.obsm_key = obsm_key
+        self.ci_method = ci_method
+        self.cl: Logger | None = None
+
+    def on_predict_end(self, trainer, pl_module):
+        logger.info("=" * 80)
+        logger.info("Starting SGDCallback evaluation")
+
+        self.cl = Logger.current_logger()
+        if not self.cl:
+            logger.warning("ClearML logger not found, skipping SGD reporting.")
+            return
+
+        adata_emb = get_adata_with_embeddings(
+            trainer, batch_column_name=self.batch_column_name
+        )
+        if self.target_column_name is None:
+            self.target_column_name = trainer.datamodule.label_columns[
+                0
+            ].label_column_name
+
+        logger.info(f"Data shape: {adata_emb.shape} (cells × genes)")
+        logger.info(f"Target column: {self.target_column_name}")
+        logger.info(f"Split column: {self.split_column_name}")
+
+        # Log split sizes
+        if self.split_column_name in adata_emb.obs.columns:
+            split_counts = adata_emb.obs[self.split_column_name].value_counts()
+            logger.info(f"Split sizes: {split_counts.to_dict()}")
+
+        # Log number of classes
+        if self.target_column_name in adata_emb.obs.columns:
+            n_classes = adata_emb.obs[self.target_column_name].nunique()
+            logger.info(f"Number of classes: {n_classes}")
+
+        # Get test set size for CI calculation
+        mask_te = adata_emb.obs[self.split_column_name] == "test"
+        n = mask_te.sum()
+
+        results_dict = self.evaluate_sgd(
+            adata_emb, self.obsm_key, self.split_column_name, self.target_column_name
+        )
+
+        # Calculate confidence intervals
+        from bmfm_targets.training.metrics.metric_functions import calculate_95_ci
+
+        df_metrics_rows = []
+        for metric_name, metric_value in results_dict.items():
+            logger.info(f"Calculating {self.ci_method} CI for {metric_name}")
+            mean_value, lower_ci, upper_ci = calculate_95_ci(
+                [metric_value], n, ci_method=self.ci_method
+            )
+            df_metrics_rows.append(
+                {
+                    "Metric": metric_name,
+                    "Mean": np.round(mean_value, 4),
+                    "CI": f"[{np.round(lower_ci, 4)}, {np.round(upper_ci, 4)}]",
+                }
+            )
+
+        ci_name = self.ci_method.replace("_", " ")
+        df_metrics = pd.DataFrame(
+            df_metrics_rows,
+            columns=["Metric", "Mean", "CI"],
+        )
+        df_metrics = df_metrics.rename(
+            columns={"CI": f"{ci_name} CI [Lower bound, Upper bound]"}
+        )
+
+        logger.info("SGD Classification Results with Confidence Intervals:")
+        logger.info(df_metrics)
+
+        # Report table with CI
+        self.cl.report_table(
+            title="SGD Cell Type Classification",
+            series="SGD Cell Type Classification",
+            table_plot=df_metrics,
+        )
+
+        # Report F1 as scalar for easier querying
+        f1_row = df_metrics[df_metrics["Metric"] == "f1"]
+        if not f1_row.empty:
+            f1 = float(f1_row["Mean"].iloc[0])
+            self.cl.report_single_value(name="SGD_f1", value=f1)
+            logger.info(f"Reported SGD_f1 scalar: {f1:.4f}")
+        else:
+            logger.warning("F1 score not found in SGD results")
+
+        logger.info("SGDCallback evaluation completed")
+        logger.info("=" * 80)
+
+    def evaluate_sgd(
+        self, adata, obsm_key: str, split_col: str, label_col: str
+    ) -> dict:
+        """Train SGDClassifier on train+dev splits from AnnData obsm vectors, return test metrics."""
+        import numpy as np
+        from sklearn.linear_model import SGDClassifier
+        from sklearn.metrics import (
+            accuracy_score,
+            balanced_accuracy_score,
+            f1_score,
+            precision_score,
+            recall_score,
+        )
+
+        mask_tr = np.isin(adata.obs[split_col], ["train", "dev"])
+        mask_te = adata.obs[split_col] == "test"
+        X_tr, y_tr = adata.obsm[obsm_key][mask_tr], adata.obs.loc[mask_tr, label_col]
+        X_te, y_te = adata.obsm[obsm_key][mask_te], adata.obs.loc[mask_te, label_col]
+        y_pred = SGDClassifier(max_iter=1000).fit(X_tr, y_tr).predict(X_te)
+
+        # Use macro averaging for F1/precision/recall to treat all classes equally (better for rare cell types)
+        # Old approach: avg = "weighted" if len(set(y_te)) > 2 else "binary"
+        avg = "macro"  # Always use macro for consistency, works for both binary and multi-class
+
+        return {
+            "accuracy": accuracy_score(
+                y_te, y_pred
+            ),  # default is micro, which is equivalent to standard accuracy
+            "balanced_accuracy": balanced_accuracy_score(y_te, y_pred),
+            "f1": f1_score(y_te, y_pred, average=avg),
+            "precision": precision_score(y_te, y_pred, average=avg),
+            "recall": recall_score(y_te, y_pred, average=avg),
+        }
 
 
 class SampleLevelLossCallback(pl.Callback):

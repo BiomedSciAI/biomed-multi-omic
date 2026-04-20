@@ -151,8 +151,23 @@ class BaseTrainingModule(pl.LightningModule):
             self.model_config.checkpoint = None
 
         self.lora_config = self.trainer_config.get_lora_config()
+        logger.info(f"LoRA config from trainer_config: {self.lora_config}")
+        logger.info(
+            f"trainer_config.lora_config raw value: {self.trainer_config.lora_config}"
+        )
         if self.lora_config:
-            self.model = get_peft_model(self.model, self.lora_config.to_peft_config())
+            peft_config = self.lora_config.to_peft_config()
+            logger.info(
+                f"Applying LoRA with config: r={peft_config.r}, "
+                f"lora_alpha={peft_config.lora_alpha}, "
+                f"layers_to_transform={peft_config.layers_to_transform}, "
+                f"layers_pattern={peft_config.layers_pattern}, "
+                f"target_modules={peft_config.target_modules}"
+            )
+            self.model = get_peft_model(self.model, peft_config)
+            self.model.print_trainable_parameters()
+        else:
+            logger.info("LoRA is NOT active - lora_config is None or False")
 
         # Note: token_values are now handled by TokenValueObjective during bind()
         # No need to construct them here

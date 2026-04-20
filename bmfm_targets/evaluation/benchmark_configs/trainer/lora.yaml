@@ -1,0 +1,21 @@
+defaults:
+  - default
+  - _self_
+
+# Explicitly defining the LoraConfigWrapper structure
+lora_config:
+  _target_: bmfm_targets.config.LoraConfigWrapper
+  r: 16
+  lora_alpha: 32
+  # LLAMA TARGETS:
+  # c_attn (QKV), proj (Output), c_fc1 (Gate), c_fc2 (Value), c_proj (Output)
+  target_modules:
+    - "c_attn"
+    - "proj"
+    - "c_fc1"
+    - "c_fc2"
+    - "c_proj"
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "SEQ_CLS"
+  use_dora: true

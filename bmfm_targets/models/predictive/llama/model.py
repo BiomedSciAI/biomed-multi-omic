@@ -122,12 +122,17 @@ class LlamaForMaskedLMModel(nn.Module, CheckpointMixin):
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_hidden_states: bool | None = None,
+        output_attentions: bool | None = None,
+        return_dict: bool | None = None,
+        **kwargs,
     ) -> SequenceClassifierOutputWithEmbeddings:
+        # Ignore return_dict and other kwargs - we always return our custom output type
         outputs: BaseModelOutputWithPoolingAndCrossAttentions = self.core(
             input_ids,
             attention_mask,
             inputs_embeds,
             output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
         )
         cls_embeddings = outputs.last_hidden_state[:, 0, :]
 
@@ -180,6 +185,7 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
         output_hidden_states: bool | None = None,
         output_attentions: bool | None = None,  # Added for PEFT compatibility
         return_dict: bool | None = None,  # Added for PEFT compatibility
+        **kwargs,
     ) -> SequenceClassifierOutputWithEmbeddings:
         # Llama doesn't support output_attentions, but accept it for PEFT compatibility
         if output_attentions:
@@ -189,6 +195,7 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
             attention_mask,
             inputs_embeds,
             output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
         )
         pooler_output = outputs.pooler_output
 

@@ -11,6 +11,7 @@ defaults:
 seed:
   seed_value: 1234
 
+checkpoint: null
 model:
   checkpoint: null
 

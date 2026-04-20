@@ -249,3 +249,219 @@ def load_prediction_data_to_anndata(df_emb, df_labels, df_pred):
 
     adata.X = adata.X.astype("float64")
     return adata
+
+
+def concat_embeddings(
+    embeddings_file1, embeddings_file2, output_dir, output_file_name="embeddings.csv"
+):
+    """
+    Concatenate two embedding files horizontally and save the result.
+
+    This function loads two embedding CSV files, aligns them by their indices (handling mismatches
+    by using only common samples), concatenates them column-wise, and saves the combined embeddings
+    to a new file.
+
+    Parameters
+    ----------
+    embeddings_file1 : pathlib.Path
+        Path to the first embeddings CSV file (no header, first column is index).
+    embeddings_file2 : pathlib.Path
+        Path to the second embeddings CSV file (no header, first column is index).
+    output_dir : pathlib.Path
+        Directory where the concatenated embeddings will be saved.
+    output_file_name : str, optional
+        Name of the output file (default is "embeddings.csv").
+
+    Returns
+    -------
+    None
+        The function saves the concatenated embeddings to disk and prints progress information.
+
+    Raises
+    ------
+    FileNotFoundError
+        If either of the input embedding files does not exist.
+
+    Notes
+    -----
+    - If the indices of the two embedding files don't match, the function will use only the
+      common samples and print a warning.
+    - The output file is saved without a header and with the index column.
+    - Progress information is printed to stdout during execution.
+    """
+    # Check if both files exist
+    if not embeddings_file1.exists():
+        raise FileNotFoundError(f"Embeddings not found at {embeddings_file1}")
+    if not embeddings_file2.exists():
+        raise FileNotFoundError(f"Embeddings not found at {embeddings_file2}")
+
+    # Load embeddings
+    embeddings1 = pd.read_csv(embeddings_file1, header=None, index_col=0)
+    logger.info(f"Embeddings 1 shape: {embeddings1.shape}")
+
+    logger.info(f"Loading embeddings from {embeddings_file2}")
+    embeddings2 = pd.read_csv(embeddings_file2, header=None, index_col=0)
+    logger.info(f"Embeddings 2 shape: {embeddings2.shape}")
+
+    # Verify indices match
+    if not embeddings1.index.equals(embeddings2.index):
+        logger.warning("Index mismatch between embeddings")
+        # Align on common indices
+        common_idx = embeddings1.index.intersection(embeddings2.index)
+        logger.info(f"Using {len(common_idx)} common samples")
+        embeddings1 = embeddings1.loc[common_idx]
+        embeddings2 = embeddings2.loc[common_idx]
+
+    # Concat embeddings horizontally (concatenate columns)
+    concatenated_embeddings = pd.concat([embeddings1, embeddings2], axis=1)
+    logger.info(f"Combined shape: {concatenated_embeddings.shape}")
+
+    # Save combined embeddings
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / output_file_name
+    concatenated_embeddings.to_csv(output_path, header=False)
+
+
+def calculate_batch_integration_metrics(
+    adata_emb: sc.AnnData,
+    batch_column_name: str | None,
+    target_column_name: str,
+    embed_key: str = "concatenated_embeddings",
+) -> pd.DataFrame:
+    """
+    Calculate batch integration metrics (avg_bio and avg_batch).
+
+    This function is extracted from BatchIntegrationCallback._generate_metrics_table()
+    to work independently without PyTorch Lightning. It computes scIB metrics for
+    evaluating batch integration quality.
+
+    Parameters
+    ----------
+    adata_emb : sc.AnnData
+        AnnData object with embeddings in obsm[embed_key] and metadata in obs
+    batch_column_name : str or None
+        Column name for batch information in adata_emb.obs. If None or single batch,
+        only bio metrics will be calculated.
+    target_column_name : str
+        Column name for target labels (e.g., cell type) in adata_emb.obs
+    embed_key : str, default="concatenated_embeddings"
+        Key in adata_emb.obsm where embeddings are stored
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with metrics including:
+        - NMI_cluster_by_{label}_(bio): Normalized Mutual Information
+        - ARI_cluster_by_{label}_(bio): Adjusted Rand Index
+        - ASW_by_{label}_(bio): Average Silhouette Width
+        - Avg_bio: Average of bio metrics
+        - graph_conn_by_{batch}_(batch): Graph connectivity (if multi-batch)
+        - ASW_by_{batch}_(batch): Silhouette width for batch (if multi-batch)
+        - Avg_batch: Average of batch metrics (if multi-batch)
+
+    Notes
+    -----
+    This implementation follows the same logic as BatchIntegrationCallback._generate_metrics_table()
+    from bmfm_targets/training/callbacks.py (lines 360-444).
+
+    Examples
+    --------
+    >>> import scanpy as sc
+    >>> adata = sc.read_h5ad("data.h5ad")
+    >>> adata.obsm["concatenated_embeddings"] = embeddings_array
+    >>> metrics = calculate_batch_integration_metrics(
+    ...     adata,
+    ...     batch_column_name="batch",
+    ...     target_column_name="cell_type"
+    ... )
+    >>> print(f"Avg Bio: {metrics['Avg_bio'].iloc[0]}")
+    """
+    import scib.metrics as scm
+    from sklearn.metrics import (
+        adjusted_rand_score,
+        normalized_mutual_info_score,
+        silhouette_score,
+    )
+
+    batch_col, label_col = batch_column_name, target_column_name
+
+    # Compute neighbors graph using the embeddings
+    sc.pp.neighbors(adata_emb, use_rep=embed_key)
+
+    # Check if we have batch information and multiple batches
+    has_batch = batch_col and batch_col in adata_emb.obs
+    single_batch = (not has_batch) or (
+        adata_emb.obs[batch_col].nunique(dropna=False) == 1  # noqa: PD101
+    )
+    results = {}
+
+    if single_batch:
+        # Single batch case: use sklearn metrics directly
+        cluster_key = "__tmp_scib_cluster"
+        sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
+        clusters = adata_emb.obs[cluster_key].to_numpy()
+        labels = adata_emb.obs[label_col].to_numpy()
+        X = adata_emb.obsm[embed_key]
+
+        # Filter out NaN labels
+        mask = pd.notna(labels)
+        clusters, labels, X = clusters[mask], labels[mask], X[mask]
+
+        results["NMI_cluster/label"] = normalized_mutual_info_score(labels, clusters)
+        results["ARI_cluster/label"] = adjusted_rand_score(labels, clusters)
+        vc = pd.Series(labels).value_counts()
+        results["ASW_label"] = (
+            float(silhouette_score(X, labels))
+            if (vc.size > 1 and vc.min() >= 2)
+            else np.nan
+        )
+    else:
+        # Multiple batches: use scib.metrics for comprehensive evaluation
+        results_df = scm.metrics(
+            adata_emb,
+            adata_int=adata_emb,
+            batch_key=str(batch_col),
+            label_key=str(label_col),
+            embed=embed_key,
+            isolated_labels_asw_=False,
+            silhouette_=True,
+            hvg_score_=False,
+            pcr_=False,
+            isolated_labels_f1_=False,
+            trajectory_=False,
+            nmi_=True,
+            ari_=True,
+            cell_cycle_=False,
+            kBET_=False,
+            ilisi_=False,
+            clisi_=False,
+            graph_conn_=True,
+        )
+        results = results_df.iloc[:, 0].to_dict()
+
+    # Calculate average bio score
+    bio_keys = ["NMI_cluster/label", "ARI_cluster/label", "ASW_label"]
+    results["avg_bio"] = np.nanmean([results.get(k, np.nan) for k in bio_keys])
+
+    # Calculate average batch score (only for multiple batches)
+    if not single_batch:
+        batch_keys = ["graph_conn", "ASW_label/batch"]
+        results["avg_batch"] = np.nanmean([results.get(k, np.nan) for k in batch_keys])
+
+    # Rename metrics for clarity
+    rename = {
+        "NMI_cluster/label": f"NMI_cluster_by_{label_col}_(bio)",
+        "ARI_cluster/label": f"ARI_cluster_by_{label_col}_(bio)",
+        "ASW_label": f"ASW_by_{label_col}_(bio)",
+        "graph_conn": f"graph_conn_by_{batch_col}_(batch)",
+        "ASW_label/batch": f"ASW_by_{batch_col}_(batch)",
+        "avg_bio": "Avg_bio",
+        "avg_batch": "Avg_batch",
+    }
+    output = {}
+    for old, new in rename.items():
+        v = results.get(old, np.nan)
+        if not (isinstance(v, float) and np.isnan(v)):
+            output[new] = np.round(v, 3)
+
+    return pd.DataFrame([output])

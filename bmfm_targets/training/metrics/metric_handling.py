@@ -34,7 +34,7 @@ DEFAULT_CATEGORICAL_KWARGS = {"ignore_index": -100, "task": "multiclass"}
 
 SPECIAL_DEFAULT_CATEGORICAL_KWARGS = {
     "f1": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
-    "accuracy": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
+    "accuracy": {"ignore_index": -100, "task": "multiclass", "average": "micro"},
     "precision": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
     "recall": {"ignore_index": -100, "task": "multiclass", "average": "macro"},
     "confusion_matrix": {"ignore_index": -100, "normalize": None},

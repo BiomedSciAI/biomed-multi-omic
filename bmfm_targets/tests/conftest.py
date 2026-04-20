@@ -12,9 +12,6 @@ import pytest
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 from bmfm_targets import config
-from bmfm_targets.config.main_config import (
-    default_fields,
-)
 from bmfm_targets.datasets import sciplex3
 from bmfm_targets.datasets.cellxgene.cellxgene_soma_dataset import (
     CellXGeneSOMADataModule,
@@ -1741,7 +1738,7 @@ def cellxgene_label_columns():
 
 
 @pytest.fixture(scope="session")
-def pl_module_cellxgene_soma(cellxgene_label_columns):
+def pl_module_cellxgene_soma(cellxgene_label_columns, gene2vec_fields):
     tokenizer = load_tokenizer()
     dm = CellXGeneSOMADataModule(
         dataset_kwargs={
@@ -1749,7 +1746,7 @@ def pl_module_cellxgene_soma(cellxgene_label_columns):
             "shuffle": False,
         },
         tokenizer=tokenizer,
-        fields=default_fields(),
+        fields=gene2vec_fields,
         label_columns=cellxgene_label_columns,
         num_workers=0,
     )

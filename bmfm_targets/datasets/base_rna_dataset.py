@@ -337,15 +337,17 @@ class BaseRNAExpressionDataset(Dataset):
     def limit_data_to_gene_list(data: AnnData, limit_genes: list[str]) -> AnnData:
         initial_gene_count = len(data.var_names)
         filtered_vars = data.var.index.isin(limit_genes)
-        data = data[:, filtered_vars]
+        data = data[:, filtered_vars].copy()
         logger.info(
             f"Reduced dataset genes from {initial_gene_count} to {len(data.var_names)} which overlap with the {len(limit_genes)} in `limit_genes`"
         )
+
         # cells with no reads must be removed
         cm, cc = sc.pp.filter_cells(data, min_genes=1, inplace=False)
-        data = data[cm, :]
-        logger.info(f"Removed {sum(~cm)} cells which no longer have counts.")
-        data = data.copy()
+        if sum(~cm) > 0:
+            data = data[cm, :].copy()
+            logger.info(f"Removed {sum(~cm)} cells which no longer have counts.")
+
         return data
 
     def get_sample_metadata(self, idx):

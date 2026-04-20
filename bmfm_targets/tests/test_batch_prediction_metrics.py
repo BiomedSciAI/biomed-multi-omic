@@ -15,6 +15,9 @@ from bmfm_targets.training.metrics import (
     plots,
 )
 
+# # Set random seed for reproducibility
+# seed(42)
+
 
 @pytest.fixture(scope="module")
 def label_predictions_df():
