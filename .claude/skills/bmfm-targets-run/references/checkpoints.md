@@ -49,15 +49,18 @@ As of April 2026 the v2 provenance yamls are now checked in under `run/checkpoin
 
 `trainer.pooling_method` selects how the encoder output becomes a vector for downstream heads. The right choice depends on what the checkpoint was trained with — see `references/overrides.md` for the full signature. Quick map:
 
-| Checkpoint | Recommended pooling | Reason |
-| --- | --- | --- |
-| `biomed.rna.bert.110m.mlm.rda.v1` | `"first_token"` (or `0`) | MLM-only pretraining; pooler head is untrained. |
-| `biomed.rna.bert.110m.mlm.multitask.v1` | `"pooling_layer"` OK, `"first_token"` safe | Multitask head trained; pooler saw label supervision. |
-| `biomed.rna.bert.110m.wced.*` | `"pooling_layer"` (multitask variant) or `"first_token"` | WCED variant has a trained pooler via the multitask heads. |
-| `biomed.rna.llama.32m.mlm.multitask.v1` | `"first_token"` or `"pooling_layer"` | Single CLS; multitask pretraining. |
-| `biomed.rna.llama.47m.wced.multitask.v1` | integer index matching the task's pretrained `decode_from`, or `[1, 2]` for S+T concat, fallback `"first_token"` | Five CLS tokens are routed per-label via `decode_from`; for a finetune head, pick the CLS that was closest to your task during pretraining. |
+**MPS note:** BERT models run fine on `task.accelerator=mps`. LLaMA v2 models also run on MPS after the `flex_attention` CPU/MPS fallback fix in `bmfm_targets/models/common/llama/llama_layers.py` (added April 2026 — see feedback memory). If you see `ValueError: FlexAttention is only supported on CUDA`, the patch is missing.
 
-When in doubt, use `"first_token"` — it's always valid and behaves predictably. `"pooling_layer"` on a pure MLM checkpoint will silently return an untrained projection.
+**Always emit `++trainer.pooling_method=<choice>` explicitly. Never rely on the checkpoint's stored default — it reflects pretraining setup, not inference intent, and using the wrong pooler silently degrades embedding quality.**
+
+| Checkpoint | Required pooling override | Reason |
+| --- | --- | --- |
+| `biomed.rna.bert.110m.mlm.rda.v1` | `++trainer.pooling_method=first_token` | MLM-only; pooler is untrained — `pooling_layer` produces garbage. |
+| `biomed.rna.bert.110m.mlm.multitask.v1` | `++trainer.pooling_method=pooling_layer` | Pooler explicitly trained via multitask classification heads. |
+| `biomed.rna.bert.110m.wced.v1` | `++trainer.pooling_method=first_token` | WCED-only (no multitask heads); pooler not trained for downstream tasks. |
+| `biomed.rna.bert.110m.wced.multitask.v1` | `++trainer.pooling_method=first_token` | Pooler was trained, but `first_token` gives the raw CLS without the Linear projection — prefer this for general embeddings. Use `pooling_layer` only when the projected representation is specifically desired. |
+| `biomed.rna.llama.32m.mlm.multitask.v1` | `++trainer.pooling_method=pooling_layer` | Single CLS; pooler trained via multitask heads (HCE cell type, focal tissue/tissue_general). |
+| `biomed.rna.llama.47m.wced.multitask.v1` | `++trainer.pooling_method=1` (cell type), `2` (tissue), `[1,2]` (combined) | Five CLS tokens; `decode_from` routes each label to a specific CLS. Pick the CLS closest to your task. `first_token` is a fallback if task is ambiguous. |
 
 ## How to use provenance
 
