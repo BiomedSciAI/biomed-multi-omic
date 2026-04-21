@@ -22,6 +22,12 @@ Six task classes — all go through the same `bmfm-targets-run` entry point:
 
 Out of scope: `benchmark_configs/` and dataset conversion (h5ad→litdata, parquet→litdata). Point users at `bmfm_targets/evaluation/benchmark_configs/README.md` and `bmfm_targets/datasets/data_conversion/`.
 
+## Python API shortcut: `bmfm.inference`
+
+For in-notebook predict on a single checkpoint, skip Hydra and use `bmfm_targets.inference(adata, checkpoint=...)` — wraps the same `PredictTaskConfig` path and writes results back in place as `adata.obsm["X_bmfm"]` + `adata.obs["bmfm_pred_<label>"]`. Key kwargs: `layer`, `pooling_method`, `batch_size`, `max_length`, `limit_genes`, `device="auto"`, `log_normalize_transform`.
+
+Prefer it when: one checkpoint, no callbacks, results wanted on the `AnnData`. Fall back to `-cn predict` when you need eval callbacks, CSV artifacts, or anything beyond predict. Pooling / input-data / label-clash rules all apply unchanged (same underlying module).
+
 ## Environment detection
 
 Before doing anything else, figure out which environment you're in.
@@ -148,6 +154,28 @@ When comparing embeddings across several checkpoints on the same h5ad:
 2. **Run sequentially on MPS/CPU.** Chain with `&&`.
 3. **Record the pooling method** in the dir name or a README. Silent defaults produce results that are uninterpretable later.
 4. After all runs: load `embeddings.csv` from each dir, concatenate with a `method` column, compute shared metrics.
+
+## Callbacks
+
+Callbacks live in `bmfm_targets/training/callbacks.py` and are wired into a config under `task.callbacks:` as a list of `_target_: bmfm_targets.training.callbacks.<ClassName>` entries. The reference pattern is `bmfm_targets/evaluation/benchmark_configs/task/predict.yaml`, which stacks three evaluation callbacks on a `predict` run to produce embeddings + downstream metrics in one shot.
+
+Evaluation callbacks (fire on `on_predict_end`, require `task.output_embeddings: true`, and report to ClearML if a logger is active — otherwise they no-op with a warning):
+
+- **`BatchIntegrationCallback`** — scIB metrics (NMI, ARI, ASW, graph_conn) + UMAP plot colored by target / batch / counts + `scib_metrics` benchmarker table comparing the model's embedding to any baseline embeddings found in `adata.obsm`. Single-batch datasets fall back to a sklearn-based metrics path. Args: `batch_column_name`, `counts_column_name`, `target_column_name`.
+- **`CziBenchmarkCallback`** — czbenchmarks `MetadataLabelPredictionTask` with logistic regression over `n_folds` CV folds; reports `f1` as a scalar. Args: `batch_column_name`, `target_column_name`, `n_folds` (default 5).
+- **`SGDCallback`** — `SGDClassifier` trained on the predefined `train`+`dev` splits and evaluated on `test`, with 95% CIs (binomial or Wilson). Reports `SGD_f1` scalar. Requires a split column in `adata.obs`. Args: `batch_column_name`, `target_column_name`, `split_column_name` (default `"split"`), `obsm_key` (default `BMFM_RNA`), `ci_method` (`"binomial"` | `"wilson"`).
+
+All three read embeddings from `adata.obsm["BMFM_RNA"]` via `get_adata_with_embeddings(trainer, ...)`, which aligns prediction-loop outputs back to the datamodule's `predict_dataset.processed_data`. If the user's target column isn't set, the callback defaults to `trainer.datamodule.label_columns[0].label_column_name`.
+
+Training-time callbacks (use in `finetune` / pretrain configs):
+
+- **`BatchSizeScheduler`** — change `max_length` / `batch_size` per epoch. Supply `schedule: [{max_length, batch_size, n_epochs}, ...]`; optional `test_batch_size` / `test_max_length` override for the test stage. Total `n_epochs` must match `trainer.max_epochs` when any entry sets `n_epochs > 1`.
+- **`SavePretrainedModelCallback`** — periodically dump HF-format weights via `pl_module.save_transformer`. Args: `save_dir`, `tokenizer`, `epoch_period` (default 1), `step_period`.
+- **`InitialCheckpoint`** — saves an `initial.ckpt` at `on_train_start` so you can diff pretrained vs. fine-tuned.
+- **`SampleLevelLossCallback`** — on `on_test_end`, writes per-sample MSE / is-zero BCE to `sample_level_loss.csv`. Requires `trainer.batch_prediction_behavior` in `{"track", "dump"}` and the `metric_key` (default `"expressions_non_input_genes"`) to exist in `pl_module.prediction_df`.
+- **`SavePredictionsH5ADCallback`** — perturbation-specific: assembles predicted expressions into an h5ad at `trainer.log_dir/predictions.h5ad`, optionally concatenating non-targeting controls from a `train_h5ad_file`. Args include `perturbation_column_name`, `control_name`, `predictions_key`.
+
+When proposing callbacks, write them under `task.callbacks` and keep the arg names in sync with the datamodule's column names — benchmark_configs does this with OmegaConf refs like `target_column_name: ${data_module.label_column_name}`, which is the pattern to copy.
 
 ## Debugging existing yaml
 
