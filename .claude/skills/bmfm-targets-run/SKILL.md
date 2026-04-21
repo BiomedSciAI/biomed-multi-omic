@@ -69,7 +69,7 @@ Always confirm inferences with the user before writing the yaml.
 - **When `checkpoint=` is set, do NOT emit `tokenizer:`, `fields:`, or `model:` blocks.** The framework loads all three from the checkpoint. Read provenance to understand what the checkpoint expects so you can set the right `data_module` overrides, but don't copy those blocks into the user's config.
 - **Label-name clash with pretrained heads.** A clash happens **if and only if** the user's `label_column_name` is identical to a name the checkpoint already has a head for (v2 47m WCED: `cell_type_ontology_term_id`, `tissue`, `tissue_general`, `donor_id`, `sex`; v1 BERT WCED multitask: `cell_type`, `tissue`, `donor_id`). Mismatched shapes fail loudly; matched shapes load silently with wrong label-index meaning. When names differ, a fresh head is added — nothing to worry about. Rule: check provenance; if the user's column matches a name there, rename it.
 - **At predict/test time**, `label_columns` in the YAML is ignored (the checkpoint's is authoritative). Pass `label_columns: []` for embedding-only mode.
-- Use `++` for fields that might not exist in the base config. Use plain `key=value` for fields that definitely exist. **Exception: `++trainer.pooling_method=<value>` is a known footgun** — Hydra creates `self.trainer` as a bare dict rather than a `TrainerConfig` dataclass, which then crashes at `.merge_from_checkpoint()` with `AttributeError: 'dict' object has no attribute 'merge_from_checkpoint'`. The fix is in `bmfm_targets/config/main_config.py` (~line 354); if you see this error and the fix is absent, add an `isinstance(self.trainer, dict)` guard there.
+- Use `++` for fields that might not exist in the base config. Use plain `key=value` for fields that definitely exist. For pooling, always use `trainer.pooling_method=<value>` — no `++`.
 - **Split strategy matters.** Large pretrained RNA models learn donor / batch structure; a random split at finetune is too easy. If the user has `donor_id` / `batch` / `dataset_id` with ≥4 distinct values, propose a held-out-donor split. See `references/data_prep.md`.
 - **Pooling method — always choose explicitly, never rely on checkpoint defaults.** See section below.
 
@@ -154,7 +154,7 @@ When comparing embeddings across several checkpoints on the same h5ad:
 1. Read the full Hydra error. The first stack frame says where instantiation failed; the second says which field.
 2. Run the dry-run script before proposing fixes — it surfaces all resolution errors, not just the first.
 3. Common failures: `_partial_` missing on a data_module; `${oc.env:...}` referencing an unset var; `++` needed for a field not in the base schema; `-cd run` forgotten.
-4. **`AttributeError: 'dict' object has no attribute 'merge_from_checkpoint'`** — caused by `++trainer.pooling_method=<value>` creating `self.trainer` as a bare dict. Fix is in `bmfm_targets/config/main_config.py` (~line 354): add an `isinstance(self.trainer, dict)` guard that merges dict overrides onto the checkpoint-loaded `TrainerConfig` before calling `.merge_from_checkpoint()`.
+4. **`AttributeError: 'dict' object has no attribute 'merge_from_checkpoint'`** — `trainer:` block is missing from the base yaml. Fix: ensure the base yaml has a `trainer:` stub (all shipped yamls under `run/` should have one). Then use `trainer.pooling_method=X` without `++`.
 
 See `references/overrides.md` for the full gotcha list.
 
