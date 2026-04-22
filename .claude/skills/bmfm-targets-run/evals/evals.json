@@ -1,0 +1,55 @@
+{
+  "skill_name": "bmfm-targets-run",
+  "description": "Seven task prompts exercising the skill across the six scopes (predict, finetune, pretrain, dna_predict, dna_finetune, interpret) plus one arcane multitask + gradient-reversal case. Each prompt is phrased the way a real user would ask it, not in the framework's vocabulary.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "predict-rda-embeddings",
+      "prompt": "I have an h5ad file at /data/my_pbmc.h5ad with raw counts. I want zero-shot embeddings using the MLM+RDA v1 checkpoint. Give me the command.",
+      "expected_output": "A bmfm-targets-run -cd run -cn predict command with checkpoint=ibm-research/biomed.rna.bert.110m.mlm.rda.v1, log_normalize_transform=false, and an rda_transform override (auto_align is the safe default). Active inspection of the h5ad should be offered. A dry-run validation step should be proposed before the user runs it.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "finetune-celltype",
+      "prompt": "I want to fine-tune a BMFM model on my data to classify cell types. The h5ad is /data/my_cells.h5ad. I don't know what checkpoint to pick.",
+      "expected_output": "A short recommendation of a checkpoint (WCED multitask v1 is a reasonable default), a data-inspection step (look at celltype column, class balance, split column presence), a finetune yaml or CLI that uses cross_entropy on the user's label column, and a dry-run.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "dna-regression-finetune",
+      "prompt": "I have a CSV directory /data/dna_csvs/ with train.csv, dev.csv, test.csv. Column 0 is sequence, columns 1 and 2 are two continuous expression values I want to predict jointly. Help me finetune the DNA ModernBERT checkpoint.",
+      "expected_output": "A dna_finetune yaml with two LabelColumnInfo entries (is_regression_label: true) and two mse losses, inspection of the csv before writing, and a dry-run using -cn dna_finetune_train_and_test_config.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "pretrain-from-scratch",
+      "prompt": "I want to pretrain a BMFM RNA model on my own h5ad from scratch (no checkpoint). The file is /data/atlas.h5ad. Walk me through it.",
+      "expected_output": "Recommends the llama architecture over scBERT (v2 outperforms per-param). Uses the pretrain_rda_mlm template or equivalent with tokenizer identifier protein_coding, scale_adapt expression encoder, expose_zeros: true paired with pad_zero_expression_strategy: batch_wise, log_normalize_transform: true (or rda_transform override if RDA is desired). Inspects h5ad for split column; proposes held-out-batch/donor split if a suitable grouping column is present. Dry-run before handing off.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "interpret-which-genes-matter",
+      "prompt": "I have a fine-tuned checkpoint at /ckpts/my_celltype.ckpt trained on the pbmc cell_type column. I want to know which genes the model uses to identify T cells vs B cells. Data subset at /data/subset.h5ad (500 cells).",
+      "expected_output": "An InterpretTaskConfig yaml that does NOT include model/tokenizer/fields blocks (they come from the checkpoint), with attribute_kwargs.n_steps=50, attribute_filter restricted to the specific classes the user asked about (e.g. T cell + B cell only, not all classes), limit_dataset_samples around 500, a warning that it's slow, confirmation that the checkpoint is a local .ckpt not a HuggingFace id, and a post-processing snippet using get_mean_attributions to produce the top-gene list with the highlight column.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "name": "finetune-label-name-clash",
+      "prompt": "I want to fine-tune ibm-research/biomed.rna.bert.110m.wced.multitask.v1 on my h5ad at /data/pbmc.h5ad to classify my 8 custom cell type annotations. My column is called `cell_type` and contains values like `my_T_helper_subset_1`. Help me write the config.",
+      "expected_output": "Correctly identifies the clash: the v1 BERT WCED multitask checkpoint has a pretrained head literally named `cell_type`, and the user's column has the same name. State-dict loading will try to push the pretrained head weights into the user's fresh 8-class head — either silently loading into a mis-mapped 8-class label space (if n_unique_values coincidentally matches) or failing with a shape mismatch (more likely). Recommends renaming the user's column to something non-clashing (e.g. `my_cell_type`) in ad.obs before training, and pointing `label_column_name` at the new name. Makes no claims about 'close enough' or partial matches — the rule is exact-name-match or no clash. Produces a finetune yaml WITHOUT tokenizer/fields/model blocks. Uses cross_entropy (or focal if imbalanced). Dry-run.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "name": "finetune-grl-donor-debiasing",
+      "prompt": "I'm fine-tuning on cell_type but my data is from 3 donors and the model keeps latching onto donor-specific signal. How do I make the encoder ignore donor_id while still learning cell_type?",
+      "expected_output": "Proposes gradient reversal. Adds donor_id as a LabelColumnInfo with gradient_reversal_coefficient (~3.0, referencing the wced.multitask.v1 pattern), a matching trainer.losses entry with focal loss at weight 0.05, warns about the primary-vs-adversarial weight balance, points at finetune_with_grl.yaml in examples/ or produces the equivalent yaml, and does a dry-run.",
+      "files": []
+    }
+  ]
+}

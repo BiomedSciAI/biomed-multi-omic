@@ -1,0 +1,57 @@
+# Fallback predict template for pip-installed environments where `run/` isn't
+# present. Matches the shape of `run/predict.yaml` in the repo.
+#
+# CLI (when the repo is cloned, prefer `-cd run -cn predict` instead):
+#   bmfm-targets-run \
+#     --config-dir .claude/skills/bmfm-targets-run/examples \
+#     --config-name predict_template \
+#     input_file=/abs/path/data.h5ad \
+#     working_dir=./outputs/predict \
+#     checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1
+
+defaults:
+  - _self_
+
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes
+
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: genes
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: expressions
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: mlp_with_special_token_embedding
+      zero_as_special_token: true
+
+data_module:
+  _target_: bmfm_targets.datasets.base_rna_expression.BaseRNAExpressionDataModule
+  _partial_: true
+  max_length: 1024
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  transform_datasets: false
+  num_workers: 4
+  batch_size: 16
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+
+task:
+  _target_: bmfm_targets.config.PredictTaskConfig
+  checkpoint: ${checkpoint}
+  output_embeddings: true
+  output_predictions: true
+  default_root_dir: ${working_dir}
+  accelerator: ${accelerator}
+  precision: 16-mixed
+
+input_file: null
+working_dir: /tmp/predict
+checkpoint: null
+accelerator: gpu

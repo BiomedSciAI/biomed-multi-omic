@@ -1,0 +1,74 @@
+# Captum-based attribution over a fine-tuned checkpoint.
+#
+# Produces per-sample, per-gene attribution scores toward a chosen label class.
+# Uses Integrated Gradients (n_steps=50 is a reasonable default).
+#
+# Requirements:
+#   - Local .ckpt file (not just a HuggingFace id). The full Lightning checkpoint
+#     is needed; HF exports may not contain everything the attribution loop expects.
+#   - A small data subset (~100-500 cells). Attribution runs one sample at a time
+#     with 50 forward+backward passes each; it's slow.
+#   - The checkpoint's fields / encoder must match this yaml exactly. Copy them
+#     from the training yaml the checkpoint was produced with.
+#
+# CLI:
+#   bmfm-targets-run \
+#     --config-dir .claude/skills/bmfm-targets-run/examples \
+#     --config-name interpret_from_checkpoint \
+#     input_file=/abs/path/data.h5ad \
+#     working_dir=./outputs/interpret \
+#     checkpoint=/abs/path/to/model.ckpt \
+#     label_column_name=celltype
+
+defaults:
+  - _self_
+
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes  # must match the checkpoint; change if pretrained with a different vocab
+
+fields:
+  # Copy these from the checkpoint's training yaml. Fields/encoder mismatches
+  # silently produce garbage attributions.
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: genes
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: expressions
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: mlp_with_special_token_embedding
+      zero_as_special_token: true
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: ${label_column_name}
+
+data_module:
+  _target_: bmfm_targets.datasets.base_rna_expression.BaseRNAExpressionDataModule
+  _partial_: true
+  num_workers: 4
+  max_length: 512
+  limit_dataset_samples: 200   # attribution is slow; cap the sample count
+  log_normalize_transform: true
+  limit_genes: protein_coding
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+
+task:
+  _target_: bmfm_targets.config.InterpretTaskConfig
+  default_root_dir: ${working_dir}
+  accelerator: gpu
+  precision: 16-mixed
+  tf32_mode: medium
+  attribute_kwargs:
+    n_steps: 50    # Integrated Gradients steps; drop to 20 if OOM or too slow
+  checkpoint: ${checkpoint}
+
+input_file: null
+working_dir: /tmp/interpret
+checkpoint: null
+label_column_name: celltype

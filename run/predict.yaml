@@ -1,6 +1,7 @@
 defaults:
   - data_module: base_seq_cls
   - task: predict
+  - trainer: default
   - _self_
 
 seed:
