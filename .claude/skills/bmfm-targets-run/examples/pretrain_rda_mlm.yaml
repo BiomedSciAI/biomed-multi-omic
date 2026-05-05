@@ -1,0 +1,133 @@
+# Llama MLM pretraining template — cold-start a new model from scratch, or
+# continue-pretrain an existing Llama checkpoint.
+#
+# As of v2 (March 2026), llama models outperform scBERT per-parameter; prefer
+# this template over an scBERT-based one unless you have a specific reason.
+#
+# Key invariants (match the v2 32m MLM multitask recipe):
+#   - tokenizer identifier: protein_coding   (~19k genes; pairs with limit_genes)
+#   - scale_adapt expression encoder         (handles wide count ranges robustly)
+#   - expose_zeros: all + pad_zero_expression_strategy: batch_wise
+#       zeros must be exposed AND subsampled; one without the other swamps input
+#   - log_normalize_transform: true          (v2 recipes normalize internally; see below)
+#
+# RDA note: `rda_transform` is an alternative normalization path. When set, RDA
+# takes over log-normalization internally and overrides `log_normalize_transform`.
+# For standard MLM pretraining (this template), leave `rda_transform` unset and
+# keep `log_normalize_transform: true`. If you want RDA-style training, add
+# `++data_module.rda_transform=downsample` (or `poisson_downsample`) and flip
+# `log_normalize_transform: false`.
+#
+# CLI:
+#   bmfm-targets-run \
+#     --config-dir .claude/skills/bmfm-targets-run/examples \
+#     --config-name pretrain_rda_mlm \
+#     input_file=/abs/path/data.h5ad \
+#     working_dir=./outputs/pretrain
+
+defaults:
+  - _self_
+
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: protein_coding
+
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: genes
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: expressions
+    is_masked: true
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: scale_adapt
+      n_sin_basis: 48
+      basis_scale: 0.01
+      trainable: false
+      zero_as_special_token: true
+    decode_modes:
+      - regression
+      - is_zero
+
+label_columns: []
+
+data_module:
+  _target_: bmfm_targets.datasets.base_rna_expression.BaseRNAExpressionDataModule
+  _partial_: true
+  num_workers: 8
+  mlm: true
+  shuffle: true
+  change_ratio: 0.15
+  mask_ratio: 0.95
+  max_length: 8192
+  padding: longest
+  sequence_order: random
+  switch_ratio: 0.0
+  batch_size: 8
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  pad_zero_expression_strategy:
+    strategy: batch_wise
+    interleave_zero_ratio: 0.9
+    expressed_sample_ratio: 0.2
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+    split_column_name: ${split_column_name}
+    expose_zeros: all          # required for v2-style pretraining; must pair
+                               # with pad_zero_expression_strategy above
+    raw_counts: true
+
+model:
+  _target_: bmfm_targets.models.predictive.llama.LlamaForMultiTaskConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  hidden_act: gelu
+  hidden_size: 384
+  initializer_range: 0.02
+  layer_norm_eps: 1.0e-12
+  pad_token_id: 0
+  flex_attention: true
+  use_cache: true
+  attention: flex
+  checkpoint: ${checkpoint}
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 1000
+  weight_decay: 0.1
+  learning_rate: 1.0e-4
+  betas: [0.9, 0.99]
+  epsilon: 1.0e-8
+  losses:
+    - field_name: expressions
+      name: mse
+      ignore_zero: true
+    - field_name: expressions
+      name: is_zero_bce
+      weight: 1.5
+
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${working_dir}
+  max_epochs: ${max_epochs}
+  precision: 16-mixed
+  gradient_clip_val: 0.5
+  accelerator: ${accelerator}
+  max_steps: -1
+  tf32_mode: medium
+  accumulate_grad_batches: 2
+  resume_training_from_ckpt: true
+  checkpoints_every_n_train_steps: ${checkpoints_every_n_train_steps}
+
+input_file: null
+working_dir: /tmp/pretrain_llama
+accelerator: gpu
+max_epochs: 10
+checkpoints_every_n_train_steps: 10000
+checkpoint: null
+split_column_name: split_random

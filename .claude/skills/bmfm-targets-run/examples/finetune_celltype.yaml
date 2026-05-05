@@ -1,0 +1,88 @@
+# Fine-tune a BMFM RNA checkpoint on a single categorical label (e.g. cell_type).
+#
+# This is the "most requested" pattern. It layers a classification head on top
+# of the pretrained encoder and trains only the new head + encoder.
+#
+# Defaults here match the v1 WCED/MLM-multitask checkpoints:
+#   - log_normalize_transform: true   (these checkpoints want log-normalized input)
+#   - max_length: 1024                (training value; can be smaller at finetune)
+#   - cross_entropy                   (baseline; switch to focal if imbalanced)
+#
+# For the MLM+RDA checkpoint, override at the CLI:
+#   data_module.log_normalize_transform=false  (RDA wants raw counts)
+#   ++data_module.rda_transform=auto_align     (or downsample)
+#
+# CLI:
+#   bmfm-targets-run \
+#     --config-dir .claude/skills/bmfm-targets-run/examples \
+#     --config-name finetune_celltype \
+#     input_file=/abs/path/data.h5ad \
+#     working_dir=./outputs/ft_celltype \
+#     checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1 \
+#     label_column_name=celltype \
+#     split_column_name=split_random
+
+defaults:
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+seed:
+  seed_value: 1234
+
+# tokenizer:, fields:, and model: are deliberately omitted. When `checkpoint=`
+# is passed, the framework rehydrates all three from the checkpoint. Hardcoding
+# them here is at best noise; at worst a silent mismatch when checkpoints use
+# different vocabs (v2 Llama uses `protein_coding`, v1 BERT uses `all_genes`)
+# or different expression encoders (v1 WCED uses mlp_with_special_token_embedding,
+# v2 uses scale_adapt).
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: ${label_column_name}
+    is_regression_label: false
+
+data_module:
+  _target_: bmfm_targets.datasets.base_rna_expression.BaseRNAExpressionDataModule
+  _partial_: true
+  num_workers: 4
+  batch_size: 16
+  max_length: 1024
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  transform_datasets: false
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+    split_column_name: ${split_column_name}
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 100
+  weight_decay: 0.01
+  learning_rate: 5.0e-05
+  losses:
+    - label_column_name: ${label_column_name}
+      name: cross_entropy
+      metrics:
+        - name: accuracy
+        - name: f1
+        - name: precision
+        - name: recall
+
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${working_dir}
+  max_epochs: ${max_epochs}
+  val_check_interval: ${val_check_interval}
+  precision: 16-mixed
+  accelerator: ${accelerator}
+  checkpoint: ${checkpoint}
+
+input_file: null
+working_dir: /tmp/ft_celltype
+checkpoint: null
+split_column_name: split_random
+label_column_name: celltype
+max_epochs: 5
+val_check_interval: 0.5
+accelerator: gpu

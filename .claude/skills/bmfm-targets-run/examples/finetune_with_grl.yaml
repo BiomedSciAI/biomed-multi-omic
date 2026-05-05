@@ -1,0 +1,106 @@
+# Fine-tune with gradient reversal: classify cell_type while actively removing
+# donor_id signal from the representation.
+#
+# This pattern mirrors run/checkpoints/biomed.rna.bert.110m.wced.multitask.v1.yaml,
+# where donor_id has gradient_reversal_coefficient: 3.0 with a focal loss at
+# weight 0.05. The combination is deliberate: the high GRL coefficient flips the
+# gradient aggressively, but the small loss weight keeps the adversarial signal
+# from dominating the primary cell_type objective.
+#
+# When to use this:
+#   - You have a nuisance variable (donor / batch / site) in the h5ad obs
+#   - Downstream task performance is hurt by spurious correlations with it
+#   - You want the encoder to be invariant to the nuisance
+#
+# Don't use this if the nuisance is not actually a confound — the adversarial
+# signal is expensive and can hurt primary task quality if applied gratuitously.
+#
+# CLI:
+#   bmfm-targets-run \
+#     --config-dir .claude/skills/bmfm-targets-run/examples \
+#     --config-name finetune_with_grl \
+#     input_file=/abs/path/data.h5ad \
+#     working_dir=./outputs/ft_grl \
+#     checkpoint=ibm-research/biomed.rna.bert.110m.wced.multitask.v1 \
+#     label_column_name=celltype \
+#     nuisance_label_name=donor_id \
+#     split_column_name=split_random
+
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: all_genes
+
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: genes
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: expressions
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: mlp_with_special_token_embedding
+      zero_as_special_token: true
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: ${label_column_name}
+    is_regression_label: false
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: ${nuisance_label_name}
+    gradient_reversal_coefficient: 3.0
+    silent_label_values:
+      - unknown
+
+data_module:
+  _target_: bmfm_targets.datasets.base_rna_expression.BaseRNAExpressionDataModule
+  _partial_: true
+  num_workers: 4
+  batch_size: 16
+  max_length: 1024
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  transform_datasets: false
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+    split_column_name: ${split_column_name}
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 100
+  weight_decay: 0.01
+  learning_rate: 5.0e-05
+  losses:
+    # Primary task — dominates
+    - label_column_name: ${label_column_name}
+      weight: 1.0
+      name: cross_entropy
+      metrics:
+        - name: accuracy
+        - name: f1
+    # Adversarial — small weight, gradient sign flipped by GRL on the column
+    - label_column_name: ${nuisance_label_name}
+      weight: 0.05
+      name: focal
+      focal_gamma: 2
+
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${working_dir}
+  max_epochs: ${max_epochs}
+  val_check_interval: ${val_check_interval}
+  precision: 16-mixed
+  accelerator: ${accelerator}
+  checkpoint: ${checkpoint}
+
+input_file: null
+working_dir: /tmp/ft_grl
+checkpoint: null
+split_column_name: split_random
+label_column_name: celltype
+nuisance_label_name: donor_id
+max_epochs: 5
+val_check_interval: 0.5
+accelerator: gpu

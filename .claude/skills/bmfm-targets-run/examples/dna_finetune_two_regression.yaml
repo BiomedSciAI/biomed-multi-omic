@@ -1,0 +1,68 @@
+# DNA fine-tuning with two independent regression labels.
+#
+# Canonical use case: predicting two continuous properties of a sequence
+# (e.g. expression levels for two tissues) from the same encoder. Two
+# regression heads are attached, each supervised by MSE on its own column.
+#
+# Expected csv layout (same shape for train.csv, dev.csv, test.csv):
+#   col 0: nucleotide sequence (A/C/G/T string)
+#   col 1: label_a (float)
+#   col 2: label_b (float)
+#   (any trailing columns are ignored)
+#
+# CLI:
+#   bmfm-targets-run \
+#     --config-dir .claude/skills/bmfm-targets-run/examples \
+#     --config-name dna_finetune_two_regression \
+#     input_directory=/abs/path/csv_dir \
+#     working_dir=./outputs/dna_ft \
+#     checkpoint=ibm-research/biomed.dna.modernbert.113m.v1 \
+#     label_a=expression_tissue_a \
+#     label_b=expression_tissue_b
+
+defaults:
+  - data_module: dna_base_seq_cls
+  - tokenizer: ref2vec
+  - fields: dna_chunks
+  - trainer: default
+  - task: train_and_test
+  - model: modernbert
+  - _self_
+
+seed:
+  seed_value: 1234
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: ${label_a}
+    is_regression_label: true
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: ${label_b}
+    is_regression_label: true
+
+data_module:
+  batch_size: ${batch_size}
+  dataset_kwargs:
+    processed_data_source: ${input_directory}
+    dataset_name: ${dataset_name}
+    label_dict_path: ${input_directory}/${dataset_name}_all_labels.json
+
+trainer:
+  learning_rate: ${learning_rate}
+  losses:
+    - label_column_name: ${label_a}
+      name: mse
+    - label_column_name: ${label_b}
+      name: mse
+
+batch_size: 32
+learning_rate: 1e-5
+dataset_name: my_dataset
+label_a: label_a
+label_b: label_b
+checkpoint: null
+accelerator: gpu
+input_directory: null
+working_dir: /tmp/dna_ft
+max_epochs: 5
+val_check_interval: 0.5
