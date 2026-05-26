@@ -22,7 +22,7 @@ from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
 from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH, load_tokenizer
 
 # Configuration
-ZHENG_SMALL_H5AD_PATH: Path = Path("examples/resources/zheng68k.h5ad") #165 samples
+ZHENG_SMALL_H5AD_PATH: Path = Path("examples/resources/zheng68k.h5ad")  # 165 samples
 
 
 def iter_h5ad_batches(
@@ -203,7 +203,7 @@ def generate_embeddings_for_h5ad(
         outputs = llm.embed(batch)
         batch_embeddings = [output.outputs.embedding for output in outputs]
         all_embeddings.extend(batch_embeddings)
-        
+
         print(f"  Processed {len(all_embeddings)}/{total_cells} cells...")
 
     # Convert to numpy array

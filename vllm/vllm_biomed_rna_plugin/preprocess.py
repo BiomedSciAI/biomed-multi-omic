@@ -146,5 +146,3 @@ def preprocess_anndata(
 
     # Convert to vLLM format
     return _convert_datamodule_batch_to_vllm_format(input_ids, attention_mask)
-
-
