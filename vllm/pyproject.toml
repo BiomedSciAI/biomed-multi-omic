@@ -1,0 +1,101 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-ibm-biomed-plugin"
+version = "0.1.0"
+description = "IBM biomed-rna model plugin for vLLM"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Sivan Ravid", email = "sivanra@il.ibm.com"}
+]
+keywords = ["vllm", "biomed-rna", "scRNA", "inference", "plugin"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "vllm>=0.13.0",
+    "torch>=2.9.0",
+    "transformers>=4.56.0,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=22.0",
+    "isort>=5.0",
+    "mypy>=0.950",
+]
+
+#[project.urls]
+#Homepage = ""
+#Repository = ""
+
+# CRITICAL: Entry point for vLLM plugin discovery
+[project.entry-points."vllm.general_plugins"]
+biomedrna = "vllm_biomed_rna_plugin:register_biomed_rna_model"
+
+[tool.setuptools]
+packages = ["vllm_biomed_rna_plugin"]
+
+[tool.black]
+line-length = 88
+target-version = ['py310', 'py311', 'py312']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+target-version = "py310"
+extend-include = ["*.ipynb"]
+line-length = 88
+
+# Activate all the rules that are pyupgrade-related
+select = [
+  "UP",   # pyupgrade
+  "D",    # pydocstyle
+  "PT",   # pytest style checking
+  "C4",   # comprehensions style checking
+  "PD",   # pandas style checking
+  "F",    # pyflakes: is-literal
+  "W605", # pycodestyle: invalid-escape-sequence
+  "I",    # isort
+]
+# On top of the Google convention, disable `D417`, which requires
+# documentation for every function parameter.
+ignore = [
+  "D100",  # pydocstyle: Missing module docstring
+  "D101",  # pydocstyle: Missing module-level docstring
+  "D102",  # pydocstyle: Missing docstring in public module
+  "D103",  # pydocstyle: Missing class docstring
+  "D105",  # pydocstyle: Missing docstring in magic method
+  "D107",  # pydocstyle: Missing parameter descriptions in the docstring
+  "D203",  # pydocstyle: 1 blank line required before class docstring
+  "D205",  # pydocstyle: 1 blank line required between summary line and description
+  "D212",  # pydocstyle: Multi-line docstring summary should start at the first line
+  "D401",  # pydocstyle: First line should be in imperative mood
+  "D417",  # pydocstyle: Missing argument descriptions in the docstring
+  "F841",  # flake8: unused variable
+  "F401",  # flake8: unused import
+  "E402",  # module level import not at top of file
+  "E501",  # line too long (handled by black)
+  "E722",  # bare except
+  "PD011", # pandas do not use .values (false positives causing bugs in torch code)
+  "PD015", # Use .merge method instead of pd.merge function. They have equivalent functionality.
+  "PT011", #TODO remove
+]
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["I001"]
