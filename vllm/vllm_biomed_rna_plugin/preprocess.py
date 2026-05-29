@@ -10,7 +10,7 @@ import warnings
 import torch
 from bmfm_targets.training.data_module import DataModule
 
-from vllm_biomed_rna_plugin.utils import get_fields
+from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH, get_fields
 
 
 def create_rna_vllm_input(
@@ -51,6 +51,11 @@ def _convert_datamodule_batch_to_vllm_format(
     """
     Convert DataModule batch output to vLLM multi-modal format.
 
+    DataModule produces Tensor[batch, 2, seq_len] internally.
+    vLLM expects one request dict per cell.
+    This function bridges the two by unpacking the batch.
+    The processor in biomed_rna.py will repack into dense tensors.
+
     Args:
     ----
         input_ids: Tensor of shape [batch_size, 2, seq_len] where:
@@ -84,7 +89,7 @@ def preprocess_anndata(
     """
     Preprocess h5ad data using bmfm-targets DataModule and create a list of RNA multi modal objects.
 
-    This function applies the same preprocessing as bmfm-targets inference:
+    Applies the same preprocessing as bmfm-targets inference:
     - Log normalization (if enabled)
     - Gene filtering (e.g., protein_coding only)
     - Sequence length limiting (max_length)
@@ -116,11 +121,10 @@ def preprocess_anndata(
                 }
             }
     """
-    # Load fields using utility function
-    fields = get_fields()
-
     if batch_size is None:
         batch_size = adata.n_obs
+
+    fields = get_fields(DEFAULT_MODEL_PATH)
 
     # Create DataModule with same settings as bmfm-targets inference
     dataset_kwargs = {"processed_data_source": adata}

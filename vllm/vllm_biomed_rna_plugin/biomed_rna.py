@@ -10,6 +10,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from bmfm_targets.models.predictive.llama.config import LlamaForMultiTaskConfig
 from transformers import BatchFeature, PretrainedConfig
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class EmbeddingIdentityPooler(Pooler):
     def get_supported_tasks(self) -> Set[PoolingTask]:
         return {"embed"}
 
+    # todo: extract handling of hidden states from the get_embeddings_from_output
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -124,6 +126,8 @@ class RnaProcessorItems(DictEmbeddingItems):
 
     By inheriting from DictEmbeddingItems, vLLM will skip prompt update
     validation for RNA modality (_hf_processor_applies_updates returns False).
+
+    data is a dict with keys gene_ids, expr_value, attention_mask
     """
 
     def __init__(self, data):
@@ -166,14 +170,17 @@ class RnaProcessorItems(DictEmbeddingItems):
         The data is already stored in self.data (from DictEmbeddingItems parent),
         which is the combined_data dict with fields as lists.
         """
-        return dict(self.data) if self.data else {}
+        return (
+            dict(self.data) if self.data else {}
+        )  # todo - might be possible to just rutn self.data as is
 
 
 class BiomedRnaDataParser(MultiModalDataParser):
-    """Custom parser that adds 'rna' to the known modalities."""
+    """Custom parser for 'rna' modality."""
 
     def _parse_rna_data(self, data) -> ModalityDataItems:
         # RnaProcessorItems handles both dict and list of dicts
+        # data (dict): {"gene_ids" : Tensor[len_seq], "expr_values" : Tensor[len_seq], "attention_mask" : Tensor[len_seq[], optional
         return RnaProcessorItems(data)
 
     def _get_subparsers(self) -> dict[str, Any]:
@@ -408,6 +415,11 @@ class BiomedRnaMultiModalProcessor(BaseMultiModalProcessor):
                 # tensor_type="pt",
                 tensor_type=None,  # allow variable length, padding will be done in forward
             )
+            # todo: consider this:
+            # mm_processed_data = BatchFeature(
+            # passthrough_data,
+            # tensor_type=None,  # allow variable length, padding will be done in forward
+        # )
 
         # Create MultiModalKwargsItems from processed data
         mm_kwargs = MultiModalKwargsItems.from_hf_inputs(
@@ -483,40 +495,24 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
         super().__init__()
 
         logger = logging.getLogger(__name__)
+        self.vllm_config = vllm_config
         hf_config = vllm_config.model_config.hf_config
 
+        # # =====================================
+        # # override vllm defaults
+        # hf_config.use_cache = False
+        # hf_config.architectures = ["BiomedRnaForSequenceEmbedding"]
+        # hf_config.max_position_embeddings =  2048 #check if we need this
+
+        # # hf_config.is_encoder_decoder = False
+        # # hf_config.is_decoder = False
+        # # hf_config.add_cross_attention = False
+        # # ======================================
+
         with self._mark_tower_model(vllm_config, "rna"):
-            # todo: move this to a method
-            from bmfm_targets.config import FieldInfo, LabelColumnInfo
-            from bmfm_targets.models.predictive.llama.config import (
-                LlamaForMultiTaskConfig,
-            )
-
-            # Convert HF config dict to LlamaForMultiTaskConfig
-            if hasattr(hf_config, "to_dict"):
-                config_dict: Any = hf_config.to_dict()
-            elif isinstance(hf_config, dict):
-                config_dict = hf_config
-            else:
-                config_dict = vars(hf_config)
-
-            # Convert fields from dicts to FieldInfo objects
-            if "fields" in config_dict and isinstance(config_dict["fields"], list):
-                config_dict["fields"] = [
-                    FieldInfo(**f) if isinstance(f, dict) else f
-                    for f in config_dict["fields"]
-                ]
-
-            # Convert label_columns from dicts to LabelColumnInfo objects
-            if "label_columns" in config_dict and isinstance(
-                config_dict["label_columns"], list
-            ):
-                config_dict["label_columns"] = [
-                    LabelColumnInfo(**lc) if isinstance(lc, dict) else lc
-                    for lc in config_dict["label_columns"]
-                ]
-
-            bmfm_config = LlamaForMultiTaskConfig(**config_dict)
+            # hf_config is already a LlamaForMultiTaskConfig instance loaded by vLLM
+            # from the model's config.json via AutoConfig
+            bmfm_config: LlamaForMultiTaskConfig = hf_config
 
             self.pooling_method = getattr(bmfm_config, "pooling_method", "first_token")
             self.hidden_size = bmfm_config.hidden_size
@@ -605,9 +601,7 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
         expr_padded = torch.zeros(
             batch_size, max_len, dtype=torch.float32, device=device
         )
-        mask_padded = torch.zeros(
-            batch_size, max_len, dtype=torch.float32, device=device
-        )
+        mask_padded = torch.zeros(batch_size, max_len, dtype=torch.bool, device=device)
 
         # Fill in actual values
         for i, (g, e) in enumerate(zip(gene_ids, expr_values)):
@@ -615,7 +609,7 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
             gene_ids_padded[i, :length] = g.long()
             expr_padded[i, :length] = e.float()
             mask_padded[i, :length] = (
-                attn_masks[i].float() if attn_masks is not None else 1.0
+                attn_masks[i].bool() if attn_masks is not None else True
             )
 
         return gene_ids_padded, expr_padded, mask_padded
@@ -629,12 +623,32 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
         **kwargs,
     ) -> torch.Tensor:
         """
-        Delegate to BMFM model and extract embeddings using configured pooling method.
+            Generate cell embeddings from RNA expression data.
 
-        kwargs should include: gene_ids, expr_values and attention_mask
+            Processes single-cell RNA-seq data through the BiomedRNA encoder and returns
+            pooled embeddings. Handles both pre-padded batches (offline processing) and
+            variable-length batches (online serving).
+            variable-length batches are padded to uniform length before passing to encoder.
 
-        offline (h5ad)     → DataModule → same length → tensor [batch, seq_len]
-        online (serving)   → per-request → variable length → list of tensors
+        Args:
+        ----
+                input_ids: Unused (RNA data provided via kwargs)
+                positions: Unused
+                inputs_embeds: Unused
+                attn_metadata: Unused
+                **kwargs: RNA data containing:
+                    gene_ids: Gene identifiers
+                        - Pre-padded: torch.Tensor [batch_size, seq_len]
+                        - Variable-length: list[torch.Tensor] of shapes [seq_len_i]
+                        Values: Integer gene IDs
+                    expr_values: Expression values (same type/shape as gene_ids)
+                        Values: Float expression levels (typically log-normalized)
+                    attention_mask (optional): Attention mask (same type/shape as gene_ids)
+                        Values: 1 for real tokens, 0 for padding
+
+        Returns:
+        -------
+                torch.Tensor: Pooled cell embeddings [batch_size, 1, hidden_size]
 
         TODO: Refactor to return unpooled hidden states
         - Currently returns pooled embeddings [batch, 1, hidden_size]
@@ -652,27 +666,38 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
 
         gene_ids = kwargs["gene_ids"]
         expr_values = kwargs["expr_values"]
-        attn_masks = kwargs.get("attention_mask", None)
+        attention_mask = kwargs.get("attention_mask", None)
 
+        # todo: check if this can be simplified to same number of dimensions
         if isinstance(gene_ids, torch.Tensor):
-            # Single request path — DataModule pre-padded, all same length
-            gene_ids = gene_ids.long()
-            expr_values = expr_values.float()
-            attention_mask = (
-                attn_masks.float()
-                if attn_masks is not None
-                else torch.ones_like(gene_ids, dtype=torch.float32)
+            # pre-padded batch, same length
+            logger.debug(
+                f"Pre-padded batch: gene_ids shape={gene_ids.shape}, "
+                f"dtype={gene_ids.dtype}"
             )
+            # gene_ids = gene_ids.long()
+            # expr_values = expr_values.float()
+            if attention_mask is None:
+                attention_mask = torch.ones_like(gene_ids, dtype=torch.bool)
+            # else:
+            #     attention_mask = attention_mask.bool()
         else:
             # Batched requests - variable length requests batched together by vLLM
-            gene_ids, expr_values, attention_mask = self._pad_variable_length_batch(
-                gene_ids, expr_values, attn_masks, PAD_TOKEN_ID
+            # todo: check if we can move padding to processor
+            logger.debug(
+                f"Variable-length batch: {len(gene_ids)} sequences, "
+                f"lengths={[t.shape[0] for t in gene_ids]}, "
+                f"dtype={gene_ids[0].dtype}"
             )
 
-        # now we have [batch, seq_len]
+            gene_ids, expr_values, attention_mask = self._pad_variable_length_batch(
+                gene_ids, expr_values, attention_mask, PAD_TOKEN_ID
+            )
+
+        # now we have [batch_size, seq_len]
         input_ids_bmfm = torch.stack(
             [gene_ids.float(), expr_values], dim=1
-        )  # [batch, 2, seq_len]
+        )  # [batch_size, 2, seq_len]
 
         output = self.model(
             input_ids=input_ids_bmfm,
@@ -686,59 +711,44 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
             pooling_method=self.pooling_method,
         )
 
-        return embeddings.unsqueeze(1)  # [batch, 1, hidden_size]
+        return embeddings.unsqueeze(1)  # [batch_size, 1, hidden_size]
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """
-        Load weights from safetensors into the BMFM model.
+        Load weights from safetensors into the biomed-rna model.
 
         Args:
         ----
             weights: Iterable of (name, tensor) pairs from vLLM
         """
-        params_dict = dict(self.model.named_parameters())
-        buffers_dict = dict(self.model.named_buffers())
-        loaded_items: set[str] = set()
-        missing_items: set[str] = set()
+        param_targets = dict(self.model.named_parameters())
+        buffer_targets = dict(self.model.named_buffers())
+        loaded = set()
+        missing = set()
 
-        logger.info(
-            f"Model has {len(params_dict)} parameters and {len(buffers_dict)} buffers"
-        )
-
-        # SKIP_PREFIXES = ("model.cls.predictions.predictions.decoder.",)
         for name, tensor in weights:
-            # if name.startswith(SKIP_PREFIXES):
-            #     continue
-
-            clean_name = name.removeprefix("model.")
-
-            if clean_name in params_dict:
-                params_dict[clean_name].data.copy_(tensor)
-                loaded_items.add(name)
-            elif clean_name in buffers_dict:
-                buffers_dict[clean_name].copy_(tensor)
-                loaded_items.add(name)
+            clean = name.removeprefix("model.")
+            if clean in param_targets:
+                param_targets[clean].data.copy_(tensor)
+                loaded.add(clean)
+            elif clean in buffer_targets:
+                buffer_targets[clean].data.copy_(tensor)
+                loaded.add(clean)
             else:
-                missing_items.add(clean_name)
+                missing.add(clean)
 
-        all_model_items = set(params_dict.keys()) | set(buffers_dict.keys())
-        unloaded_items = all_model_items - {
-            n.removeprefix("model.") for n in loaded_items
-        }
-
-        logger.info(
-            f"Loaded {len(loaded_items)}/{len(all_model_items)} weights (params + buffers)"
-        )
-        if unloaded_items:
+        # debug reporting:
+        # - unloaded: model params/buffers that kept their initialized values;
+        # - missing: checkpoint keys not found in model; (usually noise from vLLM)
+        all_targets = param_targets.keys() | buffer_targets.keys()
+        if unloaded := all_targets - loaded:
             logger.warning(
-                f"Items not loaded from checkpoint: {list(unloaded_items)[:10]}"
+                f"Weight items not loaded from checkpoint: {list(unloaded)[:10]}"
             )
-        if missing_items:
+        if missing:
             logger.warning(
-                f"Checkpoint has extra items not in model: {list(missing_items)[:10]}"
+                f"Checkpoint has extra weught items not in model: {list(missing)[:10]}"
             )
-
-        return loaded_items
 
 
 try:

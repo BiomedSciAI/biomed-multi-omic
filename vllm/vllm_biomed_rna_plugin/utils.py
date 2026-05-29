@@ -1,10 +1,11 @@
 """Utility functions for BiomedRNA vLLM plugin."""
 
+import json
 import os
 from pathlib import Path
 from typing import Any
 
-import torch
+from bmfm_targets.config.tokenization_config import FieldInfo
 from vllm import LLM
 
 # Default model repository
@@ -41,29 +42,36 @@ def load_tokenizer(model_repo: str = DEFAULT_HF_MODEL_REPO):
     return bmfm_load_tokenizer(os.path.dirname(checkpoint_path))
 
 
-def get_fields(model_repo: str = DEFAULT_HF_MODEL_REPO):
+def get_fields(
+    model_path: str | Path | None = None,
+    model_repo: str = DEFAULT_HF_MODEL_REPO,
+) -> list[FieldInfo]:
     """
-    Load model fields from HuggingFace checkpoint.
+    Load model fields from the model directory config.json.
 
     Args:
     ----
-        model_repo: HuggingFace model repository ID (default: biomed.rna.llama.47m.wced.multitask.v1)
+        model_path: Path to local model directory containing config.json.
+            If None, resolve from HuggingFace checkpoint location.
+        model_repo: HuggingFace model repository ID used when model_path is None.
 
     Returns:
     -------
-        Model fields configuration from checkpoint
-
-    Example:
-    -------
-        >>> from vllm_biomed_rna_plugin.utils import get_fields
-        >>> fields = get_fields()
-        >>> # Now ready to use with DataModule directly
+        Model fields configuration parsed as FieldInfo objects
     """
-    from bmfm_targets.models.model_utils import download_ckpt_from_huggingface
+    if model_path is None:
+        from bmfm_targets.models.model_utils import download_ckpt_from_huggingface
 
-    checkpoint_path = download_ckpt_from_huggingface(model_repo)
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    return ckpt["hyper_parameters"]["model_config"].fields
+        checkpoint_path = download_ckpt_from_huggingface(model_repo)
+        model_path = Path(checkpoint_path).parent
+    else:
+        model_path = Path(model_path)
+
+    config_path = model_path / "config.json"
+    with config_path.open() as f:
+        config = json.load(f)
+
+    return [FieldInfo(**field) for field in config["fields"]]
 
 
 def get_vllm_biomed_rna_model(
