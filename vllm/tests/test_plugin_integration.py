@@ -49,14 +49,14 @@ def test_vllm_model_loading():
 
     # Test actual embedding generation with dummy RNA data
     seq_len = 100
+    torch.manual_seed(42)
     dummy_input = {
-        "prompt_token_ids": [1],  # Single fake token
+        "prompt_token_ids": [0] * seq_len,
         "multi_modal_data": {
             "rna": {
                 "gene_ids": torch.randint(0, 19321, (seq_len,)).long(),
-                "expr_values": torch.randn(seq_len).clamp(
-                    min=0.1
-                ),  # float32 by default
+                "expr_values": (torch.randn(seq_len) * 2 + 3).clamp(min=0.1).float(),
+                "attention_mask": torch.ones(seq_len, dtype=torch.bool),
             }
         },
     }

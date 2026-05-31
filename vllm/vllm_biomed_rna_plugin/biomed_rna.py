@@ -1,33 +1,54 @@
 """
-BiomedRNA vLLM plugin - wraps IBM Biomed-RNA model for single-cell RNA expression analysis.
+BiomedRNA vLLM plugin — wraps IBM Biomed-RNA model for single-cell RNA expression analysis.
 Model: ibm-research/biomed.rna.llama.47m.wced.multitask.v1.
+
+Pipeline:
+    h5ad → preprocess.py (log-norm, gene filtering, cell-level padding)
+         → list[dict] per cell, each with gene_ids / expr_values / attention_mask
+         → vLLM (one request per cell)
+         → BiomedRnaMultiModalProcessor.apply()  [per-request, CPU]
+         → vLLM batches requests via MultiModalKwargsItems
+         → BiomedRnaForSequenceEmbedding.forward()  [per-batch, GPU]
+         → Tensor[batch, 1, hidden_size]
+
+Passthrough-only policy:
+    RNA data bypasses the HF processor entirely. There are no placeholder tokens
+    in the text prompt — vLLM's token-alignment mechanism does not apply.
+    The dummy prompt token [1] satisfies vLLM's requirement for a non-empty prompt.
+
+Batching and padding:
+    preprocess.py pads all cells in a DataModule batch to the same seq_len before
+    submitting them to vLLM. Within a single preprocessing run, all cells therefore
+    arrive at forward() with identical seq_len, and vLLM stacks them into a single
+    Tensor[batch, seq_len] — no further padding needed.
+
+    The exception is concurrent users: if two requests from different preprocessing
+    runs reach the same vLLM batch, their seq_len values may differ. In that case
+    vLLM cannot stack and instead passes a list[Tensor] to forward(), which then
+    pads to the maximum length in that batch. This is handled in
+    BiomedRnaForSequenceEmbedding._pad_variable_length_batch() and is expected to
+    be rare in practice.
+
+    To eliminate the variable-length case entirely, set max_num_seqs=1 when
+    initializing vLLM (LLM(..., max_num_seqs=1)). This prevents vLLM from
+    batching requests from different users together, guaranteeing that forward()
+    always receives a uniform Tensor[batch, seq_len]. The tradeoff is reduced
+    throughput under concurrent load.
 """
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence, Set
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from bmfm_targets.models.predictive.layers import get_embeddings_from_outputs
 from bmfm_targets.models.predictive.llama.config import LlamaForMultiTaskConfig
-from transformers import BatchFeature, PretrainedConfig
-
-logger = logging.getLogger(__name__)
-
-
-from collections.abc import Set
-
-from bmfm_targets.models.predictive.layers import (
-    get_embeddings_from_outputs,
-)
 from bmfm_targets.models.predictive.llama.model import LlamaForMultiTaskModel
+from transformers import BatchFeature, PretrainedConfig
 from vllm.config.multimodal import BaseDummyOptions
 from vllm.inputs import MultiModalDataDict, MultiModalInput, mm_input
-from vllm.model_executor.layers.pooler.abstract import Pooler, PoolerOutput
-from vllm.model_executor.models.interfaces import (
-    SupportsMultiModal,
-)
+from vllm.model_executor.layers.pooler.abstract import Pooler
+from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
     MultiModalFieldConfig,
@@ -51,47 +72,51 @@ from vllm.multimodal.processing import (
 from vllm.tasks import PoolingTask
 from vllm.v1.pool.metadata import PoolingMetadata
 
+from vllm_biomed_rna_plugin.constants import RNA_FIELDS_CONFIG, RNA_PAD_TOKEN_ID
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Pooler
+# ---------------------------------------------------------------------------
+
 
 class EmbeddingIdentityPooler(Pooler):
     """
-    Pooler that formats already-pooled embeddings for vLLM's embedding API.
+    Formats already-pooled BMFM embeddings for vLLM's embedding API.
 
-    The BMFM model's forward() already applies pooling via get_embeddings_from_outputs()
-    and returns shape [batch, 1, hidden_size]. This pooler just needs to:
-    1. Squeeze out the sequence dimension to get [batch, hidden_size]
-    2. Return a list of 1-D tensors (one per batch item) as vLLM expects
+    forward() receives [batch, 1, hidden_size] (pooled by the model),
+    squeezes the sequence dimension, and returns a list of 1-D tensors
+    as required by vLLM's pooling protocol.
 
-    TODO: Refactor to proper vLLM pooler architecture
-    - Move pooling logic from forward() to pooler
-    - Return unpooled hidden_states [batch, seq_len, hidden_size] from forward()
-    - Implement multiple pooling strategies (first_token, mean, max, etc.) in pooler
-    - Support runtime pooling method selection via config
+    TODO: Move pooling out of BiomedRnaForSequenceEmbedding.forward() into
+    here, return unpooled [batch, seq_len, hidden_size] from the model, and
+    support multiple pooling strategies (first_token, mean, max).
     """
 
     def get_supported_tasks(self) -> Set[PoolingTask]:
         return {"embed"}
 
-    # todo: extract handling of hidden states from the get_embeddings_from_output
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        hidden_states: torch.Tensor,  # [batch, 1, hidden_size]
         pooling_metadata: PoolingMetadata,
-    ) -> PoolerOutput:
-        # hidden_states shape: [batch, 1, hidden_size] (already pooled by model)
-        # Squeeze out the sequence dimension: [batch, hidden_size]
+    ) -> list[torch.Tensor]:
+        # squeeze sequence dim → [batch, hidden_size], split into per-sample list
         embeddings = hidden_states.squeeze(1)
-
-        # Return list of 1-D embedding vectors (vLLM requirement)
         return [embeddings[i] for i in range(embeddings.shape[0])]
 
 
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+
 class BiomedRnaConfig(PretrainedConfig):
-    """Configuration class for BiomedRNA models."""
+    """HuggingFace-compatible config for BiomedRNA models."""
 
     model_type = "biomedrna"
-
-    # Default local model path
-    _default_local_path = "/dccstor/bmfm-targets1/users/sivanra/models/biomed.rna.llama.47m.wced.multitask.v1"
 
     def __init__(
         self,
@@ -113,117 +138,136 @@ class BiomedRnaConfig(PretrainedConfig):
         self.gene_vocab_size = gene_vocab_size
         self.pooling_method = pooling_method
 
-        # Encoder-only model configuration: disable KV cache
+
+# ---------------------------------------------------------------------------
+# Multimodal data parsing
+# ---------------------------------------------------------------------------
 
 
 class RnaProcessorItems(DictEmbeddingItems):
     """
-    RNA data items — wraps a list of dicts with gene_ids/expr_values.
+    Parse-time validation and normalization of single-cell RNA data.
 
-    This class inherits from DictEmbeddingItems to indicate that RNA data
-    is already in a processed form (like embeddings) and doesn't require
-    placeholder tokens in the text prompt.
+    Accepts a single dict or a list of dicts, each with:
+        gene_ids:       Tensor[seq_len]  long   — gene token IDs
+        expr_values:    Tensor[seq_len]  float  — log-normalized expression
+        attention_mask: Tensor[seq_len]  bool   — True for real genes, False for padding
 
-    By inheriting from DictEmbeddingItems, vLLM will skip prompt update
-    validation for RNA modality (_hf_processor_applies_updates returns False).
+    All three fields are required. Shape alignment and dtypes are enforced here
+    so that downstream code can assume clean tensors.
 
-    data is a dict with keys gene_ids, expr_value, attention_mask
+    Inherits from DictEmbeddingItems to signal passthrough-only processing:
+    data goes directly to mm_kwargs without passing through the HF processor.
     """
 
-    def __init__(self, data):
-        # wrap single dicts to list to match batches of multiple requests
+    def __init__(self, data: dict | list[dict]):
         if not isinstance(data, list):
             data = [data]
 
-        # DictEmbeddingItems parent class expects fields as lists
-        combined_data = {}
-        for field in ["gene_ids", "expr_values", "attention_mask"]:
-            field_list = [item.get(field) for item in data if field in item]
-            if field_list:
-                combined_data[field] = field_list
+        validated = []
+        for i, item in enumerate(data):
+            for field in ("gene_ids", "expr_values", "attention_mask"):
+                if field not in item:
+                    raise ValueError(f"Item {i}: missing required field '{field}'")
 
-        # Define fields factory
-        def fields_factory(data_dict):
-            fields = {
-                "gene_ids": MultiModalFieldConfig.batched("rna"),
-                "expr_values": MultiModalFieldConfig.batched("rna"),
-            }
-            if "attention_mask" in data_dict:
-                fields["attention_mask"] = MultiModalFieldConfig.batched("rna")
-            return fields
+            gene_ids = torch.as_tensor(item["gene_ids"]).long()
+            expr_values = torch.as_tensor(item["expr_values"]).float()
+            attention_mask = torch.as_tensor(item["attention_mask"]).bool()
+
+            if not (
+                gene_ids.shape[0] == expr_values.shape[0] == attention_mask.shape[0]
+            ):
+                raise ValueError(
+                    f"Item {i}: field lengths must match, got "
+                    f"gene_ids={gene_ids.shape[0]}, "
+                    f"expr_values={expr_values.shape[0]}, "
+                    f"attention_mask={attention_mask.shape[0]}"
+                )
+
+            validated.append(
+                {
+                    "gene_ids": gene_ids,
+                    "expr_values": expr_values,
+                    "attention_mask": attention_mask,
+                }
+            )
+
+        # DictEmbeddingItems stores fields as lists (one tensor per item)
+        combined = {
+            field: [item[field] for item in validated]
+            for field in ("gene_ids", "expr_values", "attention_mask")
+        }
 
         super().__init__(
-            data=combined_data,
+            data=combined,
             modality="rna",
-            required_fields={"gene_ids", "expr_values"},
-            fields_factory=fields_factory,
+            required_fields={"gene_ids", "expr_values", "attention_mask"},
+            fields_factory=lambda _: RNA_FIELDS_CONFIG.copy(),
         )
 
-    def get_processor_data(self):
-        """Not passed to an HF processor."""
+    def get_processor_data(self) -> dict:
+        """RNA bypasses the HF processor — nothing to process."""
         return {}
 
-    def get_passthrough_data(self):
+    def get_passthrough_data(self) -> dict:
         """
-        Return RNA data to be accessed in _get_mm_fields_config.
-
-        The data is already stored in self.data (from DictEmbeddingItems parent),
-        which is the combined_data dict with fields as lists.
+        Return validated RNA tensors for direct passthrough to mm_kwargs.
+        Each value is a list of tensors, one per item in the request.
         """
-        return (
-            dict(self.data) if self.data else {}
-        )  # todo - might be possible to just rutn self.data as is
+        return dict(self.data)
 
 
 class BiomedRnaDataParser(MultiModalDataParser):
-    """Custom parser for 'rna' modality."""
+    """Registers the 'rna' modality with vLLM's multimodal data parsing system."""
 
-    def _parse_rna_data(self, data) -> ModalityDataItems:
-        # RnaProcessorItems handles both dict and list of dicts
-        # data (dict): {"gene_ids" : Tensor[len_seq], "expr_values" : Tensor[len_seq], "attention_mask" : Tensor[len_seq[], optional
+    def _parse_rna_data(self, data: dict | list[dict]) -> ModalityDataItems:
         return RnaProcessorItems(data)
 
-    def _get_subparsers(self) -> dict[str, Any]:
-        subparsers = super()._get_subparsers()
-        subparsers["rna"] = self._parse_rna_data
-        return subparsers
+    def _get_subparsers(self) -> dict:
+        return {**super()._get_subparsers(), "rna": self._parse_rna_data}
+
+
+# ---------------------------------------------------------------------------
+# HF processor stub
+# ---------------------------------------------------------------------------
 
 
 class BiomedRnaDummyProcessor:
     """
-    Dummy HF processor for RNA model.
+    Stub HF processor for RNA model.
 
-    RNA data doesn't need HF processor - it's handled directly via
-    embed_multimodal(). This processor just tokenizes text.
+    vLLM requires a processor object, but RNA data bypasses HF processing
+    entirely. This class satisfies that requirement by tokenizing text only
+    and ignoring all RNA fields.
     """
 
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
 
-    def _merge_kwargs(self, *args, **kwargs):
-        """Stub for HF processor compatibility."""
+    def _merge_kwargs(self, *args, **kwargs) -> dict:
         return {}
 
-    def __call__(self, text=None, **kwargs):
-        """Tokenize text only, ignore multi-modal data."""
-        from transformers import BatchFeature
+    def __call__(self, text: str = "", **kwargs) -> BatchFeature:
+        # Filter out RNA fields so they don't reach the tokenizer.
+        # RNA_FIELDS_CONFIG is the authoritative list of field names.
+        rna_fields = set(RNA_FIELDS_CONFIG.keys())
+        tok_kwargs = {k: v for k, v in kwargs.items() if k not in rna_fields}
+        return BatchFeature(self.tokenizer(text, **tok_kwargs))
 
-        if text is None:
-            text = ""
 
-        # Filter out RNA-specific kwargs
-        tokenizer_kwargs = {
-            k: v for k, v in kwargs.items() if k not in ["gene_ids", "expr_values"]
-        }
-
-        result = self.tokenizer(text, **tokenizer_kwargs)
-
-        # Return BatchFeature as expected by vLLM
-        return BatchFeature(result)
+# ---------------------------------------------------------------------------
+# Processing info
+# ---------------------------------------------------------------------------
 
 
 class BiomedRnaProcessingInfo(BaseProcessingInfo):
-    """Processing information for BiomedRNA model."""
+    """
+    Metadata for BiomedRNA multimodal processing.
+
+    RNA is an encoder-only modality with no placeholder tokens in the prompt.
+    The dummy prompt token [1] is required by vLLM but carries no information.
+    All RNA data flows through mm_kwargs, not through the text token sequence.
+    """
 
     def get_supported_mm_limits(self) -> Mapping[str, int | None]:
         return {"rna": None}
@@ -233,28 +277,33 @@ class BiomedRnaProcessingInfo(BaseProcessingInfo):
         seq_len: int,
         mm_counts: Mapping[str, int],
     ) -> Mapping[str, int]:
-        # RNA doesn't add placeholder tokens to the text sequence
-        return {"rna": 0}
+        return {"rna": 0}  # RNA adds no placeholder tokens to the prompt
 
-    def get_hf_processor(self, **kwargs):
-        """Return custom processor that only tokenizes text."""
-        tokenizer = self.ctx.get_tokenizer()
-        return BiomedRnaDummyProcessor(tokenizer)
+    def get_hf_processor(self, **kwargs) -> BiomedRnaDummyProcessor:
+        return BiomedRnaDummyProcessor(self.ctx.get_tokenizer())
 
     def parse_mm_data(
         self,
         mm_data: MultiModalDataDict,
         validate: bool = True,
     ) -> MultiModalDataItems:
-        """Override to handle the custom 'rna' modality."""
         return BiomedRnaDataParser().parse_mm_data(mm_data)
 
 
+# ---------------------------------------------------------------------------
+# Dummy inputs builder
+# ---------------------------------------------------------------------------
+
+
 class BiomedRnaDummyInputsBuilder(BaseDummyInputsBuilder):
-    """Dummy inputs builder for BiomedRNA model (represent worst-case memory usage)."""
+    """
+    Generates worst-case dummy RNA inputs for vLLM memory profiling.
+
+    seq_len is used as the RNA sequence length. vLLM calls this during
+    model initialization to estimate peak memory usage.
+    """
 
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
-        """Get dummy text for RNA modality."""
         return ""
 
     def get_dummy_mm_data(
@@ -263,45 +312,58 @@ class BiomedRnaDummyInputsBuilder(BaseDummyInputsBuilder):
         mm_counts: Mapping[str, int],
         mm_options: Mapping[str, BaseDummyOptions],
     ) -> MultiModalDataDict:
-        """
-        Generate dummy RNA data for memory profiling.
-
-        Args:
-        ----
-            seq_len: Target sequence length (used as RNA sequence length)
-            mm_counts: Mapping of modality names to counts
-            mm_options: Mapping of modality names to dummy options
-
-        Returns:
-        -------
-            Dictionary containing dummy RNA data with gene_ids and expr_values
-        """
-        num_rna = mm_counts.get("rna", 0)
-
-        if num_rna == 0:
+        # RNA is always one cell per request — num_rna > 1 is not expected
+        if mm_counts.get("rna", 0) == 0:
             return {}
-
-        gene_ids = torch.randint(0, 19321, (seq_len,), dtype=torch.long)
-        expr_values = torch.randn(seq_len, dtype=torch.float32)
 
         return {
             "rna": {
-                "gene_ids": gene_ids,
-                "expr_values": expr_values,
+                "gene_ids": torch.randint(0, 19321, (seq_len,), dtype=torch.long),
+                "expr_values": torch.randn(seq_len, dtype=torch.float32),
+                "attention_mask": torch.ones(seq_len, dtype=torch.bool),
             }
         }
 
 
+# ---------------------------------------------------------------------------
+# Processor
+# ---------------------------------------------------------------------------
+
+
+def _unwrap_field(passthrough_data: dict, field: str) -> torch.Tensor:
+    """
+    Extract the single per-request tensor from a passthrough_data list.
+
+    passthrough_data values are lists of tensors (one per item in the request).
+    For RNA, each request is always one cell, so each list has exactly one tensor.
+    """
+    value = passthrough_data.get(field)
+    if value is None:
+        raise ValueError(f"Missing required RNA field: '{field}'")
+    return value[0] if isinstance(value, list) else value
+
+
 class BiomedRnaMultiModalProcessor(BaseMultiModalProcessor):
     """
-    Multi-modal processor for BiomedRNA model.
+    Per-request processor for RNA data.
 
-    Handles the processing of RNA data (gene IDs and expression values)
-    for the BiomedRNA model.
+    Called once per request (one cell) before vLLM assembles the batch.
+    Extracts validated 1D tensors from passthrough_data and wraps them
+    in the MultiModalKwargsItems structure that vLLM uses to batch requests.
+
+    Overrides apply() because RNA has no placeholder tokens in the prompt.
+    The base apply() enforces a 1:1 match between mm items and prompt placeholder
+    tokens (e.g. <image>), which does not apply to RNA.
+
+    After apply(), vLLM batches N per-request MultiModalKwargsItems together.
+    When all requests have the same seq_len (common case), tensors are stacked
+    into Tensor[N, seq_len]. When lengths differ (concurrent users from different
+    preprocessing runs), tensors arrive as list[Tensor] and are padded in forward().
+
+    See: vllm/multimodal/inputs.py MultiModalKwargsItems, MultiModalBatchedField
     """
 
     def _get_data_parser(self) -> MultiModalDataParser:
-        """Return custom data parser that registers RNA modality."""
         return BiomedRnaDataParser()
 
     def _get_mm_fields_config(
@@ -309,28 +371,7 @@ class BiomedRnaMultiModalProcessor(BaseMultiModalProcessor):
         hf_inputs: Mapping[str, object],
         hf_processor_mm_kwargs: Mapping[str, object],
     ) -> Mapping[str, MultiModalFieldConfig]:
-        """
-        Define the schema of scRNA input.
-
-        For RNA data, we have three fields: gene_ids, expr_values, and attention_mask (optional).
-
-        Args:
-        ----
-            hf_inputs: HF processor outputs (not used for RNA)
-            hf_processor_mm_kwargs: HF processor kwargs (not used for RNA)
-
-        Returns:
-        -------
-            Mapping of field names to MultiModalFieldConfig
-        """
-        config = {
-            "gene_ids": MultiModalFieldConfig.batched("rna"),
-            "expr_values": MultiModalFieldConfig.batched("rna"),
-        }
-        # Add attention_mask if present in inputs
-        if "attention_mask" in hf_inputs:
-            config["attention_mask"] = MultiModalFieldConfig.batched("rna")
-        return config
+        return RNA_FIELDS_CONFIG
 
     def _get_prompt_updates(
         self,
@@ -338,115 +379,46 @@ class BiomedRnaMultiModalProcessor(BaseMultiModalProcessor):
         hf_processor_mm_kwargs: Mapping[str, object],
         out_mm_kwargs: MultiModalKwargsItems,
     ) -> Sequence[PromptUpdate]:
-        """Return prompt updates for RNA data (empty since we dont use placeholders)."""
-        return []
+        return []  # RNA has no placeholder tokens
 
     def apply(
-        self,
-        inputs: ProcessorInputs,
-        timing_ctx: TimingContext,
+        self, inputs: ProcessorInputs, timing_ctx: TimingContext
     ) -> MultiModalInput:
-        """
-        Bypass standard validation for RNA modality.
-
-        Creates BatchFeature with lists of variable-length tensors as passing is handled
-        in forward. RNA data doesn't use placeholder tokens in the prompt,
-        so we skip the standard HF processor pipeline and validation.
-        """
-        mm_items = inputs.mm_data_items
-        hf_processor_mm_kwargs = inputs.hf_processor_mm_kwargs
-
         with timing_ctx.record("apply_hf_processor"):
-            # Get passthrough data (gene_ids and expr_values)
-            _, passthrough_data = self._get_hf_mm_data(mm_items)
+            _, passthrough_data = self._get_hf_mm_data(inputs.mm_data_items)
 
-            # Handle both single items and batches properly
-            # Fix for ValueError: "Unable to create tensor, you should probably activate padding"
-            # # This occurs during vLLM's dummy test when creating batches with variable-length sequences
-            # processed_dict = {}
-            # for k, v in passthrough_data.items():
-            #     if isinstance(v, list):
-            #         # List of tensors (batch) - need to stack them into a single tensor
-            #         # During dummy test, vLLM may create multiple sequences with different lengths
-            #         if len(v) > 0:
-            #             # Check if all tensors have the same shape
-            #             shapes = [t.shape for t in v]
-            #             if len(set(shapes)) == 1:
-            #                 # All same shape - can stack directly without padding
-            #                 processed_dict[k] = torch.stack(v)
-            #             else:
-            #                 # Different shapes - need padding to make them uniform
-            #                 # This happens during dummy batch creation with variable seq_len
-            #                 # Find max length across all sequences in the batch
-            #                 max_len = max(t.shape[0] for t in v)
-            #                 # Pad all tensors to max length with zeros
-            #                 padded = []
-            #                 for t in v:
-            #                     if t.shape[0] < max_len:
-            #                         # Pad shorter sequences with zeros at the end
-            #                         pad_size = max_len - t.shape[0]
-            #                         padded_t = F.pad(t, (0, pad_size), value=0)
-            #                         padded.append(padded_t)
-            #                     else:
-            #                         padded.append(t)
-            #                 # Stack padded tensors into a single batch tensor
-            #                 processed_dict[k] = torch.stack(padded)
-            #         else:
-            #             processed_dict[k] = torch.tensor([])
-            #     else:
-            #         # Single tensor - convert to tensor and ensure it has batch dimension
-            #         tensor = torch.as_tensor(v)
-            #         # Only add batch dimension if it's 1D (no batch dimension yet)
-            #         # If it's already 2D [batch, seq_len], keep it as is
-            #         if tensor.ndim == 1:
-            #             processed_dict[k] = tensor.unsqueeze(0)
-            #         else:
-            #             processed_dict[k] = tensor
-
-            # Use tensor_type=None to avoid automatic conversion that fails with variable lengths
-            # mm_processed_data = BatchFeature(processed_dict, tensor_type=None)
-
-            # Previous code (caused ValueError with variable-length batches):
+            # unsqueeze(0) adds the batch dimension that from_hf_inputs expects.
+            # from_hf_inputs treats dim-0 as the item dimension and splits it
+            # into one MultiModalKwargsItem per item — here always 1 per request.
             mm_processed_data = BatchFeature(
                 {
-                    k: torch.as_tensor(v).unsqueeze(0) if not isinstance(v, list) else v
-                    for k, v in passthrough_data.items()
+                    k: _unwrap_field(passthrough_data, k).unsqueeze(0)
+                    for k in ("gene_ids", "expr_values", "attention_mask")
                 },
-                # tensor_type="pt",
-                tensor_type=None,  # allow variable length, padding will be done in forward
+                tensor_type="pt",
             )
-            # todo: consider this:
-            # mm_processed_data = BatchFeature(
-            # passthrough_data,
-            # tensor_type=None,  # allow variable length, padding will be done in forward
-        # )
 
-        # Create MultiModalKwargsItems from processed data
         mm_kwargs = MultiModalKwargsItems.from_hf_inputs(
-            mm_processed_data,
-            self._get_mm_fields_config(
-                mm_processed_data,
-                hf_processor_mm_kwargs,
-            ),
+            mm_processed_data, RNA_FIELDS_CONFIG
         )
 
-        with timing_ctx.record("get_mm_hashes"):
-            mm_hashes = inputs.get_mm_hashes(self.info.model_id)
-
-        # Create empty placeholder range (no text placeholders for RNA)
-        mm_placeholders = {"rna": [PlaceholderRange(offset=0, length=0)]}
-
-        # Return mm_input with dummy prompt token (will be ignored)
         return mm_input(
-            prompt_token_ids=[1],  # Dummy token ID
+            prompt_token_ids=[
+                1
+            ],  # dummy token — satisfies vLLM, carries no information
             mm_kwargs=mm_kwargs,
-            mm_hashes=mm_hashes,
-            mm_placeholders=mm_placeholders,
+            mm_hashes=inputs.get_mm_hashes(self.info.model_id),
+            mm_placeholders={"rna": [PlaceholderRange(offset=0, length=0)]},
         )
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
 
 
 class LlamaForMultiTaskModelNoCheckpoint(LlamaForMultiTaskModel):
-    """wraps LlamaForMultiTaskModel without model loading on init."""
+    """LlamaForMultiTaskModel variant that skips checkpoint loading on init."""
 
     def load_checkpoint(self):
         pass
@@ -459,11 +431,21 @@ class LlamaForMultiTaskModelNoCheckpoint(LlamaForMultiTaskModel):
 )
 class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
     """
-    BiomedRNA model for sequence embedding generation.
+    BiomedRNA model for single-cell RNA embedding generation.
 
-    This model implements a custom LLaMa-based encoder for single-cell RNA analysis.
-    It processes multi-field inputs (gene IDs + expression values) to generate cell embeddings.
-    This is an encoder-only model with bidirectional attention.
+    Wraps IBM's LlamaForMultiTaskModel (biomed-rna) as a vLLM multimodal embedding model.
+    Each request is one cell; the model outputs one embedding vector per cell.
+
+    Input (per batch, via **kwargs from mm_kwargs):
+        gene_ids:       Tensor[batch, seq_len] long  OR  list[Tensor[seq_len_i]]
+        expr_values:    Tensor[batch, seq_len] float OR  list[Tensor[seq_len_i]]
+        attention_mask: Tensor[batch, seq_len] bool  OR  list[Tensor[seq_len_i]]
+
+    Output: Tensor[batch, 1, hidden_size]
+
+    The stacked-tensor path is the common case (all cells from one preprocessing run
+    share the same seq_len). The list path handles the rare case of concurrent users
+    submitting cells with different seq_len values.
     """
 
     supports_multimodal_raw_input_only = True
@@ -471,70 +453,31 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
 
     @classmethod
     def get_placeholder_str(cls, modality: str, i: int) -> str | None:
-        """
-        Return the placeholder string for RNA modality.
-
-        RNA data doesn't use placeholder tokens in the text prompt,
-        so we return None (similar to Terratorch).
-        """
         if modality.startswith("rna"):
-            return None
-
-        raise ValueError("Only rna modality is supported")
+            return None  # RNA has no prompt placeholder tokens
+        raise ValueError(f"Unsupported modality: {modality!r}")
 
     def get_data_key(self) -> str:
         return "rna"
 
-    def __init__(
-        self,
-        vllm_config: object | None = None,
-        prefix: str = "",
-        **kwargs,
-    ):
-        """Initialize biomed-rna model."""
+    def __init__(self, vllm_config=None, prefix: str = "", **kwargs):
         super().__init__()
-
-        logger = logging.getLogger(__name__)
-        self.vllm_config = vllm_config
-        hf_config = vllm_config.model_config.hf_config
-
-        # # =====================================
-        # # override vllm defaults
-        # hf_config.use_cache = False
-        # hf_config.architectures = ["BiomedRnaForSequenceEmbedding"]
-        # hf_config.max_position_embeddings =  2048 #check if we need this
-
-        # # hf_config.is_encoder_decoder = False
-        # # hf_config.is_decoder = False
-        # # hf_config.add_cross_attention = False
-        # # ======================================
+        biomed_rna_config: LlamaForMultiTaskConfig = vllm_config.model_config.hf_config
 
         with self._mark_tower_model(vllm_config, "rna"):
-            # hf_config is already a LlamaForMultiTaskConfig instance loaded by vLLM
-            # from the model's config.json via AutoConfig
-            bmfm_config: LlamaForMultiTaskConfig = hf_config
-
-            self.pooling_method = getattr(bmfm_config, "pooling_method", "first_token")
-            self.hidden_size = bmfm_config.hidden_size
-
-            self.model = LlamaForMultiTaskModelNoCheckpoint(bmfm_config)
-
-            # Atempt remove unused decoder head, but it cause an exception in llama model.py line 205
-            # if hasattr(self.model.cls.predictions.predictions, "decoder"):
-            #     del self.model.cls.predictions.predictions.decoder
-
+            self.pooling_method = getattr(
+                biomed_rna_config, "pooling_method", "first_token"
+            )
+            self.hidden_size = biomed_rna_config.hidden_size
+            self.model = LlamaForMultiTaskModelNoCheckpoint(biomed_rna_config)
             self.model.eval()
 
-            logger.info(
-                "BMFM model loaded successfully via PyTorch Lightning (full model)"
-            )
-
         self.pooler = EmbeddingIdentityPooler()
+        logger.info("BiomedRNA model initialized.")
 
     @staticmethod
     def get_kv_cache_spec() -> dict:
-        """No KV cache needed - encoder-only model."""
-        return {}
+        return {}  # encoder-only model — no KV cache
 
     def embed_input_ids(
         self,
@@ -544,75 +487,54 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
         is_multimodal: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
-        Return dummy embeddings with correct shape for multimodal-raw-input-only model.
+        Return dummy embeddings for the single dummy prompt token.
 
-        For models with supports_multimodal_raw_input_only=True, vLLM
-        requires embeddings with the correct hidden dimension to copy into its buffer.
-        The actual multimodal data is passed to forward() via **kwargs.
-
-        Args:
-        ----
-            input_ids: Token IDs (used for shape and device)
-            multimodal_embeddings: Ignored (data comes via forward kwargs)
-            is_multimodal: Ignored
-
-        Returns:
-        -------
-            Dummy embeddings with shape [input_ids.shape[0], hidden_size]
+        supports_multimodal_raw_input_only=True requires embed_input_ids to return
+        a tensor with the correct hidden_size so vLLM can allocate its embedding buffer.
+        The actual RNA data arrives in forward() via **kwargs, not through embeddings.
         """
-        dummy_embeds = torch.zeros(
+        return torch.zeros(
             input_ids.shape[0],
             self.hidden_size,
             dtype=next(self.parameters()).dtype,
             device=input_ids.device,
         )
-        return dummy_embeds
 
     def _pad_variable_length_batch(
         self,
         gene_ids: list[torch.Tensor],
         expr_values: list[torch.Tensor],
-        attn_masks: list[torch.Tensor] | None,
-        pad_token_id: int = 2,
+        attention_mask: list[torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Pad variable-length sequences to uniform length for batching.
+        Pad a ragged batch to uniform length for model input.
 
-        Args:
-        ----
-            gene_ids: List of 1D gene ID tensors with varying lengths
-            expr_values: List of 1D expression value tensors with varying lengths
-            attn_masks: Optional list of 1D attention mask tensors
-            pad_token_id: Token ID to use for padding gene_ids
+        Called only when concurrent users submit cells with different seq_len values.
+        The common case (single preprocessing run, uniform seq_len) goes through
+        the fast path in forward() which uses torch.stack() with no padding.
 
-        Returns:
-        -------
-            Tuple of (padded_gene_ids, padded_expr_values, padded_attention_mask)
-            All tensors have shape [batch_size, max_len]
+        Padding values:
+            gene_ids:       RNA_PAD_TOKEN_ID (2)
+            expr_values:    0.0
+            attention_mask: False
         """
         max_len = max(g.shape[0] for g in gene_ids)
-        batch_size = len(gene_ids)
+        batch = len(gene_ids)
         device = gene_ids[0].device
 
-        # Create padded tensors
-        gene_ids_padded = torch.full(
-            (batch_size, max_len), pad_token_id, dtype=torch.long, device=device
+        gene_ids_out = torch.full(
+            (batch, max_len), RNA_PAD_TOKEN_ID, dtype=torch.long, device=device
         )
-        expr_padded = torch.zeros(
-            batch_size, max_len, dtype=torch.float32, device=device
-        )
-        mask_padded = torch.zeros(batch_size, max_len, dtype=torch.bool, device=device)
+        expr_out = torch.zeros((batch, max_len), dtype=torch.float, device=device)
+        mask_out = torch.zeros((batch, max_len), dtype=torch.bool, device=device)
 
-        # Fill in actual values
-        for i, (g, e) in enumerate(zip(gene_ids, expr_values)):
-            length = g.shape[0]
-            gene_ids_padded[i, :length] = g.long()
-            expr_padded[i, :length] = e.float()
-            mask_padded[i, :length] = (
-                attn_masks[i].bool() if attn_masks is not None else True
-            )
+        for i, (g, e, m) in enumerate(zip(gene_ids, expr_values, attention_mask)):
+            L = g.shape[0]
+            gene_ids_out[i, :L] = g
+            expr_out[i, :L] = e
+            mask_out[i, :L] = m
 
-        return gene_ids_padded, expr_padded, mask_padded
+        return gene_ids_out, expr_out, mask_out
 
     def forward(
         self,
@@ -623,84 +545,34 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
         **kwargs,
     ) -> torch.Tensor:
         """
-            Generate cell embeddings from RNA expression data.
+        Generate cell embeddings from RNA expression data.
 
-            Processes single-cell RNA-seq data through the BiomedRNA encoder and returns
-            pooled embeddings. Handles both pre-padded batches (offline processing) and
-            variable-length batches (online serving).
-            variable-length batches are padded to uniform length before passing to encoder.
+        Receives gene_ids, expr_values, attention_mask from mm_kwargs (batched by vLLM).
+        Handles two cases:
+          - Tensor[batch, seq_len]: all cells same length → fast path, no padding
+          - list[Tensor[seq_len_i]]: variable lengths → pad to max length in batch
 
-        Args:
-        ----
-                input_ids: Unused (RNA data provided via kwargs)
-                positions: Unused
-                inputs_embeds: Unused
-                attn_metadata: Unused
-                **kwargs: RNA data containing:
-                    gene_ids: Gene identifiers
-                        - Pre-padded: torch.Tensor [batch_size, seq_len]
-                        - Variable-length: list[torch.Tensor] of shapes [seq_len_i]
-                        Values: Integer gene IDs
-                    expr_values: Expression values (same type/shape as gene_ids)
-                        Values: Float expression levels (typically log-normalized)
-                    attention_mask (optional): Attention mask (same type/shape as gene_ids)
-                        Values: 1 for real tokens, 0 for padding
-
-        Returns:
-        -------
-                torch.Tensor: Pooled cell embeddings [batch_size, 1, hidden_size]
-
-        TODO: Refactor to return unpooled hidden states
-        - Currently returns pooled embeddings [batch, 1, hidden_size]
-        - Should return unpooled hidden_states [batch, seq_len, hidden_size]
-        - Move pooling logic to EmbeddingIdentityPooler (rename to BiomedRnaPooler)
-        - This will enable:
-        * Multiple pooling strategies (first_token, mean, max, etc.)
-        * Classification task support
-        * Runtime pooling method selection
+        BMFM input format: torch.stack([gene_ids.float(), expr_values], dim=1)
+        → Tensor[batch, 2, seq_len]. gene_ids.float() is required by BMFM, not a bug.
         """
-        PAD_TOKEN_ID = 2
-
-        if "gene_ids" not in kwargs or "expr_values" not in kwargs:
-            raise ValueError("gene_ids and expr_values are required in kwargs")
-
         gene_ids = kwargs["gene_ids"]
         expr_values = kwargs["expr_values"]
-        attention_mask = kwargs.get("attention_mask", None)
+        attention_mask = kwargs["attention_mask"]
 
-        # todo: check if this can be simplified to same number of dimensions
-        if isinstance(gene_ids, torch.Tensor):
-            # pre-padded batch, same length
-            logger.debug(
-                f"Pre-padded batch: gene_ids shape={gene_ids.shape}, "
-                f"dtype={gene_ids.dtype}"
-            )
-            # gene_ids = gene_ids.long()
-            # expr_values = expr_values.float()
-            if attention_mask is None:
-                attention_mask = torch.ones_like(gene_ids, dtype=torch.bool)
-            # else:
-            #     attention_mask = attention_mask.bool()
-        else:
-            # Batched requests - variable length requests batched together by vLLM
-            # todo: check if we can move padding to processor
-            logger.debug(
-                f"Variable-length batch: {len(gene_ids)} sequences, "
-                f"lengths={[t.shape[0] for t in gene_ids]}, "
-                f"dtype={gene_ids[0].dtype}"
-            )
-
+        if isinstance(gene_ids, list):
+            # Rare: concurrent users with different seq_len from different preprocessing runs
             gene_ids, expr_values, attention_mask = self._pad_variable_length_batch(
-                gene_ids, expr_values, attention_mask, PAD_TOKEN_ID
+                gene_ids, expr_values, attention_mask
             )
+        # else: Tensor[batch, seq_len] — common case, no work needed
 
-        # now we have [batch_size, seq_len]
-        input_ids_bmfm = torch.stack(
+        # gene_ids.float() is required by BMFM input format
+        bmfm_input = torch.stack(
             [gene_ids.float(), expr_values], dim=1
-        )  # [batch_size, 2, seq_len]
+        )  # [batch, 2, seq_len]
 
         output = self.model(
-            input_ids=input_ids_bmfm,
+            input_ids=bmfm_input,
             attention_mask=attention_mask,
             output_hidden_states=True,
         )
@@ -711,20 +583,14 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
             pooling_method=self.pooling_method,
         )
 
-        return embeddings.unsqueeze(1)  # [batch_size, 1, hidden_size]
+        return embeddings.unsqueeze(1)  # [batch, 1, hidden_size]
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
-        """
-        Load weights from safetensors into the biomed-rna model.
-
-        Args:
-        ----
-            weights: Iterable of (name, tensor) pairs from vLLM
-        """
+        """Load weights from a safetensors checkpoint into the biomed-rna model."""
         param_targets = dict(self.model.named_parameters())
         buffer_targets = dict(self.model.named_buffers())
         loaded = set()
-        missing = set()
+        missing = set()  # checkpoint keys not found in model
 
         for name, tensor in weights:
             clean = name.removeprefix("model.")
@@ -737,19 +603,20 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
             else:
                 missing.add(clean)
 
-        # debug reporting:
-        # - unloaded: model params/buffers that kept their initialized values;
-        # - missing: checkpoint keys not found in model; (usually noise from vLLM)
         all_targets = param_targets.keys() | buffer_targets.keys()
         if unloaded := all_targets - loaded:
             logger.warning(
-                f"Weight items not loaded from checkpoint: {list(unloaded)[:10]}"
+                "Weights not loaded from checkpoint: %s", list(unloaded)[:10]
             )
         if missing:
             logger.warning(
-                f"Checkpoint has extra weught items not in model: {list(missing)[:10]}"
+                "Checkpoint has extra weights not in model: %s", list(missing)[:10]
             )
 
+
+# ---------------------------------------------------------------------------
+# HuggingFace AutoConfig registration
+# ---------------------------------------------------------------------------
 
 try:
     from transformers import AutoConfig
