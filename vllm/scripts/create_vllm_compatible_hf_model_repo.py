@@ -38,9 +38,9 @@ def modify_config(config_dict: dict) -> dict:
     """
     Modify config for vLLM compatibility.
     
-    PLACEHOLDER: Add your custom modifications here.
-    Example: config_dict["use_cache"] = False
+    Adds architectures key required for vLLM plugin registration.
     """
+    config_dict["architectures"] = ["BiomedRnaForSequenceEmbedding"]
     return config_dict
 
 
