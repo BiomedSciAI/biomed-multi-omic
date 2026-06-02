@@ -7,10 +7,7 @@ import pytest
 import torch
 from transformers import AutoConfig
 
-from vllm_biomed_rna_plugin.biomed_rna import (
-    BiomedRnaConfig,
-    BiomedRnaForSequenceEmbedding,
-)
+from vllm_biomed_rna_plugin.biomed_rna import BiomedRnaForSequenceEmbedding
 
 
 def pytest_configure(config):
@@ -53,7 +50,7 @@ def create_rna_multi_modal_object(
     }
 
 
-def create_dummy_vllm_config(config: BiomedRnaConfig):
+def create_dummy_vllm_config(config):
     """Create minimal vLLM config for testing."""
 
     class DummyPoolerConfig:
@@ -103,3 +100,33 @@ def model(config):
     model.load_weights(weights.items())
     model.eval()
     return model
+
+
+@pytest.fixture(scope="session")
+def vllm_model():
+    """Session-scoped vLLM model - initialized once for all tests."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available - vLLM requires GPU")
+
+    if not LOCAL_MODEL_PATH.exists():
+        pytest.skip(f"Local model not found at {LOCAL_MODEL_PATH}")
+
+    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
+
+    llm = get_vllm_biomed_rna_model(
+        gpu_memory_utilization=0.01,  # Minimal memory for tests
+        disable_log_stats=True,
+        max_num_seqs=8,  # Support batching
+    )
+
+    yield llm
+
+    # Cleanup
+    del llm
+    torch.cuda.empty_cache()
+
+
+@pytest.fixture()
+def mock_vllm_config(config):
+    """Mock vLLM config for IO processor tests (no GPU needed)."""
+    return create_dummy_vllm_config(config)

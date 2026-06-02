@@ -14,9 +14,6 @@ import anndata
 import numpy as np
 
 from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
-from vllm_biomed_rna_plugin.biomed_rna import (
-    BiomedRnaForSequenceEmbedding,  # Register model class
-)
 from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
 from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH, load_tokenizer
 

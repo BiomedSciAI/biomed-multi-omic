@@ -44,11 +44,13 @@ import torch.nn as nn
 from bmfm_targets.models.predictive.layers import get_embeddings_from_outputs
 from bmfm_targets.models.predictive.llama.config import LlamaForMultiTaskConfig
 from bmfm_targets.models.predictive.llama.model import LlamaForMultiTaskModel
-from transformers import BatchFeature, PretrainedConfig
+from transformers import BatchFeature
+from vllm.config import VllmConfig
 from vllm.config.multimodal import BaseDummyOptions
 from vllm.inputs import MultiModalDataDict, MultiModalInput, mm_input
 from vllm.model_executor.layers.pooler.abstract import Pooler
-from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.interfaces import IsAttentionFree, SupportsMultiModal
+from vllm.model_executor.models.interfaces_base import attn_type
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
     MultiModalFieldConfig,
@@ -69,6 +71,7 @@ from vllm.multimodal.processing import (
     PromptUpdate,
     TimingContext,
 )
+from vllm.sequence import IntermediateTensors
 from vllm.tasks import PoolingTask
 from vllm.v1.pool.metadata import PoolingMetadata
 
@@ -109,34 +112,11 @@ class EmbeddingIdentityPooler(Pooler):
 
 
 # ---------------------------------------------------------------------------
-# Config
+# Config - Use LlamaForMultiTaskConfig directly
 # ---------------------------------------------------------------------------
-
-
-class BiomedRnaConfig(PretrainedConfig):
-    """HuggingFace-compatible config for BiomedRNA models."""
-
-    model_type = "biomedrna"
-
-    def __init__(
-        self,
-        hidden_size: int = 384,
-        num_hidden_layers: int = 12,
-        num_attention_heads: int = 12,
-        intermediate_size: int = 1536,
-        activation_function: str = "GELU",
-        gene_vocab_size: int = 19321,
-        pooling_method: str = "first_token",
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.hidden_size = hidden_size
-        self.num_hidden_layers = num_hidden_layers
-        self.num_attention_heads = num_attention_heads
-        self.intermediate_size = intermediate_size
-        self.activation_function = activation_function
-        self.gene_vocab_size = gene_vocab_size
-        self.pooling_method = pooling_method
+# Note: LlamaForMultiTaskConfig inherits from SCModelConfigBase which already
+# has from_dict() that properly deserializes FieldInfo and LabelColumnInfo
+# objects from dicts. No wrapper needed!
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +259,6 @@ class BiomedRnaProcessingInfo(BaseProcessingInfo):
     ) -> Mapping[str, int]:
         return {"rna": 0}  # RNA adds no placeholder tokens to the prompt
 
-    def get_hf_processor(self, **kwargs) -> BiomedRnaDummyProcessor:
-        return BiomedRnaDummyProcessor(self.ctx.get_tokenizer())
-
     def parse_mm_data(
         self,
         mm_data: MultiModalDataDict,
@@ -301,7 +278,24 @@ class BiomedRnaDummyInputsBuilder(BaseDummyInputsBuilder):
 
     seq_len is used as the RNA sequence length. vLLM calls this during
     model initialization to estimate peak memory usage.
+
+    Uses a safe vocab size range and positive expression values to avoid
+    CUDA index out of bounds errors during warmup.
     """
+
+    def __init__(self, info):
+        super().__init__(info)
+        # Get vocab size from config to generate valid gene IDs
+        config = info.get_hf_config()
+        self.gene_vocab_size = 19321  # default
+
+        if hasattr(config, "fields") and config.fields:
+            # Find the genes field to get vocab size
+            for field in config.fields:
+                if hasattr(field, "field_name") and field.field_name == "genes":
+                    if hasattr(field, "vocab_size") and field.vocab_size:
+                        self.gene_vocab_size = field.vocab_size
+                    break
 
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         return ""
@@ -316,10 +310,18 @@ class BiomedRnaDummyInputsBuilder(BaseDummyInputsBuilder):
         if mm_counts.get("rna", 0) == 0:
             return {}
 
+        # Generate valid gene IDs within vocab range
+        # Use values that avoid special tokens (0, 1, 2 are typically special)
+        max_gene_id = min(self.gene_vocab_size - 1, 19320)
+        gene_ids = torch.randint(3, max_gene_id + 1, (seq_len,), dtype=torch.long)
+
+        # Generate positive expression values (log-normalized range ~0-10)
+        expr_values = torch.rand(seq_len) * 8.0 + 0.1
+
         return {
             "rna": {
-                "gene_ids": torch.randint(0, 19321, (seq_len,), dtype=torch.long),
-                "expr_values": torch.randn(seq_len, dtype=torch.float32),
+                "gene_ids": gene_ids,
+                "expr_values": expr_values,
                 "attention_mask": torch.ones(seq_len, dtype=torch.bool),
             }
         }
@@ -424,12 +426,13 @@ class LlamaForMultiTaskModelNoCheckpoint(LlamaForMultiTaskModel):
         pass
 
 
+@attn_type("attention_free")
 @MULTIMODAL_REGISTRY.register_processor(
     BiomedRnaMultiModalProcessor,
     info=BiomedRnaProcessingInfo,
     dummy_inputs=BiomedRnaDummyInputsBuilder,
 )
-class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
+class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiModal):
     """
     BiomedRNA model for single-cell RNA embedding generation.
 
@@ -448,6 +451,10 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
     submitting cells with different seq_len values.
     """
 
+    # Required for IsAttentionFree interface - indicates this is an encoder-only model
+    # with no attention mechanism that vLLM needs to manage
+    is_attention_free: bool = True
+
     supports_multimodal_raw_input_only = True
     is_pooling_model = True
 
@@ -457,20 +464,18 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
             return None  # RNA has no prompt placeholder tokens
         raise ValueError(f"Unsupported modality: {modality!r}")
 
-    def get_data_key(self) -> str:
-        return "rna"
-
-    def __init__(self, vllm_config=None, prefix: str = "", **kwargs):
+    # def get_data_key(self) -> str:
+    #     return "rna"
+    def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         biomed_rna_config: LlamaForMultiTaskConfig = vllm_config.model_config.hf_config
 
-        with self._mark_tower_model(vllm_config, "rna"):
-            self.pooling_method = getattr(
-                biomed_rna_config, "pooling_method", "first_token"
-            )
-            self.hidden_size = biomed_rna_config.hidden_size
-            self.model = LlamaForMultiTaskModelNoCheckpoint(biomed_rna_config)
-            self.model.eval()
+        self.pooling_method = getattr(
+            biomed_rna_config, "pooling_method", "first_token"
+        )
+        self.hidden_size = biomed_rna_config.hidden_size
+        self.model = LlamaForMultiTaskModelNoCheckpoint(biomed_rna_config)
+        self.model.eval()
 
         self.pooler = EmbeddingIdentityPooler()
         logger.info("BiomedRNA model initialized.")
@@ -478,6 +483,14 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
     @staticmethod
     def get_kv_cache_spec() -> dict:
         return {}  # encoder-only model — no KV cache
+
+    def get_language_model(self) -> "BiomedRnaForSequenceEmbedding":
+        """
+        vLLM v1 calls this to unwrap VLM wrappers and check for inner MoE models.
+        BiomedRNA is not a VLM wrapper — return self so vLLM finds no MoE and moves on.
+        Required for the online path to work, implementing IsAttentionFree is not enough.
+        """
+        return self
 
     def embed_input_ids(
         self,
@@ -487,11 +500,11 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
         is_multimodal: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
-        Return dummy embeddings for the single dummy prompt token.
+        Return zero embeddings of the correct hidden size for the dummy token.
 
-        supports_multimodal_raw_input_only=True requires embed_input_ids to return
-        a tensor with the correct hidden_size so vLLM can allocate its embedding buffer.
-        The actual RNA data arrives in forward() via **kwargs, not through embeddings.
+        The actual RNA data arrives via **kwargs in forward(), not through embeddings.
+        Unlike Terratorch which can use (batch, 0), BiomedRNA needs (batch, hidden_size)
+        because vLLM V1 still allocates and copies the embedding buffer.
         """
         return torch.zeros(
             input_ids.shape[0],
@@ -540,6 +553,7 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
         self,
         input_ids: torch.Tensor | None = None,
         positions: torch.Tensor | None = None,
+        intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
         attn_metadata=None,
         **kwargs,
@@ -612,15 +626,3 @@ class BiomedRnaForSequenceEmbedding(nn.Module, SupportsMultiModal):
             logger.warning(
                 "Checkpoint has extra weights not in model: %s", list(missing)[:10]
             )
-
-
-# ---------------------------------------------------------------------------
-# HuggingFace AutoConfig registration
-# ---------------------------------------------------------------------------
-
-try:
-    from transformers import AutoConfig
-
-    AutoConfig.register("biomedrna", BiomedRnaConfig)
-except Exception:
-    pass

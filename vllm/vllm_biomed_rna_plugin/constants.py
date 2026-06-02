@@ -15,5 +15,3 @@ RNA_FIELDS_CONFIG = {
     "expr_values": MultiModalFieldConfig.batched("rna"),
     "attention_mask": MultiModalFieldConfig.batched("rna"),
 }
-
-# Made with Bob
