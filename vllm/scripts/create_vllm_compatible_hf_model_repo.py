@@ -49,24 +49,24 @@ def add_vllm_required_keys(config_dict: dict) -> dict:
 
 def create_readme(source_repo: str, target_repo: str, original_readme: str | None = None) -> str:
     """Create README with reference to original model."""
-    header = f"""---
-# Converted from [{source_repo}](https://huggingface.co/{source_repo})
-# For vLLM plugin: https://github.com/BiomedSciAI/biomed-multi-omic/tree/main/vllm
----
+    header = f"""# {target_repo.split('/')[-1]}
+
+> **Note**: This model is converted from [{source_repo}](https://huggingface.co/{source_repo}) to SafeTensors format for use with the [vLLM BiomedRNA plugin](https://github.com/BiomedSciAI/biomed-multi-omic/tree/main/vllm).
 
 """
     if original_readme:
         return header + original_readme
     
-    return f"""{header}# {target_repo.split('/')[-1]}
-
-SafeTensors version of [{source_repo}](https://huggingface.co/{source_repo}) for vLLM.
+    return f"""{header}SafeTensors version of [{source_repo}](https://huggingface.co/{source_repo}) for vLLM.
 
 ## Usage
 ```python
 from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 llm = get_vllm_biomed_rna_model(model_path="{target_repo}")
 ```
+
+## Original Model
+For more information, see the original model: [{source_repo}](https://huggingface.co/{source_repo})
 """
 
 
