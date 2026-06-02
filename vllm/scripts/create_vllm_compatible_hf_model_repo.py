@@ -2,8 +2,11 @@
 """
 Download checkpoint from HuggingFace, convert to SafeTensors, and upload to new repo.
 
+Setup:
+    export HF_TOKEN="hf_..."  # Get token from https://huggingface.co/settings/tokens
+
 Usage:
-    python convert_and_upload_to_hf.py --target-repo "username/model-name" --token "hf_..."
+    python create_vllm_compatible_hf_model_repo.py --target-repo "username/model-name"
 """
 import argparse
 import json
@@ -34,7 +37,7 @@ def to_json_serializable(obj):
     return str(obj)
 
 
-def modify_config(config_dict: dict) -> dict:
+def add_vllm_required_keys(config_dict: dict) -> dict:
     """
     Modify config for vLLM compatibility.
     
@@ -71,7 +74,6 @@ def main():
     parser = argparse.ArgumentParser(description="Convert and upload checkpoint to HF")
     parser.add_argument("--source-repo", default="ibm-research/biomed.rna.llama.47m.wced.multitask.v1")
     parser.add_argument("--target-repo", required=True)
-    parser.add_argument("--token", default=None)
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--commit-message", default="Convert to SafeTensors for vLLM")
     args = parser.parse_args()
@@ -103,7 +105,7 @@ def main():
         
         config_path = output_dir / "config.json"
         config_dict = json.loads(config_path.read_text())
-        config_dict = modify_config(config_dict)
+        config_dict = add_vllm_required_keys(config_dict)
         config_path.write_text(json.dumps(config_dict, indent=2))
 
         # Copy tokenizer files
@@ -124,10 +126,10 @@ def main():
             original = None
         (output_dir / "README.md").write_text(create_readme(args.source_repo, args.target_repo, original))
 
-        # Upload
-        api = HfApi(token=args.token)
+        # Upload (uses HF_TOKEN env var)
+        api = HfApi()
         api.create_repo(args.target_repo, private=args.private, exist_ok=True)
-        api.upload_folder(folder_path=str(output_dir), repo_id=args.target_repo, 
+        api.upload_folder(folder_path=str(output_dir), repo_id=args.target_repo,
                          commit_message=args.commit_message)
 
     print(f"✓ Uploaded to https://huggingface.co/{args.target_repo}")
