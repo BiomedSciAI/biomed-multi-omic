@@ -1,16 +1,12 @@
 """Shared pytest fixtures for BiomedRNA tests."""
 
 import os
-from pathlib import Path
 
 import pytest
 import torch
 from transformers import AutoConfig
 
-from vllm_biomed_rna_plugin.biomed_rna import (
-    BiomedRnaConfig,
-    BiomedRnaForSequenceEmbedding,
-)
+from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH
 
 
 def pytest_configure(config):
@@ -28,16 +24,14 @@ def pytest_configure(config):
     torch.backends.cudnn.benchmark = False
 
 
-LOCAL_MODEL_PATH = Path(
-    "/dccstor/bmfm-targets1/users/sivanra/models/biomed.rna.llama.47m.wced.multitask.v1"
-)
-HF_MODEL_PATH = "ibm-research/biomed.rna.llama.47m.wced.multitask.v1"
+# Use the centralized model path from utils
+MODEL_PATH = DEFAULT_MODEL_PATH
 
 __all__ = [
     "create_dummy_vllm_config",
     "create_rna_multi_modal_object",
     "config",
-    "model",
+    "vllm_model",
 ]
 
 
@@ -53,7 +47,7 @@ def create_rna_multi_modal_object(
     }
 
 
-def create_dummy_vllm_config(config: BiomedRnaConfig):
+def create_dummy_vllm_config(config):
     """Create minimal vLLM config for testing."""
 
     class DummyPoolerConfig:
@@ -86,20 +80,31 @@ def create_dummy_vllm_config(config: BiomedRnaConfig):
 
 @pytest.fixture(scope="module")
 def config():
-    return AutoConfig.from_pretrained(LOCAL_MODEL_PATH)
+    return AutoConfig.from_pretrained(MODEL_PATH)
 
 
-@pytest.fixture(scope="module")
-def model(config):
-    """Pytest fixture for BiomedRNA model with loaded weights."""
-    from safetensors.torch import load_file
+@pytest.fixture(scope="session")
+def vllm_model():
+    """Session-scoped vLLM model - initialized once for all tests."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available - vLLM requires GPU")
 
-    # Load weights
-    weights = load_file(str(LOCAL_MODEL_PATH / "model.safetensors"))
+    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 
-    # Create model with full config
-    vllm_config = create_dummy_vllm_config(config)
-    model = BiomedRnaForSequenceEmbedding(vllm_config=vllm_config)
-    model.load_weights(weights.items())
-    model.eval()
-    return model
+    llm = get_vllm_biomed_rna_model(
+        gpu_memory_utilization=0.01,  # Minimal memory for tests
+        disable_log_stats=True,
+        max_num_seqs=8,  # Support batching
+    )
+
+    yield llm
+
+    # Cleanup
+    del llm
+    torch.cuda.empty_cache()
+
+
+@pytest.fixture()
+def mock_vllm_config(config):
+    """Mock vLLM config for IO processor tests (no GPU needed)."""
+    return create_dummy_vllm_config(config)

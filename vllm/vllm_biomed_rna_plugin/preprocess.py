@@ -5,7 +5,6 @@ Converts gene expression data into vLLM-compatible format using multi_modal_data
 Uses bmfm-targets tokenizer and data module.
 """
 
-import warnings
 
 import torch
 from bmfm_targets.training.data_module import DataModule

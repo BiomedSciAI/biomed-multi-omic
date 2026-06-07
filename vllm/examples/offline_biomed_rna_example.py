@@ -2,7 +2,7 @@
 """
 Generate cell embeddings from h5ad file using BiomedRNA vLLM plugin.
 
-Contains two exmaples:
+Contains two examples:
 1. Single h5ad batch processing
 2. Full file iteration (memory-efficient processing of entire dataset)
 """
@@ -14,9 +14,6 @@ import anndata
 import numpy as np
 
 from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
-from vllm_biomed_rna_plugin.biomed_rna import (
-    BiomedRnaForSequenceEmbedding,  # Register model class
-)
 from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
 from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH, load_tokenizer
 
@@ -71,7 +68,7 @@ def generate_embedding_for_h5ad_snippet(
 
     # Generate embeddings
     llm = get_vllm_biomed_rna_model(
-        model_path=DEFAULT_MODEL_PATH,
+        model_repo=DEFAULT_MODEL_PATH,
     )
     outputs = llm.embed(inputs)
     embeddings = np.array([output.outputs.embedding for output in outputs])
@@ -107,7 +104,7 @@ def generate_embeddings_for_h5ad(
 
     # Initialize tokenizer and model
     tokenizer = load_tokenizer()
-    llm = get_vllm_biomed_rna_model(model_path=DEFAULT_MODEL_PATH)
+    llm = get_vllm_biomed_rna_model(model_repo=DEFAULT_MODEL_PATH)
 
     # Get total cell count for progress reporting
     adata_info = anndata.read_h5ad(h5ad_path, backed="r")

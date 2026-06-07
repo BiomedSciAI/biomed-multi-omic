@@ -53,11 +53,12 @@ def get_embeddings_direct(
 
 def get_embeddings_vllm(
     h5ad_path: Path,
+    vllm_model,
     limit_samples: int = LIMIT_SAMPLES,
     max_length: int = 1024,
     limit_genes: str = "protein_coding",
 ):
-    """Run vLLM inference."""
+    """Run vLLM inference using shared model fixture."""
     if not h5ad_path.exists():
         raise FileNotFoundError(f"H5AD file not found: {h5ad_path}")
 
@@ -65,7 +66,6 @@ def get_embeddings_vllm(
     adata = adata[:limit_samples]
 
     # Use utility functions for simplified preprocessing
-    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
     from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
     from vllm_biomed_rna_plugin.utils import load_tokenizer as plugin_load_tokenizer
 
@@ -81,19 +81,14 @@ def get_embeddings_vllm(
         batch_size=limit_samples,
     )
 
-    llm = get_vllm_biomed_rna_model(
-        gpu_memory_utilization=0.01,
-        num_gpu_blocks_override=1,
-    )
-
-    outputs = llm.embed(inputs)
+    outputs = vllm_model.embed(inputs)
     embeddings = np.array([output.outputs.embedding for output in outputs])
     cell_names = adata.obs_names.astype(str).to_numpy()
 
     return embeddings, cell_names
 
 
-def test_vllm_vs_direct_full_flow():
+def test_vllm_vs_direct_full_flow(vllm_model):
     """Test vLLM flow vs direct bmfm-targets flow from h5ad file."""
     MAX_LENGTH = 1024
     LIMIT_GENES = "protein_coding"
@@ -108,7 +103,7 @@ def test_vllm_vs_direct_full_flow():
 
     # Run vLLM inference
     vllm_embeddings, vllm_cell_names = get_embeddings_vllm(
-        H5AD_PATH, LIMIT_SAMPLES, MAX_LENGTH, LIMIT_GENES
+        H5AD_PATH, vllm_model, LIMIT_SAMPLES, MAX_LENGTH, LIMIT_GENES
     )
 
     # Verify same cells
@@ -129,4 +124,15 @@ def test_vllm_vs_direct_full_flow():
 
 
 if __name__ == "__main__":
-    test_vllm_vs_direct_full_flow()
+    # For standalone execution, create model inline
+    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
+
+    llm = get_vllm_biomed_rna_model(
+        gpu_memory_utilization=0.2,
+        disable_log_stats=True,
+        max_num_seqs=8,
+    )
+    test_vllm_vs_direct_full_flow(llm)
+    del llm
+    torch.cuda.empty_cache()
+    gc.collect()

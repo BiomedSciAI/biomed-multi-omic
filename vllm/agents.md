@@ -23,13 +23,13 @@ This plugin enables vLLM to process scRNA-seq data and generate cell embeddings 
 **Plugin Components:**
 - `BiomedRnaForSequenceEmbedding`: Main model class wrapping BMFM's `LlamaForMultiTaskModel`
 - `preprocess.py`: Converts gene expression data to vLLM format
-- Uses BMFM's native forward pass and pooling methods
 
 ## Installation
-
+First instell bmfm-targets per its instructions.
+The intall the plugin:
 ```bash
+cd vllm
 pip install -e .
-pip install bmfm-targets
 ```
 
 ## Input Format
@@ -60,16 +60,53 @@ Padding uses:
 - `0.0` for expression values
 - `0` for attention masks
 
-## Usage
+## Usage Examples
 
-See `examples/` directory:
-- `biomed_rna_example.py` - Basic inference
-- `biomed_rna_streaming_example.py` - Streaming h5ad files
+### Offline Mode (`offline_biomed_rna_example.py`)
+Direct inference using the vLLM model instance without a server. Best for:
+- Development and testing
+- Batch processing of h5ad files
+- Single-machine workflows
+
+**Features:**
+- Loads model directly via `get_vllm_biomed_rna_model()`
+- Processes h5ad files using `preprocess_anndata()`
+- Supports batch processing and full file iteration
+- No server setup required
+
+### Online Mode (`online_biomed_rna_example.py`)
+Production deployment using vLLM server with IO processor plugin. Best for:
+- Production APIs
+- Multi-client access
+- Scalable inference
+
+**Features:**
+- HTTP API via `/pooling` endpoint
+- JSON input/output format
+- Automatic batching and optimization
+- Requires IO processor plugin
+
+## IO Processor Plugin
+
+The `BiomedRnaIOProcessor` enables online inference by handling data conversion between HTTP requests and vLLM's internal format.
+
+**Key Functions:**
+- `parse_data()`: Validates incoming JSON with gene_ids, expr_values, attention_mask
+- `pre_process()`: Converts to vLLM format with dummy token and multi-modal data
+- `post_process()`: Extracts embeddings from model output
+- `merge_pooling_params()`: Sets task type to "embed" for pooling endpoint
+
+**Data Flow:**
+```
+HTTP JSON → parse_data() → pre_process() → vLLM batching →
+Model.forward() → post_process() → HTTP JSON response
+```
+
+See `docs/io_processor_comparison.md` for implementation details.
 
 ## Testing
 
 ```bash
-# Run all tests
 pytest tests/
 
 # Specific tests
