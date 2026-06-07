@@ -7,6 +7,7 @@ Setup:
 
 Usage:
     python create_vllm_compatible_hf_model_repo.py --target-repo "username/model-name"
+    python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.47m.wced.multitask.v1" --target-repo "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm"
 """
 import argparse
 import json
@@ -41,23 +42,53 @@ def add_vllm_required_keys(config_dict: dict) -> dict:
     """
     Modify config for vLLM compatibility.
     
-    Adds architectures key required for vLLM plugin registration.
+    - Adds architectures key required for vLLM plugin registration
+    - Preserves original model_type (scllama)
+    - Sets encoder/decoder flags for proper model initialization
+    - Adds vocab_size at root level for vLLM dummy tokenizer creation
     """
+    # Set standard architecture for vLLM plugin
     config_dict["architectures"] = ["BiomedRnaForSequenceEmbedding"]
+    
+    # Keep original model_type as scllama (matches local working config)
+    config_dict["model_type"] = "scllama"
+    
+    # Set model architecture flags
+    config_dict["use_cache"] = False
+    config_dict["is_encoder_decoder"] = False
+    config_dict["is_decoder"] = False
+    config_dict["add_cross_attention"] = False
+    
+    # Extract vocab_size from fields and add to root level
+    # This allows vLLM to create a dummy tokenizer automatically
+    if "fields" in config_dict and len(config_dict["fields"]) > 0:
+        # Use the genes field vocab_size (first field)
+        genes_field = next((f for f in config_dict["fields"] if f.get("field_name") == "genes"), None)
+        if genes_field and "vocab_size" in genes_field:
+            config_dict["vocab_size"] = genes_field["vocab_size"]
+    
     return config_dict
 
 
 def create_readme(source_repo: str, target_repo: str, original_readme: str | None = None) -> str:
-    """Create README with reference to original model."""
-    header = f"""# {target_repo.split('/')[-1]}
+    """Create README with reference to original model, preserving YAML frontmatter."""
+    if not original_readme:
+        # Create minimal README if none exists
+        return f"""---
+license: apache-2.0
+library_name: biomed-multi-omic
+pipeline_tag: feature-extraction
+tags:
+- Biology
+- RNA
+- vLLM
+---
 
-> **Note**: This model is converted from [{source_repo}](https://huggingface.co/{source_repo}) to SafeTensors format for use with the [vLLM BiomedRNA plugin](https://github.com/BiomedSciAI/biomed-multi-omic/tree/main/vllm).
+# {target_repo.split('/')[-1]}
 
-"""
-    if original_readme:
-        return header + original_readme
-    
-    return f"""{header}SafeTensors version of [{source_repo}](https://huggingface.co/{source_repo}) for vLLM.
+SafeTensors version of [{source_repo}](https://huggingface.co/{source_repo}) for vLLM.
+
+> **Note**: Converted for use with the [vLLM BiomedRNA plugin](https://github.com/BiomedSciAI/biomed-multi-omic/tree/main/vllm).
 
 ## Usage
 ```python
@@ -66,8 +97,34 @@ llm = get_vllm_biomed_rna_model(model_path="{target_repo}")
 ```
 
 ## Original Model
-For more information, see the original model: [{source_repo}](https://huggingface.co/{source_repo})
+See: [{source_repo}](https://huggingface.co/{source_repo})
 """
+    
+    # Parse original README to extract and preserve YAML frontmatter
+    lines = original_readme.split('\n')
+    if lines[0].strip() == '---':
+        # Find end of YAML frontmatter
+        yaml_end = -1
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                yaml_end = i
+                break
+        
+        if yaml_end > 0:
+            # Preserve YAML, add note after it
+            yaml_section = '\n'.join(lines[:yaml_end+1])
+            rest_of_readme = '\n'.join(lines[yaml_end+1:])
+            note = f"""
+
+> **Note**: This model is converted from [{source_repo}](https://huggingface.co/{source_repo}) to SafeTensors format for use with the [vLLM BiomedRNA plugin](https://github.com/BiomedSciAI/biomed-multi-omic/tree/main/vllm).
+"""
+            return yaml_section + note + rest_of_readme
+    
+    # No YAML frontmatter found, just prepend note
+    note = f"""> **Note**: This model is converted from [{source_repo}](https://huggingface.co/{source_repo}) to SafeTensors format for use with the [vLLM BiomedRNA plugin](https://github.com/BiomedSciAI/biomed-multi-omic/tree/main/vllm).
+
+"""
+    return note + original_readme
 
 
 def main():
@@ -108,15 +165,28 @@ def main():
         config_dict = add_vllm_required_keys(config_dict)
         config_path.write_text(json.dumps(config_dict, indent=2))
 
-        # Copy tokenizer files
+        # Copy tokenizer files (including subdirectories)
+        print("Copying tokenizer files...")
         try:
-            tok_cache = snapshot_download(args.source_repo, 
-                                         allow_patterns=["tokenizer*", "special_tokens_map.json", "vocab.json"])
-            for pattern in ["tokenizer*", "special_tokens_map.json", "vocab.json"]:
-                for file in Path(tok_cache).glob(pattern):
-                    shutil.copy(file, output_dir)
-        except Exception:
-            pass
+            tok_cache = snapshot_download(
+                args.source_repo,
+                allow_patterns=["tokenizers/*"]
+            )
+            
+            # Copy entire tokenizers directory if it exists
+            tok_src = Path(tok_cache) / "tokenizers"
+            if tok_src.exists():
+                tok_dst = output_dir / "tokenizers"
+                shutil.copytree(tok_src, tok_dst)
+                
+                # Count files copied
+                file_count = sum(1 for _ in tok_dst.rglob("*") if _.is_file())
+                print(f"  ✓ Copied tokenizers directory with {file_count} files")
+            else:
+                print("  ⚠ No tokenizers directory found in source repo")
+                
+        except Exception as e:
+            print(f"  ⚠ Warning: Could not copy tokenizer files: {e}")
 
         # Create README
         try:
@@ -139,4 +209,3 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 
-# Made with Bob
