@@ -10,22 +10,14 @@ add biomed-rna-vllm-plugin to your bmfm-multi-omic env:
 uv pip install -e .
 ```
 
-## Prerequisites
+## Model
 
-### Model Weights Conversion (Required)
+The plugin uses the HuggingFace model: **`sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm`**
 
-The HuggingFace model repository currently lacks `model.safetensors` files. We convert the checkpoint to SafeTensors format and config.json before using this plugin.
-
-
-```bash
-python scripts/convert_ckpt_to_safetensors.py
-```
-
-**Optional arguments:**
-- `--output-dir`: Output directory (default: `/dccstor/bmfm-targets1/users/sivanra/models`)
-- `--model-id`: HuggingFace model ID (default: `ibm-research/biomed.rna.llama.47m.wced.multitask.v1`)
-
-
+This model includes:
+- SafeTensors format weights (`model.safetensors`)
+- Configuration file (`config.json`)
+- Tokenizer files
 
 ## Usage
 
@@ -34,9 +26,11 @@ python scripts/convert_ckpt_to_safetensors.py
 To analyze h5ad file and generate embeddings directly using the LLM instance, run [`examples/offline_biomed_rna_example.py`](examples/offline_biomed_rna_example.py):
 
 ```bash
-# Edit paths in the example file, then run on gpu:
+# Run on GPU:
 python examples/offline_biomed_rna_example.py
 ```
+
+The example will automatically download the model from HuggingFace on first run.
 
 ### Online Mode (vLLM Server with IO Processor Plugin)
 
@@ -45,7 +39,7 @@ For production deployments, use the vLLM server mode with the custom IO processo
 **1. Start the vLLM server:**
 
 ```bash
-vllm serve /path/to/biomed.rna.llama.47m.wced.multitask.v1 \
+vllm serve sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm \
     --runner pooling \
     --trust-remote-code \
     --enforce-eager \

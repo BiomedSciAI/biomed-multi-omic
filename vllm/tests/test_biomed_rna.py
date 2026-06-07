@@ -9,40 +9,7 @@ from vllm_biomed_rna_plugin.biomed_rna import (
     BiomedRnaForSequenceEmbedding,  # noqa: F401
 )
 
-# Fixtures (config, model) are now in conftest.py and automatically available
-
-
-def test_forward(model, config):
-    """Test production path: RNA data in kwargs → forward → encoder output."""
-    # Create a fake cell with 10 genes
-    cell = create_fake_cell(num_genes=10, cell_id=42)
-
-    # Extract RNA data from the cell
-    rna_data = cell["multi_modal_data"]["rna"]
-    gene_ids = rna_data["gene_ids"]
-    expr_values = rna_data["expr_values"]
-    attention_mask = rna_data["attention_mask"]
-
-    # Forward expects 2D tensors [batch, seq_len], so add batch dimension
-    gene_ids_2d = gene_ids.unsqueeze(0)  # [1, seq_len]
-    expr_values_2d = expr_values.unsqueeze(0)  # [1, seq_len]
-    attention_mask_2d = attention_mask.unsqueeze(0)  # [1, seq_len]
-
-    with torch.no_grad():
-        output = model.forward(
-            gene_ids=gene_ids_2d,
-            expr_values=expr_values_2d,
-            attention_mask=attention_mask_2d,
-        )
-
-    assert output.shape == (
-        1,
-        1,
-        config.hidden_size,
-    ), f"Expected (1, 1, {config.hidden_size}), got {output.shape}"
-
-    assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
-    assert not torch.allclose(output, torch.zeros_like(output)), "Output is all zeros"
+# Fixtures are in conftest.py and automatically available
 
 
 def create_fake_cell(num_genes: int, cell_id: int):

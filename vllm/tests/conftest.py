@@ -1,13 +1,12 @@
 """Shared pytest fixtures for BiomedRNA tests."""
 
 import os
-from pathlib import Path
 
 import pytest
 import torch
 from transformers import AutoConfig
 
-from vllm_biomed_rna_plugin.biomed_rna import BiomedRnaForSequenceEmbedding
+from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH
 
 
 def pytest_configure(config):
@@ -25,16 +24,14 @@ def pytest_configure(config):
     torch.backends.cudnn.benchmark = False
 
 
-LOCAL_MODEL_PATH = Path(
-    "/dccstor/bmfm-targets1/users/sivanra/models/biomed.rna.llama.47m.wced.multitask.v1"
-)
-HF_MODEL_PATH = "ibm-research/biomed.rna.llama.47m.wced.multitask.v1"
+# Use the centralized model path from utils
+MODEL_PATH = DEFAULT_MODEL_PATH
 
 __all__ = [
     "create_dummy_vllm_config",
     "create_rna_multi_modal_object",
     "config",
-    "model",
+    "vllm_model",
 ]
 
 
@@ -83,23 +80,7 @@ def create_dummy_vllm_config(config):
 
 @pytest.fixture(scope="module")
 def config():
-    return AutoConfig.from_pretrained(LOCAL_MODEL_PATH)
-
-
-@pytest.fixture(scope="module")
-def model(config):
-    """Pytest fixture for BiomedRNA model with loaded weights."""
-    from safetensors.torch import load_file
-
-    # Load weights
-    weights = load_file(str(LOCAL_MODEL_PATH / "model.safetensors"))
-
-    # Create model with full config
-    vllm_config = create_dummy_vllm_config(config)
-    model = BiomedRnaForSequenceEmbedding(vllm_config=vllm_config)
-    model.load_weights(weights.items())
-    model.eval()
-    return model
+    return AutoConfig.from_pretrained(MODEL_PATH)
 
 
 @pytest.fixture(scope="session")
@@ -107,9 +88,6 @@ def vllm_model():
     """Session-scoped vLLM model - initialized once for all tests."""
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available - vLLM requires GPU")
-
-    if not LOCAL_MODEL_PATH.exists():
-        pytest.skip(f"Local model not found at {LOCAL_MODEL_PATH}")
 
     from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 

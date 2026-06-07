@@ -1,29 +1,23 @@
 """Utility functions for BiomedRNA vLLM plugin."""
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 from bmfm_targets.config.tokenization_config import FieldInfo
 from vllm import LLM
 
-# Default model repository
-DEFAULT_HF_MODEL_REPO = "ibm-research/biomed.rna.llama.47m.wced.multitask.v1"
-
-# Default local model path
-DEFAULT_MODEL_PATH = Path(
-    "/dccstor/bmfm-targets1/users/sivanra/models/biomed.rna.llama.47m.wced.multitask.v1"
-)
+# Default model repository - HuggingFace model with safetensors
+DEFAULT_MODEL_PATH = "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm"
 
 
-def load_tokenizer(model_repo: str = DEFAULT_HF_MODEL_REPO):
+def load_tokenizer(model_repo: str = DEFAULT_MODEL_PATH):
     """
-    Load tokenizer from HuggingFace checkpoint.
+    Load tokenizer from HuggingFace model repository.
 
     Args:
     ----
-        model_repo: HuggingFace model repository ID (default: biomed.rna.llama.47m.wced.multitask.v1)
+        model_repo: HuggingFace model repository ID
 
     Returns:
     -------
@@ -35,37 +29,33 @@ def load_tokenizer(model_repo: str = DEFAULT_HF_MODEL_REPO):
         >>> tokenizer = load_tokenizer()
         >>> # Now ready to use with preprocess_h5ad()
     """
-    from bmfm_targets.models.model_utils import download_ckpt_from_huggingface
     from bmfm_targets.tokenization import load_tokenizer as bmfm_load_tokenizer
+    from huggingface_hub import snapshot_download
 
-    checkpoint_path = download_ckpt_from_huggingface(model_repo)
-    return bmfm_load_tokenizer(os.path.dirname(checkpoint_path))
+    # Download model files from HuggingFace
+    model_dir = snapshot_download(
+        model_repo,
+        allow_patterns=["config.json", "*/tokenizer_config.json", "*/vocab.json"],
+    )
+    return bmfm_load_tokenizer(model_dir)
 
 
-def get_fields(
-    model_path: str | Path | None = None,
-    model_repo: str = DEFAULT_HF_MODEL_REPO,
-) -> list[FieldInfo]:
+def get_fields(model_repo: str = DEFAULT_MODEL_PATH) -> list[FieldInfo]:
     """
-    Load model fields from the model directory config.json.
+    Load model fields from HuggingFace model repository config.json.
 
     Args:
     ----
-        model_path: Path to local model directory containing config.json.
-            If None, resolve from HuggingFace checkpoint location.
-        model_repo: HuggingFace model repository ID used when model_path is None.
+        model_repo: HuggingFace model repository ID
 
     Returns:
     -------
         Model fields configuration parsed as FieldInfo objects
     """
-    if model_path is None:
-        from bmfm_targets.models.model_utils import download_ckpt_from_huggingface
+    from huggingface_hub import snapshot_download
 
-        checkpoint_path = download_ckpt_from_huggingface(model_repo)
-        model_path = Path(checkpoint_path).parent
-    else:
-        model_path = Path(model_path)
+    # Download config.json from HuggingFace
+    model_path = Path(snapshot_download(model_repo, allow_patterns=["config.json"]))
 
     config_path = model_path / "config.json"
     with config_path.open() as f:
@@ -75,18 +65,18 @@ def get_fields(
 
 
 def get_vllm_biomed_rna_model(
-    model_path: str | Path | None = None,
+    model_repo: str = DEFAULT_MODEL_PATH,
     **kwargs: Any,
 ) -> LLM:
     """
-    Get a vLLM instance configured for BiomedRNA model.
+    Get a vLLM instance configured for BiomedRNA model from HuggingFace.
 
     This helper function provides sensible defaults for BiomedRNA model parameters.
     All parameters can be overridden via kwargs.
 
     Args:
     ----
-        model_path: Path to the BiomedRNA model directory. If None, uses DEFAULT_MODEL_PATH.
+        model_repo: HuggingFace model repository ID
         **kwargs: Additional arguments to override defaults or pass to LLM
 
     Returns:
@@ -95,11 +85,11 @@ def get_vllm_biomed_rna_model(
 
     Examples:
     --------
-        # Use default model path
+        # Use default model
         >>> llm = get_vllm_biomed_rna_model()
 
-        # Specify custom model path
-        >>> llm = get_vllm_biomed_rna_model("/path/to/model")
+        # Use different HF model
+        >>> llm = get_vllm_biomed_rna_model("username/model-name")
 
         # Tests - minimal resources
         >>> llm = get_vllm_biomed_rna_model(
@@ -109,20 +99,15 @@ def get_vllm_biomed_rna_model(
 
         # Production - more resources
         >>> llm = get_vllm_biomed_rna_model(
-        ...     model_path,
         ...     gpu_memory_utilization=0.1,
         ...     num_gpu_blocks_override=8,
         ... )
 
     """
-    # Use default model path if not provided
-    if model_path is None:
-        model_path = DEFAULT_MODEL_PATH
-
-    # Default params
+    # Default params for offline batch embedding (.embed() API)
+    # NOTE: vLLM will auto-resolve runner to "pooling" for embedding models
     default_params = {
-        "model": str(model_path),
-        "runner": "pooling",
+        "model": model_repo,
         "trust_remote_code": True,
         "dtype": "float32",
         "mm_encoder_only": True,

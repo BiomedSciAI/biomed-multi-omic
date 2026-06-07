@@ -6,7 +6,7 @@ through vLLM's /pooling endpoint.
 
 Start the server first:
 
-    vllm serve /path/to/biomed.rna.llama.47m.wced.multitask.v1 \
+    vllm serve sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm \
         --runner pooling \
         --trust-remote-code \
         --enforce-eager \
@@ -14,7 +14,7 @@ Start the server first:
         --dtype float32 \
         --gpu-memory-utilization 0.1 \
         --io-processor-plugin biomed_rna \
-        --enable-mm-embeds
+        --enable-mm-embeds \
          > vllm_server.log 2>&1 &
 
 Note: Do NOT use --skip-tokenizer-init. While the biomed_rna IO processor doesn't
@@ -42,7 +42,7 @@ import numpy as np
 import requests
 
 from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
-from vllm_biomed_rna_plugin.utils import load_tokenizer
+from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH, load_tokenizer
 
 # Path to example h5ad file
 ZHENG_SMALL_H5AD_PATH = Path(__file__).parent / "resources" / "zheng68k.h5ad"
@@ -61,12 +61,12 @@ def main():
     server_url = f"http://{server_host}:{server_port}/pooling"
     model_name = os.environ.get(
         "VLLM_MODEL_NAME",
-        "/dccstor/bmfm-targets1/users/sivanra/models/biomed.rna.llama.47m.wced.multitask.v1",
+        DEFAULT_MODEL_PATH,
     )
 
     # Load and preprocess h5ad data
     print("=" * 80)
-    print("BiomedRNA Online Embedding Generation (IO Psrocessor Plugin)")
+    print("BiomedRNA Online Embedding Generation (IO Processor Plugin)")
     print("=" * 80)
     print(f"Loading data from: {ZHENG_SMALL_H5AD_PATH}")
 
