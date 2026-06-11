@@ -42,10 +42,13 @@ import numpy as np
 import requests
 
 from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
-from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH, load_tokenizer
+from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, load_tokenizer
 
 # Path to example h5ad file
 ZHENG_SMALL_H5AD_PATH = Path(__file__).parent / "resources" / "zheng68k.h5ad"
+
+# Model to use - change to MLM_MULTITASK_MODEL if desired
+MODEL_REPO = WCED_MULTITASK_MODEL
 
 
 def main():
@@ -61,7 +64,7 @@ def main():
     server_url = f"http://{server_host}:{server_port}/pooling"
     model_name = os.environ.get(
         "VLLM_MODEL_NAME",
-        DEFAULT_MODEL_PATH,
+        MODEL_REPO,
     )
 
     # Load and preprocess h5ad data
@@ -77,7 +80,7 @@ def main():
 
     # Load tokenizer and preprocess
     print("Preprocessing cells...")
-    tokenizer = load_tokenizer()
+    tokenizer = load_tokenizer(MODEL_REPO)
     cell_data = preprocess_anndata(
         adata,
         tokenizer,

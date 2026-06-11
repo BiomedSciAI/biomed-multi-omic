@@ -15,7 +15,7 @@ import numpy as np
 
 from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
-from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH, load_tokenizer
+from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, load_tokenizer
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -50,9 +50,9 @@ def generate_embedding_for_h5ad_snippet(
     print(f"Example 1: Single Batch Processing ({num_samples} cells)")
     print(f"{'='*80}")
 
-    # Load data and tokenizer
+    model_repo = WCED_MULTITASK_MODEL
     adata = anndata.read_h5ad(h5ad_path)[:num_samples]
-    tokenizer = load_tokenizer()
+    tokenizer = load_tokenizer(model_repo)
     print(f"Input: {adata.n_obs} cells × {adata.n_vars} genes")
 
     # Preprocess
@@ -66,10 +66,7 @@ def generate_embedding_for_h5ad_snippet(
         f"seq_len={len(inputs[0]['multi_modal_data']['rna']['gene_ids'])}"
     )
 
-    # Generate embeddings
-    llm = get_vllm_biomed_rna_model(
-        model_repo=DEFAULT_MODEL_PATH,
-    )
+    llm = get_vllm_biomed_rna_model(model_repo)
     outputs = llm.embed(inputs)
     embeddings = np.array([output.outputs.embedding for output in outputs])
     print(f"Output embedding shape: {embeddings.shape}")
@@ -103,8 +100,10 @@ def generate_embeddings_for_h5ad(
     print(f"{'='*80}")
 
     # Initialize tokenizer and model
-    tokenizer = load_tokenizer()
-    llm = get_vllm_biomed_rna_model(model_repo=DEFAULT_MODEL_PATH)
+    model_repo = WCED_MULTITASK_MODEL
+
+    tokenizer = load_tokenizer(model_repo)
+    llm = get_vllm_biomed_rna_model(model_repo)
 
     # Get total cell count for progress reporting
     adata_info = anndata.read_h5ad(h5ad_path, backed="r")

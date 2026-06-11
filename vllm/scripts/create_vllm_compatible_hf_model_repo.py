@@ -8,6 +8,8 @@ Setup:
 Usage:
     python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.47m.wced.multitask.v1" --target-repo "username/model-name"
     python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.47m.wced.multitask.v1" --target-repo "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm"
+    python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.32m.mlm.multitask.v1" --target-repo "sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm"
+
 """
 import argparse
 import json
@@ -179,7 +181,7 @@ def main():
         print("Copying tokenizer files...")
         try:
             tok_cache = snapshot_download(
-                args.source_repo, allow_patterns=["tokenizers/*"]
+                args.source_repo, allow_patterns=["tokenizers/**/*"]
             )
 
             # Copy entire tokenizers directory if it exists

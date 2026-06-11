@@ -6,7 +6,7 @@ import pytest
 import torch
 from transformers import AutoConfig
 
-from vllm_biomed_rna_plugin.utils import DEFAULT_MODEL_PATH
+from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL
 
 
 def pytest_configure(config):
@@ -25,7 +25,7 @@ def pytest_configure(config):
 
 
 # Use the centralized model path from utils
-MODEL_PATH = DEFAULT_MODEL_PATH
+MODEL_PATH = WCED_MULTITASK_MODEL
 
 __all__ = [
     "create_dummy_vllm_config",
@@ -94,6 +94,7 @@ def vllm_model():
     llm = get_vllm_biomed_rna_model(
         gpu_memory_utilization=0.01,  # Minimal memory for tests
         disable_log_stats=True,
+        dtype="float32",
         max_num_seqs=8,  # Support batching
     )
 

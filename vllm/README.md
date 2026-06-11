@@ -1,6 +1,6 @@
 # vLLM BiomedRNA Model Plugin
 
-Running Inference for BiomedRNA models via VLLM plugin.
+Running Inference at scale for BiomedRNA models via VLLM plugin.
 
 ## Installation
 
@@ -10,27 +10,32 @@ add biomed-rna-vllm-plugin to your bmfm-multi-omic env:
 uv pip install -e .
 ```
 
-## Model
+## Supported Models
 
-The plugin uses the HuggingFace model: **`sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm`**
+The plugin supports multiple BiomedRNA model variants:
 
-This model includes:
-- SafeTensors format weights (`model.safetensors`)
-- Configuration file (`config.json`)
-- Tokenizer files
+1. **47M WCED Model** (default): `sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm`
+   - 47M parameters, WCED Multitask
+   - Default model used in examples
+
+2. **32M MLM Model**: `sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm`
+   - 32M parameters, MLM Multitask
+
 
 ## Usage
+
+Both models can be accessed using the constants defined in [`vllm_biomed_rna_plugin.utils`](vllm_biomed_rna_plugin/utils.py):
+- `WCED_MULTITASK_MODEL` - Default 47M WCED model
+- `MLM_MULTITASK_MODEL` - 32M MLM model
 
 ### Offline Mode (Direct LLM)
 
 To analyze h5ad file and generate embeddings directly using the LLM instance, run [`examples/offline_biomed_rna_example.py`](examples/offline_biomed_rna_example.py):
 
 ```bash
-# Run on GPU:
+# Run on GPU (uses WCED model by default):
 python examples/offline_biomed_rna_example.py
 ```
-
-The example will automatically download the model from HuggingFace on first run.
 
 ### Online Mode (vLLM Server with IO Processor Plugin)
 
@@ -39,7 +44,20 @@ For production deployments, use the vLLM server mode with the custom IO processo
 **1. Start the vLLM server:**
 
 ```bash
+# Use default 47M WCED model
 vllm serve sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm \
+    --runner pooling \
+    --trust-remote-code \
+    --enforce-eager \
+    --no-enable-prefix-caching \
+    --dtype float32 \
+    --gpu-memory-utilization 0.1 \
+    --io-processor-plugin biomed_rna \
+    --enable-mm-embeds \
+     > vllm_server.log 2>&1 &
+
+# Or use 32M MLM model
+vllm serve sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm \
     --runner pooling \
     --trust-remote-code \
     --enforce-eager \
@@ -68,7 +86,7 @@ vllm serve sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm \
 python examples/online_biomed_rna_example.py
 ```
 
-The example uses the `/pooling` endpoint (not `/v1/embeddings`) with the IO processor plugin.
+The example uses the `/pooling` endpoint with the IO processor plugin.
 
 
 ## Testing

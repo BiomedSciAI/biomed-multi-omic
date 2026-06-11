@@ -7,11 +7,12 @@ from typing import Any
 from bmfm_targets.config.tokenization_config import FieldInfo
 from vllm import LLM
 
-# Default model repository - HuggingFace model with safetensors
-DEFAULT_MODEL_PATH = "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm"
+# Available BiomedRNA model repositories
+WCED_MULTITASK_MODEL = "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm"
+MLM_MULTITASK_MODEL = "sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm"
 
 
-def load_tokenizer(model_repo: str = DEFAULT_MODEL_PATH):
+def load_tokenizer(model_repo: str):
     """
     Load tokenizer from HuggingFace model repository.
 
@@ -25,8 +26,8 @@ def load_tokenizer(model_repo: str = DEFAULT_MODEL_PATH):
 
     Example:
     -------
-        >>> from vllm_biomed_rna_plugin.utils import load_tokenizer
-        >>> tokenizer = load_tokenizer()
+        >>> from vllm_biomed_rna_plugin.utils import load_tokenizer, WCED_MULTITASK_MODEL
+        >>> tokenizer = load_tokenizer(WCED_MULTITASK_MODEL)
         >>> # Now ready to use with preprocess_h5ad()
     """
     from bmfm_targets.tokenization import load_tokenizer as bmfm_load_tokenizer
@@ -35,12 +36,18 @@ def load_tokenizer(model_repo: str = DEFAULT_MODEL_PATH):
     # Download model files from HuggingFace
     model_dir = snapshot_download(
         model_repo,
-        allow_patterns=["config.json", "*/tokenizer_config.json", "*/vocab.json"],
+        allow_patterns=[
+            "config.json",
+            "*/tokenizer_config.json",
+            "*/vocab.json",
+            "*/tokenizer.json",
+            "*/special_tokens_map.json",
+        ],
     )
     return bmfm_load_tokenizer(model_dir)
 
 
-def get_fields(model_repo: str = DEFAULT_MODEL_PATH) -> list[FieldInfo]:
+def get_fields(model_repo: str) -> list[FieldInfo]:
     """
     Load model fields from HuggingFace model repository config.json.
 
@@ -65,7 +72,7 @@ def get_fields(model_repo: str = DEFAULT_MODEL_PATH) -> list[FieldInfo]:
 
 
 def get_vllm_biomed_rna_model(
-    model_repo: str = DEFAULT_MODEL_PATH,
+    model_repo: str = WCED_MULTITASK_MODEL,
     **kwargs: Any,
 ) -> LLM:
     """
@@ -76,7 +83,7 @@ def get_vllm_biomed_rna_model(
 
     Args:
     ----
-        model_repo: HuggingFace model repository ID
+        model_repo: HuggingFace model repository ID (default: WCED_MULTITASK_MODEL)
         **kwargs: Additional arguments to override defaults or pass to LLM
 
     Returns:
@@ -85,11 +92,11 @@ def get_vllm_biomed_rna_model(
 
     Examples:
     --------
-        # Use default model
+        # Use default WCED model
         >>> llm = get_vllm_biomed_rna_model()
 
-        # Use different HF model
-        >>> llm = get_vllm_biomed_rna_model("username/model-name")
+        # Use MLM model
+        >>> llm = get_vllm_biomed_rna_model(MLM_MULTITASK_MODEL)
 
         # Tests - minimal resources
         >>> llm = get_vllm_biomed_rna_model(
