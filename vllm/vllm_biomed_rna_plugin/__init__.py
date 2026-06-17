@@ -100,8 +100,8 @@ def register_biomed_rna_model() -> None:
         raise
 
 
-# Call registration when module is imported
-register_biomed_rna_model()
+# # Call registration when module is imported
+# register_biomed_rna_model()
 
 
 __all__ = [

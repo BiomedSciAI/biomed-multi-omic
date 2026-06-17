@@ -11,7 +11,7 @@ from typing import Any
 import torch
 from vllm.config import VllmConfig
 from vllm.inputs import PromptType
-from vllm.outputs import PoolingRequestOutput
+from vllm.outputs import PoolingOutput, PoolingRequestOutput
 from vllm.plugins.io_processors.interface import IOProcessor
 from vllm.renderers import BaseRenderer
 
@@ -162,7 +162,7 @@ class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
         if not model_output:
             raise ValueError("No model output available")
 
-        output = model_output[0]
+        output: PoolingRequestOutput[PoolingOutput] = model_output[0]
 
         # Extract embedding from PoolingRequestOutput
         # PoolingRequestOutput.outputs is a PoolingOutput with a 'data' attribute
@@ -171,10 +171,9 @@ class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
         else:
             raise ValueError(f"Cannot find embedding data in output: {type(output)}")
 
-        if isinstance(embedding, torch.Tensor):
-            embedding_list = embedding.cpu().tolist()
-        else:
-            embedding_list = list(embedding)
+        # Convert PoolingRequestOutput tensor to list for JSON serialization
+        # By this point, the tensor is already on CPU (vLLM transfers it)
+        embedding_list = embedding.tolist()
 
         return RnaOutput(
             {

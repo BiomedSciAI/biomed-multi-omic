@@ -208,34 +208,6 @@ class BiomedRnaDataParser(MultiModalDataParser):
 
 
 # ---------------------------------------------------------------------------
-# HF processor stub
-# ---------------------------------------------------------------------------
-
-
-class BiomedRnaDummyProcessor:
-    """
-    Stub HF processor for RNA model.
-
-    vLLM requires a processor object, but RNA data bypasses HF processing
-    entirely. This class satisfies that requirement by tokenizing text only
-    and ignoring all RNA fields.
-    """
-
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
-
-    def _merge_kwargs(self, *args, **kwargs) -> dict:
-        return {}
-
-    def __call__(self, text: str = "", **kwargs) -> BatchFeature:
-        # Filter out RNA fields so they don't reach the tokenizer.
-        # RNA_FIELDS_CONFIG is the authoritative list of field names.
-        rna_fields = set(RNA_FIELDS_CONFIG.keys())
-        tok_kwargs = {k: v for k, v in kwargs.items() if k not in rna_fields}
-        return BatchFeature(self.tokenizer(text, **tok_kwargs))
-
-
-# ---------------------------------------------------------------------------
 # Processing info
 # ---------------------------------------------------------------------------
 
