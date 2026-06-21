@@ -6,7 +6,7 @@ through vLLM's /pooling endpoint.
 
 Start the server first:
 
-    vllm serve sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm \
+    vllm serve ibm-research/biomed.rna.llama.47m.wced.multitask.v1.vllm \
         --runner pooling \
         --trust-remote-code \
         --enforce-eager \

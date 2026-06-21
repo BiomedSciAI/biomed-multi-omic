@@ -14,11 +14,11 @@ uv pip install -e .
 
 The plugin supports multiple BiomedRNA model variants:
 
-1. **47M WCED Model** (default): `sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm`
+1. **47M WCED Model** (default): `ibm-research/biomed.rna.llama.47m.wced.multitask.v1.vllm`
    - 47M parameters, WCED Multitask
    - Default model used in examples
 
-2. **32M MLM Model**: `sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm`
+2. **32M MLM Model**: `ibm-research/biomed.rna.llama.32m.mlm.multitask.v1.vllm`
    - 32M parameters, MLM Multitask
 
 
@@ -45,7 +45,7 @@ For production deployments, use the vLLM server mode with the custom IO processo
 
 ```bash
 # Use default 47M WCED model
-vllm serve sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm \
+vllm serve ibm-research/biomed.rna.llama.47m.wced.multitask.v1.vllm \
     --runner pooling \
     --trust-remote-code \
     --enforce-eager \
@@ -57,7 +57,7 @@ vllm serve sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm \
      > vllm_server.log 2>&1 &
 
 # Or use 32M MLM model
-vllm serve sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm \
+vllm serve ibm-research/biomed.rna.llama.32m.mlm.multitask.v1.vllm \
     --runner pooling \
     --trust-remote-code \
     --enforce-eager \

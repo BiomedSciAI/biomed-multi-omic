@@ -6,9 +6,8 @@ Setup:
     export HF_TOKEN="hf_..."  # Get token from https://huggingface.co/settings/tokens
 
 Usage:
-    python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.47m.wced.multitask.v1" --target-repo "username/model-name"
-    python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.47m.wced.multitask.v1" --target-repo "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm"
-    python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.32m.mlm.multitask.v1" --target-repo "sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm"
+    python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.47m.wced.multitask.v1" --target-repo "ibm-research/biomed.rna.llama.47m.wced.multitask.v1.vllm"
+    python create_vllm_compatible_hf_model_repo.py --source-repo "ibm-research/biomed.rna.llama.32m.mlm.multitask.v1" --target-repo "ibm-research/biomed.rna.llama.32m.mlm.multitask.v1.vllm"
 
 """
 import argparse

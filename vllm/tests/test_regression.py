@@ -20,11 +20,11 @@ LIMIT_SAMPLES = 20
 # Test model configurations
 TEST_MODEL_CONFIGS = [
     (
-        "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm",
+        "ibm-research/biomed.rna.llama.47m.wced.multitask.v1.vllm",
         "ibm-research/biomed.rna.llama.47m.wced.multitask.v1",
     ),
     (
-        "sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm",
+        "ibm-research/biomed.rna.llama.32m.mlm.multitask.v1.vllm",
         "ibm-research/biomed.rna.llama.32m.mlm.multitask.v1",
     ),
 ]
