@@ -8,8 +8,8 @@ from bmfm_targets.config.tokenization_config import FieldInfo
 from vllm import LLM
 
 # Available BiomedRNA model repositories
-WCED_MULTITASK_MODEL = "sivanravid/biomed.rna.llama.47m.wced.multitask.v1.vllm"
-MLM_MULTITASK_MODEL = "sivanravid/biomed.rna.llama.32m.mlm.multitask.v1.vllm"
+WCED_MULTITASK_MODEL = "ibm-research/biomed.rna.llama.47m.wced.multitask.v1.vllm"
+MLM_MULTITASK_MODEL = "ibm-research/biomed.rna.llama.32m.mlm.multitask.v1.vllm"
 
 
 def load_tokenizer(model_repo: str):
