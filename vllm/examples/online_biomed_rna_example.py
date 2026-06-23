@@ -40,8 +40,8 @@ from pathlib import Path
 import anndata
 import numpy as np
 import requests
-from biomed_rna_plugin.preprocess import preprocess_anndata
-from biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, load_tokenizer
+from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
+from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, load_tokenizer
 
 # Path to example h5ad file
 ZHENG_SMALL_H5AD_PATH = Path(__file__).parent / "resources" / "zheng68k.h5ad"

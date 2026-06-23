@@ -26,7 +26,7 @@ def load_tokenizer(model_repo: str):
 
     Example:
     -------
-        >>> from biomed_rna_plugin.utils import load_tokenizer, WCED_MULTITASK_MODEL
+        >>> from vllm_biomed_rna_plugin.utils import load_tokenizer, WCED_MULTITASK_MODEL
         >>> tokenizer = load_tokenizer(WCED_MULTITASK_MODEL)
         >>> # Now ready to use with preprocess_h5ad()
     """

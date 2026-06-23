@@ -26,7 +26,7 @@ The plugin supports multiple BiomedRNA model variants:
 
 ## Usage
 
-Both models can be accessed using the constants defined in [`biomed_rna_plugin.utils`](biomed_rna_plugin/utils.py):
+Both models can be accessed using the constants defined in [`vllm_biomed_rna_plugin.utils`](vllm_biomed_rna_plugin/utils.py):
 - `WCED_MULTITASK_MODEL` - Default 47M WCED model
 - `MLM_MULTITASK_MODEL` - 32M MLM model
 

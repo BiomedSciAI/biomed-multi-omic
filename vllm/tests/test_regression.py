@@ -83,8 +83,8 @@ def get_embeddings_vllm(
     adata = adata[:limit_samples]
 
     # Use utility functions for simplified preprocessing
-    from biomed_rna_plugin.preprocess import preprocess_anndata
-    from biomed_rna_plugin.utils import load_tokenizer as plugin_load_tokenizer
+    from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
+    from vllm_biomed_rna_plugin.utils import load_tokenizer as plugin_load_tokenizer
 
     # Each model uses its own tokenizer for proper regression testing
     tokenizer = plugin_load_tokenizer(vllm_model_repo)
@@ -124,7 +124,7 @@ def test_vllm_vs_direct_full_flow(vllm_model_repo, origin_model_repo):
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
 
-    from biomed_rna_plugin import get_vllm_biomed_rna_model
+    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 
     MAX_LENGTH = 1024
     LIMIT_GENES = "protein_coding"

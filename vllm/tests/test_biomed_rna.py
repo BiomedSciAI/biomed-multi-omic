@@ -5,7 +5,7 @@
 import torch
 
 # IMPORTANT: Import model class to trigger registration
-from biomed_rna_plugin.biomed_rna import (
+from vllm_biomed_rna_plugin.biomed_rna import (
     BiomedRnaForSequenceEmbedding,  # noqa: F401
 )
 
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     # For standalone execution, create model inline
     import gc
 
-    from biomed_rna_plugin import get_vllm_biomed_rna_model
+    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 
     llm = get_vllm_biomed_rna_model(
         disable_log_stats=True,

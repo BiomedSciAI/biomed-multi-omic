@@ -4,8 +4,8 @@ import os
 
 import pytest
 import torch
-from biomed_rna_plugin.utils import WCED_MULTITASK_MODEL
 from transformers import AutoConfig
+from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL
 
 
 def pytest_configure(config):
@@ -88,7 +88,7 @@ def vllm_model():
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available - vLLM requires GPU")
 
-    from biomed_rna_plugin import get_vllm_biomed_rna_model
+    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 
     llm = get_vllm_biomed_rna_model(
         gpu_memory_utilization=0.01,  # Minimal memory for tests

@@ -42,8 +42,8 @@ except ImportError:
 
 try:
     import anndata
-    from biomed_rna_plugin.preprocess import preprocess_anndata
-    from biomed_rna_plugin.utils import load_tokenizer
+    from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
+    from vllm_biomed_rna_plugin.utils import load_tokenizer
 
     import bmfm_targets as bmfm
 

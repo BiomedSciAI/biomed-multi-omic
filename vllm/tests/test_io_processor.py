@@ -6,7 +6,7 @@ Validates data conversion between HTTP JSON and vLLM internal format.
 """
 
 import torch
-from biomed_rna_plugin.io_processor import BiomedRnaIOProcessor, RnaPrompt
+from vllm_biomed_rna_plugin.io_processor import BiomedRnaIOProcessor, RnaPrompt
 
 
 def test_parse_data_valid():

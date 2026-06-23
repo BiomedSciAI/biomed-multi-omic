@@ -80,15 +80,15 @@ bmfm-targets-run = "bmfm_targets.tasks.scbert.scbert_main:main"
 
 # vLLM plugin entry points for biomed-rna model
 [project.entry-points."vllm.general_plugins"]
-biomed_rna_model = "biomed_rna_plugin:register_biomed_rna_model"
+biomed_rna_model = "vllm_biomed_rna_plugin:register_biomed_rna_model"
 
 # IO processor plugin for custom /pooling endpoint
 [project.entry-points."vllm.io_processor_plugins"]
-biomed_rna = "biomed_rna_plugin.io_processor:register_biomed_rna_plugin"
+biomed_rna = "vllm_biomed_rna_plugin.io_processor:register_vllm_biomed_rna_plugin"
 
 [tool.setuptools.packages.find]
 where = [".", "vllm"]
-include = ["bmfm_targets*", "biomed_rna_plugin*"]
+include = ["bmfm_targets*", "vllm_biomed_rna_plugin*"]
 
 [tool.setuptools.package-data]
 bmfm_targets = ["py.typed"]
