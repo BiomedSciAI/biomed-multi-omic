@@ -41,10 +41,12 @@ from collections.abc import Iterable, Mapping, Sequence, Set
 
 import torch
 import torch.nn as nn
+from transformers import BatchFeature
+
+from biomed_rna_plugin.constants import RNA_FIELDS_CONFIG, RNA_PAD_TOKEN_ID
 from bmfm_targets.models.predictive.layers import get_embeddings_from_outputs
 from bmfm_targets.models.predictive.llama.config import LlamaForMultiTaskConfig
 from bmfm_targets.models.predictive.llama.model import LlamaForMultiTaskModel
-from transformers import BatchFeature
 from vllm.config import VllmConfig
 from vllm.config.multimodal import BaseDummyOptions
 from vllm.inputs import MultiModalDataDict, MultiModalInput, mm_input
@@ -74,8 +76,6 @@ from vllm.multimodal.processing import (
 from vllm.sequence import IntermediateTensors
 from vllm.tasks import PoolingTask
 from vllm.v1.pool.metadata import PoolingMetadata
-
-from vllm_biomed_rna_plugin.constants import RNA_FIELDS_CONFIG, RNA_PAD_TOKEN_ID
 
 logger = logging.getLogger(__name__)
 

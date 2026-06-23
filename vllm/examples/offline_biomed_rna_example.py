@@ -12,10 +12,9 @@ from pathlib import Path
 
 import anndata
 import numpy as np
-
-from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
-from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
-from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, load_tokenizer
+from biomed_rna_plugin import get_vllm_biomed_rna_model
+from biomed_rna_plugin.preprocess import preprocess_anndata
+from biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, load_tokenizer
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"

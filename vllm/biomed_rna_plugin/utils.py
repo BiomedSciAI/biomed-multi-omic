@@ -26,12 +26,13 @@ def load_tokenizer(model_repo: str):
 
     Example:
     -------
-        >>> from vllm_biomed_rna_plugin.utils import load_tokenizer, WCED_MULTITASK_MODEL
+        >>> from biomed_rna_plugin.utils import load_tokenizer, WCED_MULTITASK_MODEL
         >>> tokenizer = load_tokenizer(WCED_MULTITASK_MODEL)
         >>> # Now ready to use with preprocess_h5ad()
     """
-    from bmfm_targets.tokenization import load_tokenizer as bmfm_load_tokenizer
     from huggingface_hub import snapshot_download
+
+    from bmfm_targets.tokenization import load_tokenizer as bmfm_load_tokenizer
 
     # Download model files from HuggingFace
     model_dir = snapshot_download(

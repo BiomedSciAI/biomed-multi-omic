@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import torch
+
 from vllm.config import VllmConfig
 from vllm.inputs import PromptType
 from vllm.outputs import PoolingOutput, PoolingRequestOutput
@@ -191,4 +192,4 @@ def register_biomed_rna_plugin():
     Returns the qualified name of the IO processor class as a string.
     vLLM will then use resolve_obj_by_qualname to import and instantiate it.
     """
-    return "vllm_biomed_rna_plugin.io_processor.BiomedRnaIOProcessor"
+    return "biomed_rna_plugin.io_processor.BiomedRnaIOProcessor"

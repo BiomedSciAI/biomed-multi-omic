@@ -87,7 +87,7 @@ def register_biomed_rna_model() -> None:
         # Register the model with vLLM's ModelRegistry
         ModelRegistry.register_model(
             "BiomedRnaForSequenceEmbedding",
-            "vllm_biomed_rna_plugin.biomed_rna:BiomedRnaForSequenceEmbedding",
+            "biomed_rna_plugin.biomed_rna:BiomedRnaForSequenceEmbedding",
         )
 
         logger.info(
@@ -111,4 +111,4 @@ __all__ = [
 ]
 
 # Import utility function for convenience
-from vllm_biomed_rna_plugin.utils import get_vllm_biomed_rna_model
+from biomed_rna_plugin.utils import get_vllm_biomed_rna_model

@@ -97,7 +97,7 @@ SafeTensors version of [{source_repo}](https://huggingface.co/{source_repo}) for
 
 ## Usage
 ```python
-from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
+from biomed_rna_plugin import get_vllm_biomed_rna_model
 llm = get_vllm_biomed_rna_model(model_path="{target_repo}")
 ```
 

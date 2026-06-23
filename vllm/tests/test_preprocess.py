@@ -2,8 +2,7 @@
 """Tests preprocessing of scRNA data."""
 
 import torch
-
-from vllm_biomed_rna_plugin.preprocess import create_rna_vllm_input
+from biomed_rna_plugin.preprocess import create_rna_vllm_input
 
 
 def test_create_rna_vllm_input():
