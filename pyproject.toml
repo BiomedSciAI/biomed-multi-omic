@@ -36,7 +36,7 @@ dependencies = [
   "tensorboardX",
   "pandas>=2,<3",
   "einops",
-  "cellxgene_census[experimental]>=1.13.0,<=1.17.0", #experimental required to use built-in iterable dataset; >=1.16.0 removed experimental.ml
+  "cellxgene_census[experimental]>=1.13.0,<=1.17.0", #experimental required to use built-in iterable dataset; =1.18 caused upstream clash of tiledb on python 3.12
   "tiledbsoma",
   "pysam",
   "litdata",
