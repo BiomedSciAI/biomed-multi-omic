@@ -88,7 +88,7 @@ biomed_rna = "vllm_biomed_rna_plugin.io_processor:register_vllm_biomed_rna_plugi
 
 [tool.setuptools.packages.find]
 where = [".", "vllm"]
-include = ["bmfm_targets*", "vllm_biomed_rna_plugin*"]
+include = ["bmfm_targets*", "vllm_biomed_rna_plugin*", "run*"]
 
 [tool.setuptools.package-data]
 bmfm_targets = ["py.typed"]
