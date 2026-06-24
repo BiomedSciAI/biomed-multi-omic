@@ -52,7 +52,43 @@ to shadow it with this repo's version of `bmfm_targets`.)
 This builds a tiny synthetic h5ad, runs one training step, and prints the
 loss. Requires no GPU and no real data.
 
+## OT-only vs OT + WCED multitask
+
+Both modes are supported — controlled by the `losses` list in the trainer section
+and the `wced_weight` / `ot_weight` knobs.
+
+**OT only** (no per-gene reconstruction supervision):
+```yaml
+trainer:
+  losses: []          # no WCED loss tasks
+  extra_kwargs:
+    ot_weight: 1.0
+    wced_weight: 0.0  # or just omit — wced_weight * 0 = 0
+```
+
+**OT + WCED multitask** — currently requires `BaseRNAExpressionDataset`-style
+label dicts `{"all": tensor, "input": tensor, "non_input": tensor}`, which
+`BasescRNA2ChIPDataset` does not yet produce. Until that masking is wired into
+the scRNA2ChIP data pipeline, use OT-only (`losses: []`) and rely on the
+WCED decoder head being implicitly regularised by the OT signal.
+
+When the data pipeline is updated to produce WCED label dicts, wire it as:
+```yaml
+trainer:
+  losses:
+    - field_name: label_expressions
+      name: mse
+      wced_target: all_genes
+  extra_kwargs:
+    ot_weight: 1.0    # relative weight of Sinkhorn divergence term
+    wced_weight: 1.0  # relative weight of per-gene MSE reconstruction term
+```
+
+Total loss = `wced_weight * wced_loss + ot_weight * sinkhorn_divergence`.
+
 ## Wiring into a YAML config
+
+Full example with both losses:
 
 ```yaml
 # trainer section

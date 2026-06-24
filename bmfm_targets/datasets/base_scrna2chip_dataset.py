@@ -1,24 +1,15 @@
-import abc
-import random
-from typing import Literal
 import numpy as np
-import scipy
-from anndata import AnnData, read_h5ad
 
 try:
     # anndata >= 0.11
-    from anndata.abc import CSRDataset as SparseDataset
+    from anndata.abc import CSRDataset as SparseDataset  # noqa: F401
 except ImportError:
     # anndata >= 0.10
-    from anndata.experimental import CSRDataset as SparseDataset
+    pass
 
 
-from torch.utils.data import Dataset
-
-from bmfm_targets.datasets.base_rna_dataset import BaseRNAExpressionDataset, logger
-from bmfm_targets.datasets.datasets_utils import random_subsampling
+from bmfm_targets.datasets.base_rna_dataset import BaseRNAExpressionDataset
 from bmfm_targets.tokenization import MultiFieldInstance
-
 
 # class BasescRNA2ChIPDataset(Dataset, abc.ABC):
 #     """A PyTorch Dataset for the  perturbation dataset."""
@@ -215,6 +206,7 @@ from bmfm_targets.tokenization import MultiFieldInstance
 #             },
 #         )
 
+
 class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -232,16 +224,19 @@ class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
     def get_sample_metadata(self, idx):
         cell_name = str(self.cell_names[idx])
         cell_metadata = self.metadata.loc[cell_name]
-        categorical_columns = self.label_columns if self.label_columns else ['tissue_label']
+        categorical_columns = (
+            self.label_columns if self.label_columns else ["tissue_label"]
+        )
         regression_columns = (
             self.regression_label_columns if self.regression_label_columns else []
         )
         all_label_columns = [*categorical_columns, *regression_columns]
-        metadata = {l: cell_metadata[l] for l in all_label_columns if l != self.new_field}
+        metadata = {
+            l: cell_metadata[l] for l in all_label_columns if l != self.new_field
+        }
 
         metadata["cell_name"] = cell_name
         return metadata
-
 
     def _get_item_by_index(self, idx: int) -> MultiFieldInstance:
         """
@@ -256,7 +251,9 @@ class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
             MultiFieldInstance: A single cell sample.
         """
         if idx > len(self.processed_data) - 1 or idx < 0:
-            raise IndexError(f"Index {idx} out of range for dataset of size {len(self)}")
+            raise IndexError(
+                f"Index {idx} out of range for dataset of size {len(self)}"
+            )
         if self.expose_zeros:
             genes, expressions = self.get_genes_and_expressions(idx)
         else:
@@ -274,11 +271,13 @@ class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
 
         # find matching ChIP-seq samples
         candidate_matches = self.chipseq_cells.obs.index
-        for col_label in (self.label_columns if self.label_columns else ['tissue_label']):
+        for col_label in self.label_columns if self.label_columns else ["tissue_label"]:
             col_label_for_sample = metadata[col_label]
             candidate_matches = np.intersect1d(
-                self.chipseq_cells.obs.query(f"{col_label} == @col_label_for_sample").index,
-                candidate_matches
+                self.chipseq_cells.obs.query(
+                    f"{col_label} == @col_label_for_sample"
+                ).index,
+                candidate_matches,
             )
         candidate_matches = self.chipseq_cells[candidate_matches]
 
@@ -291,7 +290,7 @@ class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
         paired_sample_genes = self.all_genes
         paired_sample_values = candidate_matches[cell_idx].X.toarray().tolist()[0]
         paired_metadata = dict(candidate_matches.obs.iloc[cell_idx])
-        paired_metadata['sample_name'] = str(candidate_matches.obs.index[cell_idx])
+        paired_metadata["sample_name"] = str(candidate_matches.obs.index[cell_idx])
 
         paired_mfi = MultiFieldInstance(
             metadata=paired_metadata,
@@ -306,13 +305,13 @@ class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
 
 
 def merge_mfis(mfi: MultiFieldInstance, paired_mfi: MultiFieldInstance, new_field: str):
-    first = {g: e for g, e in zip(mfi["genes"], mfi["expressions"])}
-    second = {g: e for g, e in zip(paired_mfi["genes"], paired_mfi[new_field])}
+    first = dict(zip(mfi["genes"], mfi["expressions"]))
+    second = dict(zip(paired_mfi["genes"], paired_mfi[new_field]))
     merged_genes = sorted({*mfi["genes"]} | {*paired_mfi["genes"]})
     merged_expressions = [first.get(g, 0) for g in merged_genes]
     merged_new_field = [second.get(g, 0) for g in merged_genes]
     return MultiFieldInstance(
-        metadata={**mfi.metadata, 'paired_name': paired_mfi.metadata['sample_name']},
+        metadata={**mfi.metadata, "paired_name": paired_mfi.metadata["sample_name"]},
         data={
             "genes": merged_genes,
             "expressions": merged_expressions,

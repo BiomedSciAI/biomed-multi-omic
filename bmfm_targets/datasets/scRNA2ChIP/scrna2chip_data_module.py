@@ -1,10 +1,7 @@
 import logging
 
-from bmfm_targets.datasets import (
-    DatasetTransformer
-)
+from bmfm_targets.datasets import DatasetTransformer
 from bmfm_targets.datasets.base_scrna2chip_dataset import BasescRNA2ChIPDataset
-
 from bmfm_targets.training.data_module import scRNA2ChIPDataModule
 
 logging.basicConfig(
@@ -23,6 +20,6 @@ class ConcatDataset(BasescRNA2ChIPDataset):
 
 class ConcatDataModule(scRNA2ChIPDataModule):
     """PyTorch Lightning DataModule for perturbation datasets."""
+
     DATASET_FACTORY = ConcatDataset
     DATASET_TRANSFORMER_FACTORY = DatasetTransformer
-

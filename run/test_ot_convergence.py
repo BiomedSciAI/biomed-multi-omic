@@ -1,4 +1,5 @@
-"""Convergence test for the Sinkhorn divergence loss.
+"""
+Convergence test for the Sinkhorn divergence loss.
 
 Directly optimizes a small batch of predicted gene vectors against a fixed
 target chip population.  No model, no data pipeline — pure loss convergence.
@@ -10,13 +11,14 @@ Usage:
 """
 
 import torch
+
 from bmfm_targets.training.losses.ot.sinkhorn import sinkhorn_divergence
 
 torch.manual_seed(0)
 
-N_GENES = 64   # small so Sinkhorn is fast
-B = 8          # predicted batch size
-M = 10         # chip population size
+N_GENES = 64  # small so Sinkhorn is fast
+B = 8  # predicted batch size
+M = 10  # chip population size
 N_STEPS = 200
 LR = 0.05
 
@@ -43,5 +45,7 @@ for step in range(N_STEPS):
 final_loss = loss.item()
 ratio = final_loss / initial_loss
 print(f"\ninitial={initial_loss:.4f}  final={final_loss:.4f}  ratio={ratio:.3f}")
-assert ratio < 0.10, f"OT loss did not converge: final/initial = {ratio:.3f} (need <0.10)"
+assert (
+    ratio < 0.10
+), f"OT loss did not converge: final/initial = {ratio:.3f} (need <0.10)"
 print("Convergence test PASSED")

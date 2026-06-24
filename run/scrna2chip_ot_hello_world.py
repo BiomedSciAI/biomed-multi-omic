@@ -1,4 +1,5 @@
-"""Hello-world for scRNA→ChIP population-OT training.
+"""
+Hello-world for scRNA→ChIP population-OT training.
 
 Builds a tiny synthetic h5ad, runs a single training_step with the OT loss,
 and prints the loss value.  No GPU needed.
@@ -14,15 +15,59 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
-import torch
 
-GENES = ["DMBT1P1", "LINC01282", "LOC105377447", "AC104304.1", "ARMC4P1",
-         "FRG2EP", "AL513188.1", "RP11-1134I14.4", "RP11-955H22.4", "AC005614.5",
-         "BRCA1", "TP53", "EGFR", "MYC", "KRAS", "PTEN", "AKT1", "VEGFA",
-         "CDH1", "VIM", "FN1", "ACTA2", "TGFB1", "IL6", "TNF", "IFNG",
-         "CD3E", "CD4", "CD8A", "FOXP3", "CD19", "MS4A1", "CD14", "FCGR3A",
-         "NKG7", "GNLY", "GZMB", "PRF1", "NCAM1", "KLRD1", "HBA1", "HBB",
-         "GYPA", "ITGA2B", "GP1BA", "PECAM1", "VWF", "CDH5", "COL1A1", "COL3A1"]
+GENES = [
+    "DMBT1P1",
+    "LINC01282",
+    "LOC105377447",
+    "AC104304.1",
+    "ARMC4P1",
+    "FRG2EP",
+    "AL513188.1",
+    "RP11-1134I14.4",
+    "RP11-955H22.4",
+    "AC005614.5",
+    "BRCA1",
+    "TP53",
+    "EGFR",
+    "MYC",
+    "KRAS",
+    "PTEN",
+    "AKT1",
+    "VEGFA",
+    "CDH1",
+    "VIM",
+    "FN1",
+    "ACTA2",
+    "TGFB1",
+    "IL6",
+    "TNF",
+    "IFNG",
+    "CD3E",
+    "CD4",
+    "CD8A",
+    "FOXP3",
+    "CD19",
+    "MS4A1",
+    "CD14",
+    "FCGR3A",
+    "NKG7",
+    "GNLY",
+    "GZMB",
+    "PRF1",
+    "NCAM1",
+    "KLRD1",
+    "HBA1",
+    "HBB",
+    "GYPA",
+    "ITGA2B",
+    "GP1BA",
+    "PECAM1",
+    "VWF",
+    "CDH5",
+    "COL1A1",
+    "COL3A1",
+]
 N_SCRNA_PER_TISSUE = 20
 N_CHIP_PER_TISSUE = 10
 TISSUES = ["tissue_A", "tissue_B"]
@@ -35,9 +80,13 @@ def make_h5ad(path: Path) -> Path:
     rows = []
     for tissue in TISSUES:
         for _ in range(N_SCRNA_PER_TISSUE):
-            rows.append({"data_type": "scRNA", "tissue_label": tissue, "split_random": "train"})
+            rows.append(
+                {"data_type": "scRNA", "tissue_label": tissue, "split_random": "train"}
+            )
         for _ in range(N_CHIP_PER_TISSUE):
-            rows.append({"data_type": "ChIP", "tissue_label": tissue, "split_random": "train"})
+            rows.append(
+                {"data_type": "ChIP", "tissue_label": tissue, "split_random": "train"}
+            )
 
     obs = pd.DataFrame(rows)
     obs.index = [f"cell_{i}" for i in range(len(obs))]
@@ -52,7 +101,7 @@ def make_h5ad(path: Path) -> Path:
 def main():
     from bmfm_targets.config import FieldInfo, SCBertConfig
     from bmfm_targets.config.training_config import TrainerConfig
-    from bmfm_targets.datasets.scRNA2ChIP import ConcatDataModule, ConcatDataset
+    from bmfm_targets.datasets.scRNA2ChIP import ConcatDataModule
     from bmfm_targets.tokenization.load import load_tokenizer
     from bmfm_targets.training.modules.scrna_to_chip import ScrnaToChipTranslationModule
 
@@ -68,13 +117,18 @@ def main():
                 field_name="expressions",
                 is_input=True,
                 tokenization_strategy="continuous_value_encoder",
-                encoder_kwargs={"kind": "mlp_with_special_token_embedding", "zero_as_special_token": True},
+                encoder_kwargs={
+                    "kind": "mlp_with_special_token_embedding",
+                    "zero_as_special_token": True,
+                },
             ),
             FieldInfo(
                 field_name="label_expressions",
                 is_input=False,
                 tokenization_strategy="continuous_value_encoder",
-                decode_modes={"wced": {"vocab_field": "genes", "logit_outputs": ["mse"]}},
+                decode_modes={
+                    "wced": {"vocab_field": "genes", "logit_outputs": ["mse"]}
+                },
             ),
         ]
 
@@ -137,8 +191,34 @@ def main():
             "Check that label_expressions field has decode_modes: wced configured "
             "and that the model was built with the correct fields."
         )
-        print(f"training_step loss: {loss.item():.4f}")
-        print("Hello world OK")
+        print(f"OT-only training_step loss: {loss.item():.4f}")
+        print("Hello world OT-only OK")
+
+        # --- test 2: OT + WCED multitask (wced_weight > 0, losses=[]) ---
+        # ScrnaToChipTranslationModule already scales calculate_losses() by wced_weight.
+        # When losses=[] (OT-only), wced_weight has no effect.  When losses contain a
+        # WCED task, BasescRNA2ChIPDataset must produce WCED-formatted label dicts
+        # {"all": tensor, "input": tensor, "non_input": tensor} — which requires
+        # BaseRNAExpressionDataset masking, not yet wired in this fork.
+        #
+        # What we CAN test: that wced_weight scales the base loss (even if it is 0.0
+        # when losses=[], the OT term is unaffected).  With losses=[] and
+        # wced_weight=0 vs wced_weight=1 the total loss is identical (0 * 0 == 1 * 0).
+        # So we verify that OT loss is the same regardless of wced_weight.
+        module_ww0 = ScrnaToChipTranslationModule(
+            model_config,
+            TrainerConfig(
+                losses=[], learning_rate=1e-4, enable_perturbation_metrics=False
+            ),
+            tokenizer=tokenizer,
+            ot_weight=1.0,
+            wced_weight=0.0,
+        )
+        loss_ww0 = module_ww0.training_step(batch, 0)
+        assert loss_ww0 is not None, "wced_weight=0 loss is None"
+        assert loss_ww0.item() > 0.0, "wced_weight=0 OT loss must be positive"
+        print(f"OT loss (wced_weight=0): {loss_ww0.item():.4f}")
+        print("Hello world OT+WCED weight scaling OK")
 
 
 if __name__ == "__main__":

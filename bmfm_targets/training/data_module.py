@@ -10,16 +10,16 @@ import pytorch_lightning as pl
 import torch
 from scanpy import AnnData, read_h5ad
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
-from bmfm_targets.datasets.samplers import ConditionHomogeneousBatchSampler
 from transformers.tokenization_utils_base import PaddingStrategy, TruncationStrategy
 
 from bmfm_targets.config import FieldInfo, LabelColumnInfo
 from bmfm_targets.datasets import DatasetTransformer, PerturbationDatasetTransformer
 from bmfm_targets.datasets.base_dna_dataset import BaseDNASeqDataset
 from bmfm_targets.datasets.base_perturbation_dataset import BasePerturbationDataset
-from bmfm_targets.datasets.base_scrna2chip_dataset import BasescRNA2ChIPDataset
 from bmfm_targets.datasets.base_rna_dataset import BaseRNAExpressionDataset
+from bmfm_targets.datasets.base_scrna2chip_dataset import BasescRNA2ChIPDataset
 from bmfm_targets.datasets.label_ontology import LabelOntology
+from bmfm_targets.datasets.samplers import ConditionHomogeneousBatchSampler
 from bmfm_targets.tokenization import MultiFieldCollator, MultiFieldTokenizer
 from bmfm_targets.tokenization.resources import (
     get_L1000_genes,
@@ -510,20 +510,26 @@ class DataModule(pl.LightningDataModule):
                 **self.dataset_kwargs,
                 split="train",
                 limit_samples=self._dataset_sample_limit("train"),
-                split_column_name=self.transform_kwargs.get("split_column_name", None) # TODO added
+                split_column_name=self.transform_kwargs.get(
+                    "split_column_name", None
+                ),  # TODO added
             )
             self.dev_dataset = self.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 limit_samples=self._dataset_sample_limit("dev"),
-                split_column_name=self.transform_kwargs.get("split_column_name", None) # TODO added
+                split_column_name=self.transform_kwargs.get(
+                    "split_column_name", None
+                ),  # TODO added
             )
         if stage == "validate" or stage is None:
             self.dev_dataset = self.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 limit_samples=self._dataset_sample_limit("dev"),
-                split_column_name=self.transform_kwargs.get("split_column_name", None) # TODO added
+                split_column_name=self.transform_kwargs.get(
+                    "split_column_name", None
+                ),  # TODO added
             )
         if stage == "test" or stage is None:
             self.test_dataset = self.DATASET_FACTORY(
@@ -1053,7 +1059,8 @@ class scRNA2ChIPDataModule(DataModule):
             self._build_chip_populations()
 
     def _build_chip_populations(self):
-        """Build celltype -> ChIP population tensor map, aligned to tokenizer vocab.
+        """
+        Build celltype -> ChIP population tensor map, aligned to tokenizer vocab.
 
         Each ChIP cell's gene values are scattered into a full-vocab-sized vector so
         the population tensor [M, vocab_size] is in the same space as the WCED logits.
@@ -1091,7 +1098,9 @@ class scRNA2ChIPDataModule(DataModule):
         if not self.use_ot_batching:
             return super().train_dataloader()
 
-        obs_conditions = self.train_dataset.metadata[self.celltype_column].reset_index(drop=True)
+        obs_conditions = self.train_dataset.metadata[self.celltype_column].reset_index(
+            drop=True
+        )
         batch_sampler = ConditionHomogeneousBatchSampler(
             obs_conditions=obs_conditions,
             batch_size=self.batch_size,
@@ -1119,7 +1128,9 @@ class scRNA2ChIPDataModule(DataModule):
         self, transform_kwargs: dict
     ):
         if "source_h5ad_file_name" in transform_kwargs:
-            return [self.data_dir/(transform_kwargs["source_h5ad_file_name"] + '.h5ad')]
+            return [
+                self.data_dir / (transform_kwargs["source_h5ad_file_name"] + ".h5ad")
+            ]
         #
         # if self.data_dir is None:
         #     raise ValueError(
@@ -1131,8 +1142,8 @@ class scRNA2ChIPDataModule(DataModule):
         # ]
         # return self.DATASET_FACTORY.source_h5ad_file_names
         raise ValueError(
-                "You must set `transform_kwargs.source_h5ad_file_name` or use an already transformed data"
-            )
+            "You must set `transform_kwargs.source_h5ad_file_name` or use an already transformed data"
+        )
 
 
 class DNASeqDataModule(pl.LightningDataModule):
