@@ -36,7 +36,7 @@ dependencies = [
   "tensorboardX",
   "pandas>=2,<3",
   "einops",
-  "cellxgene_census[experimental]>1.13.0", #experimental required to use built-in iterable dataset
+  "cellxgene_census[experimental]>=1.13.0,<=1.17.0", #experimental required to use built-in iterable dataset; >=1.16.0 removed experimental.ml
   "tiledbsoma",
   "pysam",
   "litdata",
