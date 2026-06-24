@@ -10,6 +10,7 @@ import pytorch_lightning as pl
 import torch
 from scanpy import AnnData, read_h5ad
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from bmfm_targets.datasets.samplers import ConditionHomogeneousBatchSampler
 from transformers.tokenization_utils_base import PaddingStrategy, TruncationStrategy
 
 from bmfm_targets.config import FieldInfo, LabelColumnInfo
@@ -962,6 +963,8 @@ class scRNA2ChIPDataModule(DataModule):
         perturbation_column_name: str = "perturbation",
         limit_genes: Literal["protein_coding", "tokenizer", None] = "tokenizer",
         sequence_label_extractor: None | WCEDMasker = None,
+        use_ot_batching: bool = False,
+        celltype_column: str = "tissue_label",
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -993,6 +996,9 @@ class scRNA2ChIPDataModule(DataModule):
         )
 
         self.perturbation_column_name = perturbation_column_name
+        self.use_ot_batching = use_ot_batching
+        self.celltype_column = celltype_column
+        self.chip_populations: dict[str, torch.Tensor] = {}  # built in setup()
 
     def _prepare_dataset_kwargs(self):
         self.dataset_kwargs = super()._prepare_dataset_kwargs()
@@ -1040,6 +1046,74 @@ class scRNA2ChIPDataModule(DataModule):
         # this process should happen only once
         self.transform_datasets = False
         super().prepare_data()
+
+    def setup(self, stage=None):
+        super().setup(stage)
+        if self.use_ot_batching and (stage == "fit" or stage is None):
+            self._build_chip_populations()
+
+    def _build_chip_populations(self):
+        """Build celltype -> ChIP population tensor map, aligned to tokenizer vocab.
+
+        Each ChIP cell's gene values are scattered into a full-vocab-sized vector so
+        the population tensor [M, vocab_size] is in the same space as the WCED logits.
+        """
+        chip = self.train_dataset.chipseq_cells  # AnnData slice
+        col = self.celltype_column
+        gene_tokenizer = self.tokenizer.get_field_tokenizer("genes")
+        vocab_size = len(gene_tokenizer.vocab)
+
+        # Map chip gene names -> vocab ids (missing genes -> -1, will be skipped)
+        chip_genes = list(chip.var_names)
+        gene_ids = [
+            gene_tokenizer.convert_tokens_to_ids(g) if g in gene_tokenizer.vocab else -1
+            for g in chip_genes
+        ]
+        valid_mask = [i for i, gid in enumerate(gene_ids) if gid >= 0]
+        valid_vocab_ids = [gene_ids[i] for i in valid_mask]
+
+        for celltype, idx in chip.obs.groupby(col, observed=True).groups.items():
+            mat = chip[idx].X
+            if hasattr(mat, "toarray"):
+                mat = mat.toarray()
+            mat = mat[:, valid_mask]  # [M, n_valid_genes]
+            # scatter into vocab-sized tensor
+            pop = torch.zeros(len(idx), vocab_size, dtype=torch.float32)
+            pop[:, valid_vocab_ids] = torch.tensor(mat, dtype=torch.float32)
+            self.chip_populations[celltype] = pop
+
+        logger.info(
+            f"Built chip_populations for {len(self.chip_populations)} celltypes, "
+            f"aligned {len(valid_mask)}/{len(chip_genes)} genes to vocab (size {vocab_size})"
+        )
+
+    def train_dataloader(self):
+        if not self.use_ot_batching:
+            return super().train_dataloader()
+
+        obs_conditions = self.train_dataset.metadata[self.celltype_column].reset_index(drop=True)
+        batch_sampler = ConditionHomogeneousBatchSampler(
+            obs_conditions=obs_conditions,
+            batch_size=self.batch_size,
+        )
+        base_collate = self.collate_fn
+
+        def collate_with_chip(examples):
+            batch = base_collate(examples)
+            # all examples share one celltype (homogeneous batch)
+            celltype = examples[0].metadata.get(self.celltype_column, "unknown")
+            vocab_size = len(self.tokenizer.get_field_tokenizer("genes").vocab)
+            batch["chip_population"] = self.chip_populations.get(
+                celltype, torch.zeros(1, vocab_size)
+            )
+            return batch
+
+        return DataLoader(
+            self.train_dataset,
+            batch_sampler=batch_sampler,
+            collate_fn=collate_with_chip,
+            num_workers=self.num_workers,
+        )
 
     def _read_source_h5ad_file_names_from_transform_kwargs(
         self, transform_kwargs: dict
