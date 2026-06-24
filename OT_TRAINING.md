@@ -66,13 +66,17 @@ trainer:
     wced_weight: 0.0  # or just omit — wced_weight * 0 = 0
 ```
 
-**OT + WCED multitask** — currently requires `BaseRNAExpressionDataset`-style
-label dicts `{"all": tensor, "input": tensor, "non_input": tensor}`, which
-`BasescRNA2ChIPDataset` does not yet produce. Until that masking is wired into
-the scRNA2ChIP data pipeline, use OT-only (`losses: []`) and rely on the
-WCED decoder head being implicitly regularised by the OT signal.
+**OT + WCED multitask** (recommended — WCED reconstruction regularises the
+decoder while OT drives population-level translation):
 
-When the data pipeline is updated to produce WCED label dicts, wire it as:
+`WCEDMasker` is the key: it scatters per-gene expression values into the full
+tokenizer vocab space and splits them into `"input"` (genes that appear in the
+input sequence) and `"non_input"` / `"all"` subsets.  Pass it as
+`sequence_label_extractor` when constructing the DataModule; it is stored as
+`self.masker` and called by `MultiFieldCollator`, so every batch contains both
+`batch["labels"]["label_expressions"]["all"]` (shape `[B, vocab_size]`) and
+`batch["chip_population"]` (shape `[M, vocab_size]`).
+
 ```yaml
 trainer:
   losses:
@@ -85,6 +89,8 @@ trainer:
 ```
 
 Total loss = `wced_weight * wced_loss + ot_weight * sinkhorn_divergence`.
+Start with equal weights; increase `ot_weight` if the model memorises
+individual cells without population-level alignment.
 
 ## Wiring into a YAML config
 
@@ -110,6 +116,10 @@ data_module:
   use_ot_batching: true
   celltype_column: tissue_label   # obs column to group ChIP population by
   batch_size: 16
+  sequence_label_extractor:       # enables WCED label dict in every batch
+    _target_: bmfm_targets.training.masking.WCEDMasker
+    lookup_field_name: genes
+    value_field_name: label_expressions
   ...
 ```
 

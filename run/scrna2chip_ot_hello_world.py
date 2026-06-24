@@ -194,31 +194,81 @@ def main():
         print(f"OT-only training_step loss: {loss.item():.4f}")
         print("Hello world OT-only OK")
 
-        # --- test 2: OT + WCED multitask (wced_weight > 0, losses=[]) ---
-        # ScrnaToChipTranslationModule already scales calculate_losses() by wced_weight.
-        # When losses=[] (OT-only), wced_weight has no effect.  When losses contain a
-        # WCED task, BasescRNA2ChIPDataset must produce WCED-formatted label dicts
-        # {"all": tensor, "input": tensor, "non_input": tensor} — which requires
-        # BaseRNAExpressionDataset masking, not yet wired in this fork.
-        #
-        # What we CAN test: that wced_weight scales the base loss (even if it is 0.0
-        # when losses=[], the OT term is unaffected).  With losses=[] and
-        # wced_weight=0 vs wced_weight=1 the total loss is identical (0 * 0 == 1 * 0).
-        # So we verify that OT loss is the same regardless of wced_weight.
-        module_ww0 = ScrnaToChipTranslationModule(
+        # --- test 2: OT + WCED reconstruction simultaneously ---
+        # WCEDMasker produces labels["label_expressions"] = {"input": ..., "non_input":
+        # ..., "all": ...} tensors [B, vocab_size] by scattering gene expression values
+        # into the full vocab space and distinguishing input-sequence genes from the rest.
+        # Pass sequence_label_extractor=WCEDMasker(...) to the DataModule; it is stored
+        # as self.masker and called by MultiFieldCollator before collate_with_chip adds
+        # chip_population — so both fields are present in every batch.
+        from bmfm_targets.training.masking import WCEDMasker
+
+        wced_masker = WCEDMasker(
+            tokenizer=tokenizer,
+            lookup_field_name="genes",
+            value_field_name="label_expressions",
+        )
+
+        dm_mt = ConcatDataModule(
+            tokenizer=tokenizer,
+            fields=fields,
+            batch_size=8,
+            num_workers=0,
+            max_length=64,
+            collation_strategy="sequence_labeling",
+            dataset_kwargs={
+                "processed_data_source": str(h5ad_path),
+                "label_columns": ["tissue_label"],
+                "new_field": "label_expressions",
+            },
+            transform_datasets=False,
+            transform_kwargs={"split_column_name": "split_random"},
+            limit_genes=None,
+            use_ot_batching=True,
+            celltype_column="tissue_label",
+            sequence_label_extractor=wced_masker,
+        )
+        dm_mt.setup("fit")
+        batch_mt = next(iter(dm_mt.train_dataloader()))
+
+        assert (
+            "chip_population" in batch_mt
+        ), "chip_population missing from multitask batch"
+        labels_mt = batch_mt.get("labels", {})
+        assert (
+            "label_expressions" in labels_mt
+        ), "label_expressions missing from batch labels"
+        assert isinstance(
+            labels_mt["label_expressions"], dict
+        ), "WCED labels must be a dict with 'all'/'input'/'non_input' keys"
+        assert (
+            "all" in labels_mt["label_expressions"]
+        ), "'all' key missing from WCED labels"
+        print(f"WCED label shape (all): {labels_mt['label_expressions']['all'].shape}")
+
+        trainer_config_mt = TrainerConfig(
+            losses=[
+                {
+                    "field_name": "label_expressions",
+                    "name": "mse",
+                    "wced_target": "all_genes",
+                }
+            ],
+            learning_rate=1e-4,
+            enable_perturbation_metrics=False,
+        )
+        module_mt = ScrnaToChipTranslationModule(
             model_config,
-            TrainerConfig(
-                losses=[], learning_rate=1e-4, enable_perturbation_metrics=False
-            ),
+            trainer_config_mt,
             tokenizer=tokenizer,
             ot_weight=1.0,
-            wced_weight=0.0,
+            wced_weight=1.0,
         )
-        loss_ww0 = module_ww0.training_step(batch, 0)
-        assert loss_ww0 is not None, "wced_weight=0 loss is None"
-        assert loss_ww0.item() > 0.0, "wced_weight=0 OT loss must be positive"
-        print(f"OT loss (wced_weight=0): {loss_ww0.item():.4f}")
-        print("Hello world OT+WCED weight scaling OK")
+        loss_mt = module_mt.training_step(batch_mt, 0)
+        assert loss_mt is not None, "OT+WCED multitask loss is None"
+        assert loss_mt.item() > 0.0, "OT+WCED multitask loss must be positive"
+        print(f"OT+WCED multitask training_step loss: {loss_mt.item():.4f}")
+        print("Hello world OT+WCED multitask OK")
 
 
 if __name__ == "__main__":
