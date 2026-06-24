@@ -1,0 +1,12 @@
+defaults:
+ - default
+
+losses:
+  - field_name: label_expressions
+    name: mse
+    ignore_zero: true
+    link_function: exp
+  - field_name: label_expressions
+    name: is_zero_bce
+
+batch_prediction_behavior: "track"

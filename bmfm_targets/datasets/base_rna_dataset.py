@@ -133,7 +133,7 @@ class BaseRNAExpressionDataset(Dataset):
         sort_genes_var: str | None = None,
         expose_zeros: str | None = None,
         limit_genes: list[str] | None = None,
-        output_wrapper: Callable | None = None,
+        output_wrapper: Callable | None = None, **kwargs
     ) -> None:
         """
         Initializes the dataset.

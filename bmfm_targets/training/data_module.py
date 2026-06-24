@@ -16,6 +16,7 @@ from bmfm_targets.config import FieldInfo, LabelColumnInfo
 from bmfm_targets.datasets import DatasetTransformer, PerturbationDatasetTransformer
 from bmfm_targets.datasets.base_dna_dataset import BaseDNASeqDataset
 from bmfm_targets.datasets.base_perturbation_dataset import BasePerturbationDataset
+from bmfm_targets.datasets.base_scrna2chip_dataset import BasescRNA2ChIPDataset
 from bmfm_targets.datasets.base_rna_dataset import BaseRNAExpressionDataset
 from bmfm_targets.datasets.label_ontology import LabelOntology
 from bmfm_targets.tokenization import MultiFieldCollator, MultiFieldTokenizer
@@ -508,17 +509,20 @@ class DataModule(pl.LightningDataModule):
                 **self.dataset_kwargs,
                 split="train",
                 limit_samples=self._dataset_sample_limit("train"),
+                split_column_name=self.transform_kwargs.get("split_column_name", None) # TODO added
             )
             self.dev_dataset = self.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 limit_samples=self._dataset_sample_limit("dev"),
+                split_column_name=self.transform_kwargs.get("split_column_name", None) # TODO added
             )
         if stage == "validate" or stage is None:
             self.dev_dataset = self.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 limit_samples=self._dataset_sample_limit("dev"),
+                split_column_name=self.transform_kwargs.get("split_column_name", None) # TODO added
             )
         if stage == "test" or stage is None:
             self.test_dataset = self.DATASET_FACTORY(
@@ -922,6 +926,139 @@ class PerturbationDataModule(DataModule):
             self.data_dir / "h5ad" / source_h5ad_file_name
             for source_h5ad_file_name in self.DATASET_FACTORY.source_h5ad_file_names
         ]
+
+
+class scRNA2ChIPDataModule(DataModule):
+    DATASET_FACTORY: type[BasescRNA2ChIPDataset] = ...
+    DATASET_TRANSFORMER_FACTORY: type[DatasetTransformer] = ...
+
+    def __init__(
+        self,
+        tokenizer: MultiFieldTokenizer,
+        fields: list[FieldInfo],
+        data_dir: str | Path | None = None,
+        processed_name: str = "processed",
+        dataset_kwargs: dict[str, Any] | None = None,
+        label_columns: list[LabelColumnInfo] | None = None,
+        transform_kwargs: dict[str, Any] | None = None,
+        transform_datasets: bool = True,
+        batch_size: int = 32,
+        num_workers: int = 0,
+        max_length: int = 512,
+        padding: PaddingStrategy | str | bool = "max_length",
+        truncation: TruncationStrategy | bool = True,
+        pad_to_multiple_of: int = 16,
+        collation_strategy: Literal[
+            "language_modeling", "sequence_classification", "sequence_labeling"
+        ] = "sequence_labeling",
+        limit_dataset_samples: int | Mapping[str, int] | None = None,
+        shuffle: bool = False,
+        sequence_order: str | None = None,
+        sequence_dropout_factor: int | float | None = None,
+        log_normalize_transform: bool = False,
+        median_normalization: bool = False,
+        pad_zero_expression_strategy: str | None = None,
+        balancing_label_column: str | None = None,
+        perturbation_column_name: str = "perturbation",
+        limit_genes: Literal["protein_coding", "tokenizer", None] = "tokenizer",
+        sequence_label_extractor: None | WCEDMasker = None,
+    ):
+        super().__init__(
+            tokenizer=tokenizer,
+            fields=fields,
+            label_columns=label_columns,
+            data_dir=data_dir,
+            processed_name=processed_name,
+            dataset_kwargs=dataset_kwargs,
+            transform_kwargs=transform_kwargs,
+            transform_datasets=transform_datasets,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            max_length=max_length,
+            padding=padding,
+            truncation=truncation,
+            pad_to_multiple_of=pad_to_multiple_of,
+            collation_strategy=collation_strategy,
+            mlm=False,
+            limit_dataset_samples=limit_dataset_samples,
+            shuffle=shuffle,
+            sequence_order=sequence_order,
+            sequence_dropout_factor=sequence_dropout_factor,
+            log_normalize_transform=log_normalize_transform,
+            median_normalization=median_normalization,
+            pad_zero_expression_strategy=pad_zero_expression_strategy,
+            balancing_label_column=balancing_label_column,
+            limit_genes=limit_genes,
+            masking_strategy=sequence_label_extractor,
+        )
+
+        self.perturbation_column_name = perturbation_column_name
+
+    def _prepare_dataset_kwargs(self):
+        self.dataset_kwargs = super()._prepare_dataset_kwargs()
+        # unsupported_kwargs = {*self.dataset_kwargs.keys()} - {
+        #     *self.DATASET_FACTORY.__init__.__annotations__.keys()
+        # }
+        # self.dataset_kwargs = {
+        #     k: v for k, v in self.dataset_kwargs.items() if k not in unsupported_kwargs
+        # }
+        # logger.warning(f"Unsupported dataset kwargs removed: {unsupported_kwargs}")
+        self.dataset_kwargs["perturbation_column_name"] = self.perturbation_column_name
+        return self.dataset_kwargs
+
+    def prepare_data(self) -> None:
+        if not self.transform_datasets:
+            return
+        if self.transform_kwargs is None:
+            transform_kwargs = {}
+        else:
+            transform_kwargs = self.transform_kwargs
+        self.processed_data_file = self._read_processed_data_file_from_transform_kwargs(
+            transform_kwargs
+        )
+        source_h5ad_file_names = (
+            self._read_source_h5ad_file_names_from_transform_kwargs(transform_kwargs)
+        )
+
+        transformer = self.DATASET_TRANSFORMER_FACTORY(
+            source_h5ad_file_name=source_h5ad_file_names[0],
+            split_weights=transform_kwargs.get("split_weights", None),
+            transforms=transform_kwargs.get("transforms", None),
+            split_column_name=transform_kwargs.get("split_column_name", None),
+            stratifying_label=self.stratifying_label,
+            random_state=transform_kwargs.get("random_state", 42),
+            # tokenizer=self.tokenizer,
+            # source_h5ad_file_names=source_h5ad_file_names,
+        )
+        processed_data = transformer.process_datasets()
+
+        processed_data.uns.pop(
+            "rank_genes_groups", None
+        )  # This is huge and we dont use it later in the code
+        processed_data.write_h5ad(self.processed_data_file)
+
+        # this process should happen only once
+        self.transform_datasets = False
+        super().prepare_data()
+
+    def _read_source_h5ad_file_names_from_transform_kwargs(
+        self, transform_kwargs: dict
+    ):
+        if "source_h5ad_file_name" in transform_kwargs:
+            return [self.data_dir/(transform_kwargs["source_h5ad_file_name"] + '.h5ad')]
+        #
+        # if self.data_dir is None:
+        #     raise ValueError(
+        #         "You must set `data_dir` or for `transform_kwargs.source_h5ad_file_name`"
+        #     )
+        # return [
+        #     self.data_dir / "h5ad" / source_h5ad_file_name
+        #     for source_h5ad_file_name in self.DATASET_FACTORY.source_h5ad_file_names
+        # ]
+        # return self.DATASET_FACTORY.source_h5ad_file_names
+        raise ValueError(
+                "You must set `transform_kwargs.source_h5ad_file_name` or use an already transformed data"
+            )
 
 
 class DNASeqDataModule(pl.LightningDataModule):

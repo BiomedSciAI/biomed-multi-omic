@@ -1,0 +1,66 @@
+defaults:
+  - data_module: scrna2chip
+  - tokenizer: all_genes
+  - fields: scrna2chip_wced
+  - trainer: scrna2chip
+  - task: test
+  - model: scbert
+  - _self_
+
+seed:
+  seed_value: 1234
+
+model:
+  checkpoint: ${checkpoint}
+task:
+  checkpoint: ${checkpoint}
+
+data_module:
+  num_workers: 1
+  transform_kwargs:
+    split_column_name: tissue_split
+    transforms: []
+  dataset_kwargs:
+    new_field: label_expressions
+    processed_data_source: ${input_file}
+  transform_datasets: false
+
+  batch_size: 2 # 20
+  max_length: 1024 # 4096
+  limit_genes: protein_coding #could be null, protein_coding, or tokenizer
+
+
+  collation_strategy: multitask
+  sequence_label_extractor:
+    _target_: bmfm_targets.training.masking.strategy.WCEDMasker
+    _partial_: true
+    value_field_name: label_expressions
+    sample_transforms_kwargs:
+      log_normalize_transform: false
+      median_normalization: false
+
+trainer:
+  learning_rate: 1.0e-5
+  batch_prediction_behavior: "dump"  # "dump"
+  losses:
+    - field_name: label_expressions
+      name: mse
+      ignore_zero: true
+      link_function: exp
+      wced_target: all_genes
+#    - field_name: label_expressions
+#      name: is_zero_bce
+#      wced_target: all_genes
+
+label_columns: []
+
+#track_clearml:
+# project_name: bmfm
+# task_name: perturb-like-concat-test
+
+working_dir: /tmp
+accelerator: mps
+my_data_dir: null
+my_data_filename: null
+checkpoint: null
+input_file: null
