@@ -935,6 +935,29 @@ class PerturbationDataModule(DataModule):
         ]
 
 
+class _ChipCollator:
+    """
+    Picklable collate wrapper that appends the ChIP population tensor to each batch.
+
+    Must be a module-level class (not a local closure) so multiprocessing workers
+    can pickle it when num_workers > 0.
+    """
+
+    def __init__(self, base_collate, celltype_column, chip_populations, vocab_size):
+        self.base_collate = base_collate
+        self.celltype_column = celltype_column
+        self.chip_populations = chip_populations
+        self.vocab_size = vocab_size
+
+    def __call__(self, examples):
+        batch = self.base_collate(examples)
+        celltype = examples[0].metadata.get(self.celltype_column, "unknown")
+        batch["chip_population"] = self.chip_populations.get(
+            celltype, torch.zeros(1, self.vocab_size)
+        )
+        return batch
+
+
 class scRNA2ChIPDataModule(DataModule):
     DATASET_FACTORY: type[BasescRNA2ChIPDataset] = ...
     DATASET_TRANSFORMER_FACTORY: type[DatasetTransformer] = ...
@@ -1105,22 +1128,18 @@ class scRNA2ChIPDataModule(DataModule):
             obs_conditions=obs_conditions,
             batch_size=self.batch_size,
         )
-        base_collate = self.collate_fn
-
-        def collate_with_chip(examples):
-            batch = base_collate(examples)
-            # all examples share one celltype (homogeneous batch)
-            celltype = examples[0].metadata.get(self.celltype_column, "unknown")
-            vocab_size = len(self.tokenizer.get_field_tokenizer("genes").vocab)
-            batch["chip_population"] = self.chip_populations.get(
-                celltype, torch.zeros(1, vocab_size)
-            )
-            return batch
+        vocab_size = len(self.tokenizer.get_field_tokenizer("genes").vocab)
+        collate_fn = _ChipCollator(
+            base_collate=self.collate_fn,
+            celltype_column=self.celltype_column,
+            chip_populations=self.chip_populations,
+            vocab_size=vocab_size,
+        )
 
         return DataLoader(
             self.train_dataset,
             batch_sampler=batch_sampler,
-            collate_fn=collate_with_chip,
+            collate_fn=collate_fn,
             num_workers=self.num_workers,
         )
 
