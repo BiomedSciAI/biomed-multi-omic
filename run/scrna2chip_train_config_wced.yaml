@@ -25,6 +25,7 @@ data_module:
     transforms: []
   dataset_kwargs:
     new_field: label_expressions
+    split_column_name: tissue_split
 #    processed_data_source: ${input_file} # <---- relevant if inputting transformed data
   transform_datasets: true # <---- remove if data is transformed
 #  transform_datasets: false # <---- relevant if inputting transformed data

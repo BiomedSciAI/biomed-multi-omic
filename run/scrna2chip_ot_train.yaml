@@ -34,6 +34,7 @@ data_module:
     transforms: []
   dataset_kwargs:
     new_field: label_expressions
+    split_column_name: tissue_split
   transform_datasets: true
   log_normalize_transform: true
 

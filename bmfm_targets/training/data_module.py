@@ -510,26 +510,17 @@ class DataModule(pl.LightningDataModule):
                 **self.dataset_kwargs,
                 split="train",
                 limit_samples=self._dataset_sample_limit("train"),
-                split_column_name=self.transform_kwargs.get(
-                    "split_column_name", None
-                ),  # TODO added
             )
             self.dev_dataset = self.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 limit_samples=self._dataset_sample_limit("dev"),
-                split_column_name=self.transform_kwargs.get(
-                    "split_column_name", None
-                ),  # TODO added
             )
         if stage == "validate" or stage is None:
             self.dev_dataset = self.DATASET_FACTORY(
                 **self.dataset_kwargs,
                 split="dev",
                 limit_samples=self._dataset_sample_limit("dev"),
-                split_column_name=self.transform_kwargs.get(
-                    "split_column_name", None
-                ),  # TODO added
             )
         if stage == "test" or stage is None:
             self.test_dataset = self.DATASET_FACTORY(
