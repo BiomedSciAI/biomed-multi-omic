@@ -226,8 +226,10 @@ class SCBertMainConfig:
                 )
             return ckpt_cols
 
-        # Training: YAML-authoritative
-        return yaml_cols if yaml_cols else ckpt_cols
+        # Training: YAML-authoritative. Use `is not None` so an explicit empty list
+        # (label_columns: []) is respected as "no labels" rather than falling back
+        # to the checkpoint's label columns.
+        return yaml_cols if yaml_cols is not None else ckpt_cols
 
     def _merge_configs_from_checkpoint(self) -> None:
         """Merge configs from checkpoint with YAML configs based on task type."""
