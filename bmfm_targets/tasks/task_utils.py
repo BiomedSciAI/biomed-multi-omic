@@ -34,6 +34,7 @@ from bmfm_targets.training.modules import (
     SequenceLabelingTrainingModule,
 )
 from bmfm_targets.training.modules.base import BaseTrainingModule
+from bmfm_targets.training.modules.scrna_to_chip import ScrnaToChipTranslationModule
 
 TaskInstance = TypeVar("TaskInstance", bound="Task")
 
@@ -95,7 +96,9 @@ def train_run(pl_trainer, task_config, model_config, data_module, trainer_config
             model_config.checkpoint = download_ckpt_from_huggingface(
                 model_config.checkpoint
             )
-    if trainer_config.enable_perturbation_metrics:
+    if trainer_config.enable_ot_translation:
+        pl_factory = ScrnaToChipTranslationModule
+    elif trainer_config.enable_perturbation_metrics:
         pl_factory = SequenceLabelingTrainingModule
     else:
         pl_factory = MultiTaskTrainingModule
@@ -107,6 +110,14 @@ def train_run(pl_trainer, task_config, model_config, data_module, trainer_config
     extra_kwargs = prepare_extra_training_module_kwargs(data_module)
     if data_module.label_dict is not None:
         extra_kwargs["label_dict"] = data_module.label_dict
+    if trainer_config.enable_ot_translation:
+        extra_kwargs.update(
+            ot_weight=trainer_config.ot_weight,
+            wced_weight=trainer_config.wced_weight,
+            ot_eps=trainer_config.ot_eps,
+            ot_n_iters=trainer_config.ot_n_iters,
+            cost=trainer_config.ot_cost,
+        )
     pl_module = pl_factory(model_config, trainer_config, **extra_kwargs)
     train(
         pl_trainer,
@@ -328,7 +339,9 @@ def instantiate_module_from_checkpoint(
 
     extra_kwargs["trainer_config"] = merged_trainer_config
     extra_kwargs["config_is_loaded_from_ckpt"] = True
-    if merged_trainer_config.enable_perturbation_metrics:
+    if merged_trainer_config.enable_ot_translation:
+        pl_factory = ScrnaToChipTranslationModule
+    elif merged_trainer_config.enable_perturbation_metrics:
         pl_factory = SequenceLabelingTrainingModule
     else:
         pl_factory = MultiTaskTrainingModule
