@@ -7,8 +7,8 @@ Uses bmfm-targets tokenizer and data module.
 
 
 import torch
-from bmfm_targets.training.data_module import DataModule
 
+from bmfm_targets.training.data_module import DataModule
 from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, get_fields
 
 

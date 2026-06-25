@@ -5,7 +5,6 @@ import os
 import pytest
 import torch
 from transformers import AutoConfig
-
 from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL
 
 

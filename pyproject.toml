@@ -24,7 +24,7 @@ dependencies = [
   "scanpy",
   "numpy",
   "scipy",
-  "torch",
+  "torch>=2.0.0",
   "rdata",
   "pytorch-lightning>=2.0.0",
   "transformers>=4.54.0,<5.0.0",
@@ -36,7 +36,7 @@ dependencies = [
   "tensorboardX",
   "pandas>=2,<3",
   "einops",
-  "cellxgene_census[experimental]>1.13.0", #experimental required to use built-in iterable dataset
+  "cellxgene_census[experimental]>=1.13.0,<=1.17.0", #experimental required to use built-in iterable dataset; =1.18 caused upstream clash of tiledb on python 3.12
   "tiledbsoma",
   "pysam",
   "litdata",
@@ -68,6 +68,9 @@ baselines=[
   "cz-benchmarks",
 ]
 notebook = ["cellxgene-ontology-guide", "jupyter", "swatch"]
+vllm = [
+  "vllm>=0.23.0",
+]
 
 [project.urls]
 repository = "https://github.com/BiomedSciAI/biomed-multi-omic/"
@@ -75,8 +78,17 @@ repository = "https://github.com/BiomedSciAI/biomed-multi-omic/"
 [project.scripts]
 bmfm-targets-run = "bmfm_targets.tasks.scbert.scbert_main:main"
 
-[tool.setuptools.packages]
-find = {}
+# vLLM plugin entry points for biomed-rna model
+[project.entry-points."vllm.general_plugins"]
+biomed_rna_model = "vllm_biomed_rna_plugin:register_biomed_rna_model"
+
+# IO processor plugin for custom /pooling endpoint
+[project.entry-points."vllm.io_processor_plugins"]
+biomed_rna = "vllm_biomed_rna_plugin.io_processor:register_vllm_biomed_rna_plugin"
+
+[tool.setuptools.packages.find]
+where = [".", "vllm"]
+include = ["bmfm_targets*", "vllm_biomed_rna_plugin*", "run*"]
 
 [tool.setuptools.package-data]
 bmfm_targets = ["py.typed"]

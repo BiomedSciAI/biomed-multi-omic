@@ -5,7 +5,7 @@ from bmfm_targets.config import FieldInfo, SCBertConfig
 from bmfm_targets.models.predictive import layers
 
 
-@pytest.mark.parametrize("n_sin_basis", [5, 10, 50])
+@pytest.mark.parametrize("n_sin_basis", [5, 10, 20])
 @pytest.mark.parametrize(
     ("sigmoid_centers", "sigmoid_orientations"),
     [
