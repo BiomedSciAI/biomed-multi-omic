@@ -241,24 +241,19 @@ class TrainerConfig:
     batch_prediction_behavior: str | int | None = None
     lora_config: Any = None
     enable_perturbation_metrics: bool = False
-    enable_ot_translation: bool = False
-    ot_weight: float = 1.0
-    wced_weight: float = 1.0
-    ot_eps: float = 1.0
-    ot_n_iters: int = 100
-    ot_cost: str = "euclidean"
 
     def __setstate__(self, state):
         # Handle removed fields from old checkpoints
         state.pop("metrics", None)
         state.pop("batch_size", None)
+        # Drop fields removed in Unit C (were part of the bespoke OT module path).
+        state.pop("enable_ot_translation", None)
+        state.pop("ot_weight", None)
+        state.pop("wced_weight", None)
+        state.pop("ot_eps", None)
+        state.pop("ot_n_iters", None)
+        state.pop("ot_cost", None)
         state.setdefault("enable_perturbation_metrics", False)
-        state.setdefault("enable_ot_translation", False)
-        state.setdefault("ot_weight", 1.0)
-        state.setdefault("wced_weight", 1.0)
-        state.setdefault("ot_eps", 1.0)
-        state.setdefault("ot_n_iters", 100)
-        state.setdefault("ot_cost", "euclidean")
         self.__dict__.update(state)
 
     def get_lora_config(self) -> LoraConfigWrapper:

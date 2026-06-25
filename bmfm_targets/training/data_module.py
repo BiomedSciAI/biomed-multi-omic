@@ -941,6 +941,10 @@ class _ChipCollator:
 
     Must be a module-level class (not a local closure) so multiprocessing workers
     can pickle it when num_workers > 0.
+
+    The population tensor is placed at both ``batch["chip_population"]`` (backward
+    compatibility) and ``batch["labels"]["chip_population"]`` (required so the
+    composed loss system, which only receives ``batch["labels"]``, can access it).
     """
 
     def __init__(self, base_collate, celltype_column, chip_populations, vocab_size):
@@ -952,9 +956,21 @@ class _ChipCollator:
     def __call__(self, examples):
         batch = self.base_collate(examples)
         celltype = examples[0].metadata.get(self.celltype_column, "unknown")
-        batch["chip_population"] = self.chip_populations.get(
-            celltype, torch.zeros(1, self.vocab_size)
-        )
+        if celltype in self.chip_populations:
+            population = self.chip_populations[celltype]
+        else:
+            logger.warning(
+                f"Celltype {celltype!r} not found in chip_populations; "
+                "using a zero-filled fallback tensor. "
+                "Check that the celltype column and dataset are aligned."
+            )
+            population = torch.zeros(1, self.vocab_size)
+        # Top-level key for backward compatibility.
+        batch["chip_population"] = population
+        # Under labels so that composed loss tasks can read it via LabelSource.
+        if "labels" not in batch:
+            batch["labels"] = {}
+        batch["labels"]["chip_population"] = population
         return batch
 
 
@@ -1078,8 +1094,9 @@ class scRNA2ChIPDataModule(DataModule):
 
     def setup(self, stage=None):
         super().setup(stage)
-        if self.use_ot_batching and (stage == "fit" or stage is None):
-            self._build_chip_populations()
+        if self.use_ot_batching and (stage in ("fit", "validate") or stage is None):
+            if not self.chip_populations:
+                self._build_chip_populations()
 
     def _build_chip_populations(self):
         """
@@ -1138,6 +1155,46 @@ class scRNA2ChIPDataModule(DataModule):
 
         return DataLoader(
             self.train_dataset,
+            batch_sampler=batch_sampler,
+            collate_fn=collate_fn,
+            num_workers=self.num_workers,
+        )
+
+    def val_dataloader(self):
+        """
+        Returns a DataLoader for validation.
+
+        When ``use_ot_batching`` is True, mirrors the training loader: batches are
+        cell-type homogeneous (via ``ConditionHomogeneousBatchSampler``) and the
+        ``_ChipCollator`` injects ``batch["labels"]["chip_population"]`` so the
+        composed OT loss can access the reference population during validation.
+
+        When ``use_ot_batching`` is False, delegates to the base implementation.
+
+        Returns
+        -------
+            DataLoader: DataLoader for validation.
+        """
+        if not self.use_ot_batching:
+            return super().val_dataloader()
+
+        obs_conditions = self.dev_dataset.metadata[self.celltype_column].reset_index(
+            drop=True
+        )
+        batch_sampler = ConditionHomogeneousBatchSampler(
+            obs_conditions=obs_conditions,
+            batch_size=self.batch_size,
+        )
+        vocab_size = len(self.tokenizer.get_field_tokenizer("genes").vocab)
+        collate_fn = _ChipCollator(
+            base_collate=self.val_collate_fn(),
+            celltype_column=self.celltype_column,
+            chip_populations=self.chip_populations,
+            vocab_size=vocab_size,
+        )
+
+        return DataLoader(
+            self.dev_dataset,
             batch_sampler=batch_sampler,
             collate_fn=collate_fn,
             num_workers=self.num_workers,

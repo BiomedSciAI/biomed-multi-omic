@@ -294,6 +294,123 @@ class WCEDFieldSource(FieldSource):
         return self.wced_target
 
 
+class WCEDPopulationSource(WCEDFieldSource):
+    """
+    DataSource for population-level optimal-transport losses over WCED outputs.
+
+    Extends ``WCEDFieldSource`` to support cases where the label is not a
+    per-cell tensor aligned with the batch but rather a reference population
+    ``[M, V]`` stored under a dedicated key in the batch labels dict.
+
+    Key differences from ``WCEDFieldSource``:
+
+    - ``wced_output`` selects which WCED logit channel to extract (e.g. ``"mse"``),
+      identified independently of the loss objective name.
+    - ``extract_labels`` returns ``labels[population_key]`` (shape ``[M, V]``)
+      instead of indexing into ``labels[field_name][label_set]``.
+    - ``concat_batch_tensors`` is overridden to use the population key.
+    """
+
+    def __init__(
+        self,
+        field_name: str,
+        wced_target: str,
+        population_key: str = "chip_population",
+        wced_output: str = "mse",
+    ):
+        """
+        Initialize WCEDPopulationSource.
+
+        Args:
+        ----
+            field_name: Name of the WCED field (e.g. ``"label_expressions"``).
+            wced_target: WCED target label set (e.g. ``"all_genes"``).
+            population_key: Key in ``batch["labels"]`` holding the reference
+                population tensor of shape ``[M, V]`` (default: ``"chip_population"``).
+            wced_output: Which WCED logit channel to extract before taking
+                token 0.  Must match a name in the field's
+                ``decode_modes["wced"]["logit_outputs"]`` (default: ``"mse"``).
+
+        """
+        super().__init__(field_name, wced_target)
+        self.population_key = population_key
+        self.wced_output = wced_output
+
+    def resolve_schema(
+        self,
+        fields: list[FieldInfo],
+        labels: list[LabelColumnInfo],
+        tokenizer: MultiFieldTokenizer | None = None,
+        decoder_suffix: str | None = None,
+        objective_name: str | None = None,
+    ) -> None:
+        """
+        Resolve field info and set ``decoder_output_index`` from ``wced_output``.
+
+        Unlike ``WCEDFieldSource``, the output index is derived from
+        ``self.wced_output`` rather than the objective name so that a
+        ``population_ot`` objective can still extract the MSE channel.
+        ``label_set`` is not used by this source and is left as ``None``.
+
+        Args:
+        ----
+            fields: List of FieldInfo from model config.
+            labels: List of LabelColumnInfo (unused here).
+            tokenizer: Optional tokenizer.
+            decoder_suffix: Ignored (WCED has fixed decoder key).
+            objective_name: Ignored (channel chosen by ``wced_output`` instead).
+
+        """
+        # Use FieldSource.resolve_schema directly to find the field without the
+        # WCEDFieldSource side-effects (label_set derivation, objective-based index).
+        FieldSource.resolve_schema(
+            self, fields, labels, tokenizer, decoder_suffix=None, objective_name=None
+        )
+        # Set decoder_output_index from the explicit wced_output channel name.
+        from .task import lookup_wced_output_index
+
+        self.decoder_output_index = lookup_wced_output_index(
+            self.wced_output, self.field
+        )
+
+    def extract_labels(self, labels: dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Return the reference population tensor ``[M, V]`` from ``labels``.
+
+        Args:
+        ----
+            labels: Batch labels dict containing ``population_key``.
+
+        Returns:
+        -------
+            torch.Tensor: Shape ``[M, V]`` reference population.
+
+        """
+        return labels[self.population_key]
+
+    def concat_batch_tensors(
+        self, batch: dict, outputs, predictions: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Concatenate batch tensors for OT tracking.
+
+        OT is a batch-level loss without per-sample alignment; this method
+        returns the predicted cloud as-is.
+
+        Args:
+        ----
+            batch: Batch dict (unused — population labels have different shape).
+            outputs: Model outputs (unused).
+            predictions: Predicted expression cloud ``[B, V]``.
+
+        Returns:
+        -------
+            torch.Tensor: Predictions unchanged.
+
+        """
+        return predictions
+
+
 class LabelSource(DataSource):
     """
     DataSource for label-based losses (e.g., cell type classification).
