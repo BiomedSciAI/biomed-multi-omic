@@ -246,13 +246,6 @@ class TrainerConfig:
         # Handle removed fields from old checkpoints
         state.pop("metrics", None)
         state.pop("batch_size", None)
-        # Drop fields removed in Unit C (were part of the bespoke OT module path).
-        state.pop("enable_ot_translation", None)
-        state.pop("ot_weight", None)
-        state.pop("wced_weight", None)
-        state.pop("ot_eps", None)
-        state.pop("ot_n_iters", None)
-        state.pop("ot_cost", None)
         state.setdefault("enable_perturbation_metrics", False)
         self.__dict__.update(state)
 

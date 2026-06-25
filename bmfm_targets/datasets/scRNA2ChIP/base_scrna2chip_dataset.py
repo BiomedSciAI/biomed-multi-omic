@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 
 try:
@@ -14,7 +16,12 @@ from bmfm_targets.tokenization import MultiFieldInstance
 
 class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        # Forward only kwargs that BaseRNAExpressionDataset accepts. scRNA2ChIP-specific
+        # kwargs (new_field) and unused extras (perturbation_column_name) are filtered
+        # out here so the upstream base dataset doesn't need a **kwargs catch-all.
+        super_params = inspect.signature(BaseRNAExpressionDataset.__init__).parameters
+        super_kwargs = {k: v for k, v in kwargs.items() if k in super_params}
+        super().__init__(*args, **super_kwargs)
         self.new_field = kwargs["new_field"]
         self.chipseq_cells = self.processed_data[
             self.processed_data.obs.query("data_type == 'ChIP'").index

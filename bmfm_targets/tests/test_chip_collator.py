@@ -12,12 +12,12 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from bmfm_targets.tokenization import MultiFieldInstance
-from bmfm_targets.training.data_module import (
-    DataModule,
+from bmfm_targets.datasets.scRNA2ChIP.scrna2chip_data_module import (
     _ChipCollator,
     scRNA2ChIPDataModule,
 )
+from bmfm_targets.tokenization import MultiFieldInstance
+from bmfm_targets.training.data_module import DataModule
 
 # ---------------------------------------------------------------------------
 # Constants / helpers
