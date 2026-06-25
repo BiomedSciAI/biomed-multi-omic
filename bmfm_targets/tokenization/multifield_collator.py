@@ -360,7 +360,14 @@ class MultiFieldCollator:
         special_tokens_mask = batch[self.input_field_names[0]][
             "special_tokens_mask"
         ].bool()
-        labels = {field: batch[field]["input_ids"] for field in self.label_field_names}
+        # Only include label fields that were actually tokenized into the batch.
+        # Label fields can be absent (e.g. inference without paired labels), in
+        # which case they must be skipped rather than raising a KeyError.
+        labels = {
+            field: batch[field]["input_ids"]
+            for field in self.label_field_names
+            if field in batch
+        }
         for field_labels in labels.values():
             field_labels[special_tokens_mask] = -100
         return labels

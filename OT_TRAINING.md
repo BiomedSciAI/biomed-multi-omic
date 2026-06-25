@@ -28,11 +28,17 @@ alongside any WCED reconstruction loss. There is no bespoke training module or
    (extracts the predicted `[B, V]` cloud from the WCED decode token and the
    `[M, V]` reference population from `labels["chip_population"]`) with a
    `PopulationOTObjective` (debiased Sinkhorn divergence). With a WCED `mse`
-   loss entry too, the total is just the weighted sum of the two loss tasks:
+   loss entry too, the total is the weighted mean of the two loss tasks:
    ```
-   loss = weight_mse * mse_reconstruction
-        + weight_ot  * SinkhornDivergence(pred [B, V], chip_population [M, V])
+   loss = (  weight_mse * mse_reconstruction
+           + weight_ot  * SinkhornDivergence(pred [B, V], chip_population [M, V])
+          ) / (weight_mse + weight_ot)
    ```
+   Note: `calculate_losses` combines the entries as a **weighted mean** (it
+   divides by the sum of weights), not a raw weighted sum — so with the default
+   equal weights the total is `(mse + ot) / 2`. When a loss is skipped on a step
+   (e.g. OT returns `None` because `B < 2` or `M < 2`), its weight drops out of
+   the denominator for that step.
    Both clouds live in the same gene space (gene-aligned by the dataset).
    `SD(X,Y) = OT(X,Y) − ½OT(X,X) − ½OT(Y,Y)`; `OT(Y,Y)` is cached per target
    population (device-stable content key) since it is constant across steps.
@@ -107,7 +113,8 @@ trainer:
       weight: 1.0
 ```
 
-Total loss = `weight_mse * mse + weight_ot * sinkhorn_divergence`.
+Total loss = `(weight_mse * mse + weight_ot * sinkhorn_divergence) / (weight_mse + weight_ot)`
+(a weighted mean — see the note above).
 Start with equal weights; increase the `population_ot` `weight:` if the model
 memorises individual cells without population-level alignment.
 
@@ -169,7 +176,7 @@ preprocessing's responsibility — do not rely on a link function to fix it.
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| `weight` | 1.0 | Relative weight of the OT term in the summed loss |
+| `weight` | 1.0 | Relative weight of the OT term in the weighted-mean loss |
 | `eps` | 1.0 | Sinkhorn entropic regularisation |
 | `n_iters` | 100 | Sinkhorn iterations |
 | `cost` | `"euclidean"` | `"euclidean"` or `"sqeuclidean"` |

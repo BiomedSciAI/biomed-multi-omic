@@ -1,4 +1,4 @@
-"""Samplers for condition-homogeneous mini-batching (CMonge port)."""
+"""Samplers for condition-homogeneous mini-batching."""
 
 import random
 from collections import defaultdict
@@ -9,31 +9,34 @@ from torch.utils.data import Sampler
 
 class ConditionHomogeneousBatchSampler(Sampler):
     """
-    Yields batches of perturbed-cell indices where every index in a batch
-    shares the same perturbation condition.
+    Yields batches of dataset indices where every index in a batch shares the
+    same condition label (e.g. celltype/tissue).
 
-    At each epoch step one condition is sampled uniformly at random; then
-    batch_size indices are drawn *with replacement* from that condition's
-    index pool.  This makes every batch condition-homogeneous so that the
-    within-batch population comparison needed by CMonge is valid.
+    At each step one condition is sampled uniformly at random; then
+    ``batch_size`` indices are drawn *with replacement* from that condition's
+    index pool. Drawing homogeneous batches is required so the within-batch
+    population can be compared against the reference population for that
+    condition (e.g. the population-level OT loss).
 
-    Controls are paired inside BasePerturbationDataset.__getitem__, so we
-    only track perturbed-cell indices here.
+    Because sampling is with replacement against a fixed ``num_batches``, an
+    epoch is an approximate (not exhaustive) pass over the data; indices may be
+    repeated and some may be skipped.
 
     Parameters
     ----------
     obs_conditions : pd.Series
-        A pandas Series of length == len(perturbed cells) whose values are
-        the condition label for each perturbed cell.  Typically obtained as
-        ``dataset.perturbation_cells.obs[dataset.perturbation_column_name]``.
+        A pandas Series of length ``len(dataset)`` whose values are the
+        condition label for each sample (e.g. the ``celltype_column`` of the
+        dataset metadata).
     batch_size : int
-        Number of indices per yielded batch (all same condition).
+        Number of indices per yielded batch (all the same condition).
     num_batches : int | None
-        Number of batches per epoch.  Defaults to
+        Number of batches per epoch. Defaults to
         ``len(unique_conditions) * ceil(max_cells_per_condition / batch_size)``
-        — approximately one pass through every cell.
+        — approximately one pass through every sample.
     seed : int | None
-        Random seed for reproducibility.
+        Random seed for reproducibility. ``None`` (the default) means each
+        epoch draws a fresh random sequence.
     """
 
     def __init__(
