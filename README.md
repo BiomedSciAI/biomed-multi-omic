@@ -36,11 +36,12 @@ In addition to the base package there are additional optional dependencies which
 - `bulk_rna`: Extends modules for extracting and preprocessing bulk RNA-seq data
 - `benchmarking`: Installs additional models used benchmark `bmfm-multi-omics` against. These include scib, scib-metrics, pyliger, scanorama and harmony-pytorch.
 - `test`: Unittest suite which is recommended for development use
+- `vllm`: High-performance inference plugin for biomed-rna models using vLLM
 
 To install optional dependencies from this GitHub repository you can run from package root:
 
 ```sh
-uv pip install ".[bulk_rna,benchmarking,test,notebook]"
+uv pip install ".[bulk_rna,benchmarking,test,notebook,vllm]"
 ```
 
 ## `bmfm-rna` checkpoints
@@ -72,6 +73,16 @@ For more details tutorial see RNA tutorials. Note to use the notebook you will n
 
 - To run inference programmatically, you can see a zero-shot example in this [scRNA zero-shot notebook](tutorials/RNA/1_zero_shot_using_yaml.ipynb).
 - To inspect the resulting embeddings and cell-type predictions use this [scRNA inspect embeddings notebook](tutorials/RNA/2_inference_inspection.ipynb).
+
+### High-Performance Inference with vLLM
+
+For production-scale inference, the package includes a vLLM plugin that enables high-throughput, low-latency inference for biomed-rna models. Install with:
+
+```bash
+uv pip install -e ".[vllm]"
+```
+
+The plugin currently supports the biomed-rna LLaMA models. See [vllm/README.md](vllm/README.md) for detailed usage instructions.
 
 ## `bmfm-dna` checkpoints
 

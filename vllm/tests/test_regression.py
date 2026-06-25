@@ -8,6 +8,7 @@ import anndata
 import numpy as np
 import pytest
 import torch
+
 from bmfm_targets.inference import inference
 
 H5AD_PATH = (

@@ -1,14 +1,16 @@
 # vLLM BiomedRNA Model Plugin
 
-Running Inference at scale for BiomedRNA models via VLLM plugin.
+Running Inference at scale for BiomedRNA models via vLLM plugin.
 
 ## Installation
 
-add biomed-rna-vllm-plugin to your bmfm-multi-omic env:
+Install biomed-multi-omic with vLLM support:
 
+```bash
+uv pip install -e ".[vllm]"
 ```
-uv pip install -e .
-```
+
+This installs the base package plus the vLLM plugin with all required dependencies.
 
 ## Supported Models
 

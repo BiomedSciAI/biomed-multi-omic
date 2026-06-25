@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import torch
+
 from vllm.config import VllmConfig
 from vllm.inputs import PromptType
 from vllm.outputs import PoolingOutput, PoolingRequestOutput
@@ -184,7 +185,7 @@ class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
 
 
 # Entry point for vLLM plugin system
-def register_biomed_rna_plugin():
+def register_vllm_biomed_rna_plugin():
     """
     Factory function for vLLM plugin system.
 
