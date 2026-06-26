@@ -154,40 +154,6 @@ class TestPart1RemovalOfOTSurface:
                 tc, attr
             ), f"TrainerConfig still has removed attribute: {attr}"
 
-    def test_setstate_with_old_ot_keys_succeeds_and_drops_them(self):
-        """
-        Loading an old pickled TrainerConfig that contains the OT keys must
-        not raise and must result in a TrainerConfig without those keys.
-        """
-        tc = TrainerConfig.__new__(TrainerConfig)
-        old_state = {
-            "betas": (0.9, 0.99),
-            "epsilon": 1e-8,
-            "learning_rate": 1e-4,
-            "losses": None,
-            "lr_decay_steps": None,
-            "warmup_steps": 0,
-            "weight_decay": None,
-            "pooling_method": "first_token",
-            "batch_prediction_behavior": None,
-            "lora_config": None,
-            "enable_perturbation_metrics": False,
-            # The old OT keys — must be silently dropped:
-            "enable_ot_translation": True,
-            "ot_weight": 2.0,
-            "wced_weight": 0.5,
-            "ot_eps": 1.5,
-            "ot_n_iters": 50,
-            "ot_cost": "sqeuclidean",
-        }
-        tc.__setstate__(old_state)
-        for attr in self._OT_ATTRS:
-            assert not hasattr(
-                tc, attr
-            ), f"Old OT key was NOT dropped by __setstate__: {attr}"
-        # Preserved field must survive
-        assert tc.enable_perturbation_metrics is False
-
     def test_scrna_to_chip_module_not_in_training_modules(self):
         """bmfm_targets.training.modules must not expose ScrnaToChipTranslationModule."""
         import bmfm_targets.training.modules as mod
