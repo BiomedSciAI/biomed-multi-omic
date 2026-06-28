@@ -32,7 +32,7 @@ dependencies = [
   "hydra-core",
   "clearml>1.13,<2",
   "rich",
-  "torchmetrics==1.1.0",
+  "torchmetrics",
   "tensorboardX",
   "pandas>=2,<3",
   "einops",
