@@ -930,17 +930,35 @@ class BaseTrainingModule(pl.LightningModule):
                 split, label_metric_key
             )
 
+    # def get_supported_field_metric_keys(
+    #     self, limit_to_continuous_value_encoder=False
+    # ) -> set[str]:
+    #     is_supported_filter = (
+    #         lambda lt: isinstance(lt.source, FieldSource)
+    #         and "expressions" in lt.source.name
+    #     )
+    #     if limit_to_continuous_value_encoder:
+    #         filter_func = (
+    #             lambda lt: is_supported_filter(lt)
+    #             and lt.field.tokenization_strategy == "continuous_value_encoder"
+    #         )
+    #     else:
+    #         filter_func = is_supported_filter
+    #     return {lt.metric_key for lt in filter(filter_func, self.loss_tasks)}
+
     def get_supported_field_metric_keys(
-        self, limit_to_continuous_value_encoder=False
+            self, limit_to_continuous_value_encoder=False
     ) -> set[str]:
         is_supported_filter = (
             lambda lt: isinstance(lt.source, FieldSource)
-            and "expressions" in lt.source.name
+                       and "expressions" in lt.source.name
+                       and lt.objective.contributes_sample_metrics
+        # <-- Add this check
         )
         if limit_to_continuous_value_encoder:
             filter_func = (
                 lambda lt: is_supported_filter(lt)
-                and lt.field.tokenization_strategy == "continuous_value_encoder"
+                           and lt.field.tokenization_strategy == "continuous_value_encoder"
             )
         else:
             filter_func = is_supported_filter

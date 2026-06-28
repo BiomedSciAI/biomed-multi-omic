@@ -174,37 +174,83 @@ class scRNA2ChIPDataModule(DataModule):
             if not self.chip_populations:
                 self._build_chip_populations()
 
+    # def _build_chip_populations(self):
+    #     """
+    #     Build celltype -> ChIP population tensor map, aligned to tokenizer vocab.
+    #
+    #     Each ChIP cell's gene values are scattered into a full-vocab-sized vector so
+    #     the population tensor [M, vocab_size] is in the same space as the WCED logits.
+    #     """
+    #     chip = self.train_dataset.chipseq_cells  # AnnData slice
+    #     col = self.celltype_column
+    #     gene_tokenizer = self.tokenizer.get_field_tokenizer("genes")
+    #     vocab_size = len(gene_tokenizer.vocab)
+    #
+    #     # Map chip gene names -> vocab ids (missing genes -> -1, will be skipped)
+    #     chip_genes = list(chip.var_names)
+    #     gene_ids = [
+    #         gene_tokenizer.convert_tokens_to_ids(g) if g in gene_tokenizer.vocab else -1
+    #         for g in chip_genes
+    #     ]
+    #     valid_mask = [i for i, gid in enumerate(gene_ids) if gid >= 0]
+    #     valid_vocab_ids = [gene_ids[i] for i in valid_mask]
+    #
+    #     for celltype, idx in chip.obs.groupby(col, observed=True).groups.items():
+    #         mat = chip[idx].X
+    #         if hasattr(mat, "toarray"):
+    #             mat = mat.toarray()
+    #         mat = mat[:, valid_mask]  # [M, n_valid_genes]
+    #         # scatter into vocab-sized tensor
+    #         pop = torch.zeros(len(idx), vocab_size, dtype=torch.float32)
+    #         pop[:, valid_vocab_ids] = torch.tensor(mat, dtype=torch.float32)
+    #         self.chip_populations[celltype] = pop
+    #
+    #     logger.info(
+    #         f"Built chip_populations for {len(self.chip_populations)} celltypes, "
+    #         f"aligned {len(valid_mask)}/{len(chip_genes)} genes to vocab (size {vocab_size})"
+    #     )
+
     def _build_chip_populations(self):
         """
         Build celltype -> ChIP population tensor map, aligned to tokenizer vocab.
-
-        Each ChIP cell's gene values are scattered into a full-vocab-sized vector so
-        the population tensor [M, vocab_size] is in the same space as the WCED logits.
         """
-        chip = self.train_dataset.chipseq_cells  # AnnData slice
+        # 1. Collect all loaded datasets
+        chip_datasets = []
+        if getattr(self, "train_dataset", None) is not None:
+            chip_datasets.append(self.train_dataset.chipseq_cells)
+        if getattr(self, "dev_dataset", None) is not None:
+            chip_datasets.append(self.dev_dataset.chipseq_cells)
+        if getattr(self, "test_dataset", None) is not None:
+            chip_datasets.append(self.test_dataset.chipseq_cells)
+
+        if not chip_datasets:
+            return
+
         col = self.celltype_column
         gene_tokenizer = self.tokenizer.get_field_tokenizer("genes")
         vocab_size = len(gene_tokenizer.vocab)
 
-        # Map chip gene names -> vocab ids (missing genes -> -1, will be skipped)
-        chip_genes = list(chip.var_names)
-        gene_ids = [
-            gene_tokenizer.convert_tokens_to_ids(g) if g in gene_tokenizer.vocab else -1
-            for g in chip_genes
-        ]
-        valid_mask = [i for i, gid in enumerate(gene_ids) if gid >= 0]
-        valid_vocab_ids = [gene_ids[i] for i in valid_mask]
+        # 2. Extract and assign populations
+        for chip in chip_datasets:
+            chip_genes = list(chip.var_names)
+            gene_ids = [
+                gene_tokenizer.convert_tokens_to_ids(g) if g in gene_tokenizer.vocab else -1
+                for g in chip_genes
+            ]
+            valid_mask = [i for i, gid in enumerate(gene_ids) if gid >= 0]
+            valid_vocab_ids = [gene_ids[i] for i in valid_mask]
 
-        for celltype, idx in chip.obs.groupby(col, observed=True).groups.items():
-            mat = chip[idx].X
-            if hasattr(mat, "toarray"):
-                mat = mat.toarray()
-            mat = mat[:, valid_mask]  # [M, n_valid_genes]
-            # scatter into vocab-sized tensor
-            pop = torch.zeros(len(idx), vocab_size, dtype=torch.float32)
-            pop[:, valid_vocab_ids] = torch.tensor(mat, dtype=torch.float32)
-            self.chip_populations[celltype] = pop
+            for celltype, idx in chip.obs.groupby(col, observed=True).groups.items():
+                mat = chip[idx].X
+                if hasattr(mat, "toarray"):
+                    mat = mat.toarray()
+                mat = mat[:, valid_mask]
 
+                pop = torch.zeros(len(idx), vocab_size, dtype=torch.float32)
+                pop[:, valid_vocab_ids] = torch.tensor(mat, dtype=torch.float32)
+
+                # Directly assign since there's no overlap across splits
+                self.chip_populations[celltype] = pop
         logger.info(
             f"Built chip_populations for {len(self.chip_populations)} celltypes, "
             f"aligned {len(valid_mask)}/{len(chip_genes)} genes to vocab (size {vocab_size})"

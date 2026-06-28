@@ -4,9 +4,9 @@ defaults:
 losses:
   - field_name: label_expressions
     name: mse
-    ignore_zero: true
+    ignore_zero: false
     link_function: exp
-  - field_name: label_expressions
-    name: is_zero_bce
+#  - field_name: label_expressions
+#    name: is_zero_bce
 
 batch_prediction_behavior: "track"

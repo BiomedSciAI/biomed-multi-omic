@@ -18,4 +18,4 @@
         vocab_field: genes
         logit_outputs:
           - mse
-          - is_zero_bce
+          # - is_zero_bce

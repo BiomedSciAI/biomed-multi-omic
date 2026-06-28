@@ -4,7 +4,7 @@ defaults:
   - fields: scrna2chip_wced
   - trainer: scrna2chip
   - task: train
-  - model: scbert
+  - model: llama
   - _self_
 
 seed:
@@ -12,6 +12,7 @@ seed:
 
 model:
   checkpoint: ${checkpoint}
+
 
 data_module:
   num_workers: 2
