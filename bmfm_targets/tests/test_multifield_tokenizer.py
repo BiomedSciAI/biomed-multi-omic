@@ -263,7 +263,7 @@ def test_tokenization_single_instance_add_special_tokens(test_tokenizer_fields):
 def test_tokenization_does_not_resplit(test_tokenizer_fields):
     tokenizer = load_test_tokenizer()
 
-    # token1 should be translated to 5, GENE_NAME_XYZ is 16, all the others should be a single zero (UKN) between two fives
+    # token1 should be translated to 5, GENENAMEXYZ is 16, all the others should be a single zero (UKN) between two fives
     m1 = MultiFieldInstance(
         metadata={"cell_name": "cell1"},
         data={
@@ -273,7 +273,7 @@ def test_tokenization_does_not_resplit(test_tokenizer_fields):
                 "token1",
                 "token0.token 3",
                 "token1",
-                "GENE_NAME_XYZ",
+                "GENENAMEXYZ",
                 "token1",
                 "token2-token3",
                 "token1",
@@ -352,10 +352,10 @@ def assert_tensors_equal(result, expected, name=""):
 )
 def test_tokenize_xyz(test_tokenizer: MultiFieldTokenizer):
     vec = [
-        # ["token2", "token2", "token4", "GENE_NAME_XYZ", "token2", "token2", "token4"],
+        # ["token2", "token2", "token4", "GENENAMEXYZ", "token2", "token2", "token4"],
         ["token2", "token2", "token4", "GENE.NAME.XYZ", "token2", "token2", "token4"],
     ]
-    # "GENE_NAME_XYZ" is a token in the list
+    # "GENENAMEXYZ" is a token in the list
     vocab = test_tokenizer.get_field_vocab("genes")
     encoding = test_tokenizer.get_field_tokenizer("genes")(
         vec,
@@ -368,7 +368,7 @@ def test_tokenize_xyz(test_tokenizer: MultiFieldTokenizer):
         return_tensors="pt",
         max_length=16,
     )
-    # this will fail as GENE_NAME_XYZ will be split into five unknown tokens
+    # this will fail as GENENAMEXYZ will be split into five unknown tokens
     assert (encoding["input_ids"] != test_tokenizer.unk_token_id).all()
 
 

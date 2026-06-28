@@ -12,17 +12,17 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import (
-    apply_chunking_to_forward,
-    find_pruneable_heads_and_indices,
-    prune_linear_layer,
-)
+from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_layer
 from transformers.utils import logging
 
 from bmfm_targets.config import SCBertConfig
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
+)
+from bmfm_targets.models.predictive._compat_utils import (
+    find_pruneable_heads_and_indices,
+    get_head_mask,
 )
 from bmfm_targets.models.predictive.attentions import attention_factory
 from bmfm_targets.models.predictive.layers import (
@@ -568,7 +568,7 @@ class SCBertModel(SCBertPreTrainedModel):
         # attention_probs has shape bsz x n_heads x N x N
         # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
+        head_mask = get_head_mask(head_mask, self.config.num_hidden_layers)
 
         embedding_output = self.embeddings(
             input_ids=input_ids,
@@ -611,7 +611,10 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
 
     """
 
-    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+    _tied_weights_keys = {
+        "predictions.decoder.bias": None,
+        "cls.predictions.decoder.weight": None,
+    }
 
     def __init__(self, config: SCBertConfig):
         """
@@ -653,7 +656,7 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -851,7 +854,10 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
 
     """
 
-    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+    _tied_weights_keys = {
+        "predictions.decoder.bias": None,
+        "cls.predictions.decoder.weight": None,
+    }
 
     def __init__(self, config: SCBertConfig):
         """
@@ -898,7 +904,7 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -977,7 +983,10 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
 
     """
 
-    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+    _tied_weights_keys = {
+        "predictions.decoder.bias": None,
+        "cls.predictions.decoder.weight": None,
+    }
 
     def __init__(self, config: SCBertConfig):
         """
@@ -1021,7 +1030,7 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 

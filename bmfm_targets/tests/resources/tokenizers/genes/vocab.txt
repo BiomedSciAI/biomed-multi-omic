@@ -14,6 +14,5 @@ token8
 token9
 token10
 token11
-GENE_NAME_XYZ
+GENENAMEXYZ
 tobesplit
-##99

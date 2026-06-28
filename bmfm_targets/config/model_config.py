@@ -20,6 +20,12 @@ FeatureGenerationAlgorithm = Enum(
 
 
 class SCModelConfigBase(PretrainedConfig):
+    # transformers >= 5 removed these defaults from PretrainedConfig; restore them here
+    # so all subclasses work without changes to every __init__.
+    is_decoder: bool = False
+    add_cross_attention: bool = False
+    chunk_size_feed_forward: int = 0
+
     def to_dict(self):
         """Serializes class to a Python dictionary."""
         output = super().to_dict()

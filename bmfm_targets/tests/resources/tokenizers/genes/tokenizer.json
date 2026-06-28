@@ -159,9 +159,8 @@
       "token9": 13,
       "token10": 14,
       "token11": 15,
-      "GENE_NAME_XYZ": 16,
-      "tobesplit": 17,
-      "##99": 18
+      "GENENAMEXYZ": 16,
+      "tobesplit": 17
     }
   }
 }

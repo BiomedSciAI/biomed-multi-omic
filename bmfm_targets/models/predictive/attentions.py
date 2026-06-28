@@ -4,9 +4,10 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from transformers.configuration_utils import PretrainedConfig
-from transformers.pytorch_utils import (
+from transformers.pytorch_utils import prune_linear_layer
+
+from bmfm_targets.models.predictive._compat_utils import (
     find_pruneable_heads_and_indices,
-    prune_linear_layer,
 )
 
 from .layers import SCSelfOutput

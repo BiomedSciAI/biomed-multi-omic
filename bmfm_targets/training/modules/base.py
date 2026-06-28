@@ -175,7 +175,10 @@ class BaseTrainingModule(pl.LightningModule):
         self.prediction_df = {}
         self.token_level_errors = {}
         self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
-        self.save_hyperparameters(ignore=["tokenizer"])
+        # model_config is a transformers PretrainedConfig dataclass which in v5 contains
+        # a `torch.dtype` forward-reference field that OmegaConf cannot resolve via
+        # get_type_hints() without torch in scope. Exclude it from hparam serialisation.
+        self.save_hyperparameters(ignore=["tokenizer", "model_config"])
 
     def update_metrics(
         self,

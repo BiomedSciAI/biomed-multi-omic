@@ -181,8 +181,26 @@ class SCModernBertRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
+        if self.rope_type == "default":
+            # Standard (no-scaling) RoPE: v5 removed 'default' from ROPE_INIT_FUNCTIONS;
+            # compute inv_freq directly using the base theta from config.
+            head_dim = getattr(config, "head_dim", None) or (
+                config.hidden_size // config.num_attention_heads
+            )
+            base = config.rope_theta
+            inv_freq = 1.0 / (
+                base
+                ** (
+                    torch.arange(0, head_dim, 2, dtype=torch.int64).to(
+                        device=device, dtype=torch.float
+                    )
+                    / head_dim
+                )
+            )
+            self.attention_scaling = 1.0
+        else:
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+            inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
@@ -939,7 +957,7 @@ class SCModernBertPredictionHead(nn.Module):
 
 
 class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
-    _tied_weights_keys = ["cls.predictions.decoder.weight"]
+    _tied_weights_keys = {"cls.predictions.decoder.weight": None}
 
     def __init__(self, config: SCModernBertConfig):
         super().__init__(config)
@@ -966,7 +984,7 @@ class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -1244,7 +1262,7 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -1327,10 +1345,10 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
 
 
 class SCModernBertForMultiTaskModeling(SCModernBertPreTrainedModel):
-    _tied_weights_keys = [
-        "cls.predictions.decoder.bias",
-        "cls.predictions.decoder.weight",
-    ]
+    _tied_weights_keys = {
+        "cls.predictions.decoder.bias": None,
+        "cls.predictions.decoder.weight": None,
+    }
 
     def __init__(self, config: SCModernBertConfig):
         super().__init__(config)
@@ -1360,7 +1378,7 @@ class SCModernBertForMultiTaskModeling(SCModernBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 

@@ -288,6 +288,10 @@ class MultiFieldTokenizer:
                 clean_text=False,
                 strip_accents=None,
             )
+            # v5 BertTokenizerFast re-applies BertPreTokenizer unconditionally; our
+            # WordLevel gene/token vocabs must not split on punctuation/hyphens.
+            if hasattr(loaded_tok, "backend_tokenizer"):
+                loaded_tok.backend_tokenizer.pre_tokenizer = None
         except Exception as e:
             logger.error(
                 f"failed to load {path} as a {self.SUB_TOKENIZER_CLASS.__name__}"
