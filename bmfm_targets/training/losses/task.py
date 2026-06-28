@@ -197,12 +197,17 @@ class LossTask:
 
         return self.metric_key, model_outputs, gt_labels
 
-    def get_metrics(self) -> MetricCollection:
+    def get_metrics(self, exclude: set[str] | None = None) -> MetricCollection:
         """
         Get metric collection for this task.
 
         Uses objective's default metrics unless overridden via metrics parameter.
         Filters metrics based on output size (classification vs regression).
+
+        Parameters
+        ----------
+        exclude:
+            Optional set of metric names to omit from the collection.
 
         Returns
         -------
@@ -227,6 +232,7 @@ class LossTask:
             {
                 mt["name"]: metrics.get_metric_object(mt, num_classes)
                 for mt in metric_configs
+                if not (exclude and mt["name"] in exclude)
             }
         )
 

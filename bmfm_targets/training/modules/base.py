@@ -249,12 +249,11 @@ class BaseTrainingModule(pl.LightningModule):
 
         metrics_dict = {}
         for loss_task in self.loss_tasks:
-            metrics_dict[loss_task.metric_key] = loss_task.get_metrics()
-            # Remove perplexity when multiple tasks share a metric_key
-            # (perplexity needs logits, but duplicated keys use predictions)
-            if metric_key_counts[loss_task.metric_key] > 1:
-                if "perplexity" in metrics_dict[loss_task.metric_key]:
-                    metrics_dict[loss_task.metric_key].pop("perplexity")
+            # Perplexity needs logits, but duplicated metric_keys use predictions
+            exclude = (
+                {"perplexity"} if metric_key_counts[loss_task.metric_key] > 1 else None
+            )
+            metrics_dict[loss_task.metric_key] = loss_task.get_metrics(exclude=exclude)
 
         self.train_metrics = MultitaskWrapper(metrics_dict).clone()
         self.val_metrics = MultitaskWrapper(metrics_dict).clone()
