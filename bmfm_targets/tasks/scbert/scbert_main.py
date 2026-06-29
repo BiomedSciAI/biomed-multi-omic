@@ -26,7 +26,9 @@ from pathlib import Path
 CONFIG_PATH = Path(__file__).resolve().parents[3] / "run"
 
 
-@hydra.main(config_path=str(CONFIG_PATH), config_name="scbert_train", version_base="1.2")
+@hydra.main(
+    config_path=str(CONFIG_PATH), config_name="scbert_train", version_base="1.2"
+)
 def main(cfg: config.SCBertMainHydraConfigSchema) -> None:
     os.umask(0)
     if not isinstance(cfg.task, list | dict | ListConfig | DictConfig):

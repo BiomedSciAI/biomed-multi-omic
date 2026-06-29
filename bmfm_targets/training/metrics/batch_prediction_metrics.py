@@ -278,7 +278,8 @@ def create_field_predictions_df(
         # ), "Sample names must be unique. Did you accidentally set task_config.n_bootstrap_runs >=1?"
         if len(sample_names) != len({*sample_names}):
             logging.warning(
-                "Sample names are not unique. This is expected if sampling with replacement is used (e.g. bootstrapping or OT batching).")
+                "Sample names are not unique. This is expected if sampling with replacement is used (e.g. bootstrapping or OT batching)."
+            )
 
     if len(predictions_list) == 0:
         raise ValueError("predictions_list is empty")

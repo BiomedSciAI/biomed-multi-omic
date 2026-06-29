@@ -175,6 +175,9 @@ class BaseTrainingModule(pl.LightningModule):
         self.prediction_df = {}
         self.token_level_errors = {}
         self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
+        _pgc = self.trainer_config.perturbation_group_column
+        if _pgc not in self.sample_metadata_keys:
+            self.sample_metadata_keys.append(_pgc)
         self.save_hyperparameters(ignore=["tokenizer"])
 
     def _forward_and_compute_losses(
@@ -947,18 +950,18 @@ class BaseTrainingModule(pl.LightningModule):
     #     return {lt.metric_key for lt in filter(filter_func, self.loss_tasks)}
 
     def get_supported_field_metric_keys(
-            self, limit_to_continuous_value_encoder=False
+        self, limit_to_continuous_value_encoder=False
     ) -> set[str]:
         is_supported_filter = (
             lambda lt: isinstance(lt.source, FieldSource)
-                       and "expressions" in lt.source.name
-                       and lt.objective.contributes_sample_metrics
-        # <-- Add this check
+            and "expressions" in lt.source.name
+            and lt.objective.contributes_sample_metrics
+            # <-- Add this check
         )
         if limit_to_continuous_value_encoder:
             filter_func = (
                 lambda lt: is_supported_filter(lt)
-                           and lt.field.tokenization_strategy == "continuous_value_encoder"
+                and lt.field.tokenization_strategy == "continuous_value_encoder"
             )
         else:
             filter_func = is_supported_filter

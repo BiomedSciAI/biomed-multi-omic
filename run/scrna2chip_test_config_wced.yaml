@@ -46,12 +46,9 @@ trainer:
   losses:
     - field_name: label_expressions
       name: mse
-      ignore_zero: true
+      ignore_zero: false
       link_function: exp
       wced_target: all_genes
-#    - field_name: label_expressions
-#      name: is_zero_bce
-#      wced_target: all_genes
 
 label_columns: []
 

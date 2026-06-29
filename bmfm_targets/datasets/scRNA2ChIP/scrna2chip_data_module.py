@@ -95,6 +95,7 @@ class scRNA2ChIPDataModule(DataModule):
         sequence_label_extractor: None | WCEDMasker = None,
         use_ot_batching: bool = False,
         celltype_column: str = "tissue_label",
+        chip_pairing_strategy: Literal["random", "pseudobulk"] = "random",
     ):
         super().__init__(
             tokenizer=tokenizer,
@@ -128,11 +129,13 @@ class scRNA2ChIPDataModule(DataModule):
         self.perturbation_column_name = perturbation_column_name
         self.use_ot_batching = use_ot_batching
         self.celltype_column = celltype_column
+        self.chip_pairing_strategy = chip_pairing_strategy
         self.chip_populations: dict[str, torch.Tensor] = {}  # built in setup()
 
     def _prepare_dataset_kwargs(self):
         self.dataset_kwargs = super()._prepare_dataset_kwargs()
         self.dataset_kwargs["perturbation_column_name"] = self.perturbation_column_name
+        self.dataset_kwargs["chip_pairing_strategy"] = self.chip_pairing_strategy
         return self.dataset_kwargs
 
     def prepare_data(self) -> None:
@@ -211,9 +214,7 @@ class scRNA2ChIPDataModule(DataModule):
     #     )
 
     def _build_chip_populations(self):
-        """
-        Build celltype -> ChIP population tensor map, aligned to tokenizer vocab.
-        """
+        """Build celltype -> ChIP population tensor map, aligned to tokenizer vocab."""
         # 1. Collect all loaded datasets
         chip_datasets = []
         if getattr(self, "train_dataset", None) is not None:
@@ -234,7 +235,9 @@ class scRNA2ChIPDataModule(DataModule):
         for chip in chip_datasets:
             chip_genes = list(chip.var_names)
             gene_ids = [
-                gene_tokenizer.convert_tokens_to_ids(g) if g in gene_tokenizer.vocab else -1
+                gene_tokenizer.convert_tokens_to_ids(g)
+                if g in gene_tokenizer.vocab
+                else -1
                 for g in chip_genes
             ]
             valid_mask = [i for i, gid in enumerate(gene_ids) if gid >= 0]

@@ -41,6 +41,11 @@ data_module:
   dataset_kwargs:
     new_field: label_expressions
     split_column_name: tissue_split
+    # Pseudobulk pairing (optional, default "random"): pairs each scRNA cell to the
+    # deterministic per-tissue mean ChIP profile instead of a random same-tissue draw,
+    # giving the MSE head a denoised conditional-mean target (population_ot still shapes
+    # the predicted distribution). Uncomment to enable:
+    # chip_pairing_strategy: pseudobulk
   transform_datasets: true
   log_normalize_transform: false
 
@@ -64,6 +69,13 @@ data_module:
 trainer:
   learning_rate: 1.0e-5
   batch_prediction_behavior: "dump"
+  # Per-tissue pseudobulk val/test metrics (agg_pcc / agg_mae grouped by tissue_label).
+  # NOTE: enable_perturbation_metrics now gates the metric computation in
+  # SequenceLabelingTrainingModule._shared_test_val_on_end (it was previously defined
+  # but never checked). It defaults to False, so these metrics are OFF unless set here.
+  # discrimination_score is gene-specific and is auto-skipped when group_column != perturbed_genes.
+  # enable_perturbation_metrics: true
+  # perturbation_group_column: tissue_label
   losses:
     - field_name: label_expressions
       name: mse
