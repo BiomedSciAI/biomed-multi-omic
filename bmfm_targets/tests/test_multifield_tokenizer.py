@@ -659,14 +659,20 @@ def test_multifield_tokenizer_can_work_with_string_inputs(
         max_length=100,
     )["dna_chunks"]
 
-    from transformers import BertTokenizerFast
+    # The DNA vocab is a BPE tokenizer; transformers >= 5 can only round-trip it via
+    # PreTrainedTokenizerFast (BertTokenizerFast rebuilds a WordPiece backend and
+    # collapses every sequence to [UNK]). This mirrors how load_subtokenizer loads it.
+    import json
+    from pathlib import Path
 
-    bert_tokenizer = BertTokenizerFast.from_pretrained(
-        f"{TEST_TOKENIZER_ROOT}/dna_chunks",
-        do_lower_case=False,
-        tokenize_chinese_chars=False,
-        clean_text=False,
-        strip_accents=None,
+    from transformers import PreTrainedTokenizerFast
+
+    dna_chunks_path = Path(f"{TEST_TOKENIZER_ROOT}/dna_chunks")
+    special_tokens = json.loads(
+        (dna_chunks_path / "special_tokens_map.json").read_text()
+    )
+    bert_tokenizer = PreTrainedTokenizerFast.from_pretrained(
+        dna_chunks_path, **special_tokens
     )
     output_from_bert_tokenizer = bert_tokenizer(
         dna_sequence,

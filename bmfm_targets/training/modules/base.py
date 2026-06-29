@@ -175,9 +175,14 @@ class BaseTrainingModule(pl.LightningModule):
         self.prediction_df = {}
         self.token_level_errors = {}
         self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
-        # model_config is a transformers PretrainedConfig dataclass which in v5 contains
-        # a `torch.dtype` forward-reference field that OmegaConf cannot resolve via
-        # get_type_hints() without torch in scope. Exclude it from hparam serialisation.
+        # `model_config` is excluded from the live hparams because transformers >= 5
+        # turned `PretrainedConfig` into a dataclass whose `dtype` field is annotated
+        # `Union[str, torch.dtype]`. When a logger (e.g. TensorBoard) serialises hparams
+        # via OmegaConf, it recurses into that dataclass and raises an *uncaught*
+        # error (NameError on the `torch` forward-ref, then ConfigValueError on the
+        # container union), crashing training. We instead persist the real config object
+        # straight into the checkpoint in `on_save_checkpoint`, so `load_from_checkpoint`
+        # still receives an `SCModelConfigBase` while the logger never sees it.
         self.save_hyperparameters(ignore=["tokenizer", "model_config"])
 
     def update_metrics(
@@ -273,6 +278,19 @@ class BaseTrainingModule(pl.LightningModule):
 
     def on_validation_start(self) -> None:
         self.val_batch_predictions.clear()
+
+    def on_save_checkpoint(self, checkpoint: dict) -> None:
+        """
+        Persist ``model_config`` into the checkpoint hyper_parameters.
+
+        It is excluded from ``save_hyperparameters`` (see ``__init__``) so loggers do
+        not try to OmegaConf-serialise the transformers >= 5 config dataclass. We add the
+        real object back here, after Lightning has populated ``hyper_parameters``, so that
+        ``load_from_checkpoint`` receives it as a constructor argument.
+        """
+        super().on_save_checkpoint(checkpoint)
+        hparams = checkpoint.setdefault(self.CHECKPOINT_HYPER_PARAMS_KEY, {})
+        hparams["model_config"] = self.model_config
 
     def on_load_checkpoint(self, checkpoint: dict) -> None:
         """Migrate old checkpoint formats before Lightning loads them."""

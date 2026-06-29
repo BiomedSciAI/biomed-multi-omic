@@ -104,6 +104,10 @@ class LlamaEncoderWithPoolingHead(LlamaEncoderWithInputEmbedding):
 
 
 class LlamaForMaskedLMModel(nn.Module, CheckpointMixin):
+    # transformers >= 5 reads `config_class` on auto-registered models in
+    # `_BaseAutoModelClass.from_config`; plain nn.Modules no longer inherit a default.
+    config_class = LlamaForMaskedLMConfig
+
     def __init__(self, config: LlamaForMaskedLMConfig):
         super().__init__()
 
@@ -165,6 +169,8 @@ class LlamaForMaskedLMModel(nn.Module, CheckpointMixin):
 
 
 class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
+    config_class = LlamaForMultiTaskConfig
+
     def __init__(self, config: LlamaForMultiTaskConfig):
         super().__init__()
 
@@ -228,6 +234,8 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
 
 
 class LlamaForSequenceClassificationModel(nn.Module, CheckpointMixin, InitWeightsMixin):
+    config_class = LlamaForMultiTaskConfig
+
     def __init__(self, config: LlamaForMultiTaskConfig):
         super().__init__()
 

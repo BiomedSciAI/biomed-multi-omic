@@ -1,4 +1,5 @@
 import atexit
+import json
 import math
 import os
 import tempfile
@@ -281,21 +282,45 @@ class MultiFieldTokenizer:
                 field_name,
             )
         try:
-            loaded_tok = self.SUB_TOKENIZER_CLASS.from_pretrained(
-                path,
-                do_lower_case=False,
-                tokenize_chinese_chars=False,
-                clean_text=False,
-                strip_accents=None,
-            )
-            # v5 BertTokenizerFast re-applies BertPreTokenizer unconditionally; our
-            # WordLevel gene/token vocabs must not split on punctuation/hyphens.
-            if hasattr(loaded_tok, "backend_tokenizer"):
-                loaded_tok.backend_tokenizer.pre_tokenizer = None
+            if _is_bpe_tokenizer(path):
+                # transformers >= 5 merged BertTokenizerFast into BertTokenizer, which
+                # rebuilds a WordPiece backend from vocab.txt and unconditionally forces
+                # a BertPreTokenizer, discarding the backend stored in tokenizer.json.
+                # For the BPE DNA vocabs that collapses every sequence to [UNK], so load
+                # tokenizer.json verbatim to keep the real BPE model and pre-tokenizer.
+                # v5 also no longer reads the legacy special_tokens_map.json, so pass it
+                # explicitly to restore the pad/cls/sep/unk/mask attributes needed for
+                # padding.
+                special_tokens_map_file = Path(path) / "special_tokens_map.json"
+                special_tokens = (
+                    json.loads(special_tokens_map_file.read_text())
+                    if special_tokens_map_file.is_file()
+                    else {}
+                )
+                # entries may be plain strings or serialised AddedToken dicts; reduce to
+                # the token content so they are valid from_pretrained kwargs.
+                special_tokens = {
+                    key: (value["content"] if isinstance(value, dict) else value)
+                    for key, value in special_tokens.items()
+                    if not isinstance(value, list)
+                }
+                loaded_tok = PreTrainedTokenizerFast.from_pretrained(
+                    path, **special_tokens
+                )
+            else:
+                loaded_tok = self.SUB_TOKENIZER_CLASS.from_pretrained(
+                    path,
+                    do_lower_case=False,
+                    tokenize_chinese_chars=False,
+                    clean_text=False,
+                    strip_accents=None,
+                )
+                # v5 BertTokenizerFast re-applies BertPreTokenizer unconditionally; our
+                # WordLevel gene/token vocabs must not split on punctuation/hyphens.
+                if hasattr(loaded_tok, "backend_tokenizer"):
+                    loaded_tok.backend_tokenizer.pre_tokenizer = None
         except Exception as e:
-            logger.error(
-                f"failed to load {path} as a {self.SUB_TOKENIZER_CLASS.__name__}"
-            )
+            logger.error(f"failed to load {path} as a fast tokenizer")
             raise e
 
         self.tokenizers[field_name] = loaded_tok
@@ -659,6 +684,23 @@ class MultiFieldTokenizer:
                 assert i == j
 
 
+def _is_bpe_tokenizer(path: str | Path) -> bool:
+    """
+    Return True when the subtokenizer at ``path`` stores a BPE backend.
+
+    BPE subtokenizers (the DNA vocabs) must be loaded straight from tokenizer.json
+    because transformers >= 5 cannot round-trip them through BertTokenizerFast.
+    """
+    tokenizer_json = Path(path) / "tokenizer.json"
+    if not tokenizer_json.is_file():
+        return False
+    try:
+        model = json.loads(tokenizer_json.read_text()).get("model") or {}
+    except (json.JSONDecodeError, OSError):
+        return False
+    return model.get("type") == "BPE"
+
+
 def set_custom_cls_post_processor(
     subtok: PreTrainedTokenizerFast, cls_tokens: list[str]
 ):
@@ -681,6 +723,15 @@ def set_custom_cls_post_processor(
     # pair sequence: CLS_1 CLS_2 ... $A SEP $B SEP
     pair_template = f"{cls_section} $A {sep} $B {sep}"
     specials = list(zip(subtok.all_special_tokens, subtok.all_special_ids))
+    # TemplateProcessing in transformers >= 5 validates that every token named in the
+    # template is listed in `special_tokens`. The custom CLS tokens are present in the
+    # vocab but are not necessarily registered as special tokens, so add them explicitly
+    # (with their vocab ids) to avoid a "Missing SpecialToken" error.
+    known_special_tokens = {token for token, _ in specials}
+    for cls_token in cls_tokens:
+        if cls_token not in known_special_tokens:
+            specials.append((cls_token, subtok.convert_tokens_to_ids(cls_token)))
+            known_special_tokens.add(cls_token)
     subtok.backend_tokenizer.post_processor = TemplateProcessing(
         single=single_template, pair=pair_template, special_tokens=specials
     )  # pyright: ignore[reportAttributeAccessIssue]

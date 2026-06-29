@@ -56,6 +56,12 @@ class SCModelConfigBase(PretrainedConfig):
     def __setstate__(self, state):
         state.setdefault("label_columns", None)
         state.setdefault("_output_attentions", state.get("output_attentions", None))
+        # transformers >= 5 reads these private implementation fields through property
+        # getters in PreTrainedModel.__init__. Configs pickled by transformers 4 (e.g.
+        # the published checkpoints) lack them and would raise AttributeError, so default
+        # them to None exactly as a fresh PretrainedConfig.__init__ would.
+        state.setdefault("_attn_implementation_internal", None)
+        state.setdefault("_experts_implementation_internal", None)
         self.__dict__.update(state)
 
 
