@@ -360,11 +360,8 @@ class BatchIntegrationCallback(pl.Callback):
     def _generate_metrics_table(self, adata_emb: sc.AnnData) -> pd.DataFrame:
         """Compute scIB metrics for model embeddings."""
         import scib.metrics as scm
-        from sklearn.metrics import (
-            adjusted_rand_score,
-            normalized_mutual_info_score,
-            silhouette_score,
-        )
+
+        from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
 
         batch_col, label_col = self.batch_column_name, self.target_column_name
         sc.pp.neighbors(adata_emb, use_rep=MODEL_EMBED_KEY)
@@ -376,32 +373,7 @@ class BatchIntegrationCallback(pl.Callback):
         results = {}
 
         if single_batch:
-            from sklearn.cluster import KMeans
-
-            labels = adata_emb.obs[label_col].to_numpy()
-            X = adata_emb.obsm[MODEL_EMBED_KEY]
-
-            mask = pd.notna(labels)
-            labels, X = labels[mask], X[mask]
-
-            # Default clustering is KMeans (no igraph/leidenalg dependency).
-            # k is the number of label classes; leiden remains available via the
-            # scib multi-batch path when those optional, copyleft deps are present.
-            n_clusters = min(max(pd.Series(labels).nunique(), 1), len(X))
-            clusters = KMeans(
-                n_clusters=n_clusters, n_init=10, random_state=0
-            ).fit_predict(X)
-
-            results["NMI_cluster/label"] = normalized_mutual_info_score(
-                labels, clusters
-            )
-            results["ARI_cluster/label"] = adjusted_rand_score(labels, clusters)
-            vc = pd.Series(labels).value_counts()
-            results["ASW_label"] = (
-                float(silhouette_score(X, labels))
-                if (vc.size > 1 and vc.min() >= 2)
-                else np.nan
-            )
+            results = single_batch_bio_metrics(adata_emb, MODEL_EMBED_KEY, label_col)
         else:
             results_df = scm.metrics(
                 adata_emb,

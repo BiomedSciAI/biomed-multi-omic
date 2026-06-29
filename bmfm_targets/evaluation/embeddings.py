@@ -322,6 +322,60 @@ def concat_embeddings(
     concatenated_embeddings.to_csv(output_path, header=False)
 
 
+def _kmeans_clusters(X: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """
+    Igraph-free clustering: KMeans with k = number of label classes.
+
+    Fallback used for single-batch bio metrics when igraph/leidenalg are absent.
+    """
+    n_clusters = min(max(pd.Series(labels).nunique(), 1), len(X))
+    return KMeans(n_clusters=n_clusters, n_init=10, random_state=0).fit_predict(X)
+
+
+def single_batch_bio_metrics(
+    adata_emb: sc.AnnData, embed_key: str, label_col: str
+) -> dict[str, float]:
+    """
+    Bio-conservation metrics (NMI/ARI/ASW) for a single-batch embedding.
+
+    Clusters with Leiden when igraph/leidenalg are installed, so the returned
+    values match historical runs; otherwise falls back to KMeans(k=#label
+    classes) so the metrics stay computable without those optional, copyleft
+    dependencies. Assumes ``sc.pp.neighbors`` has already been run on
+    ``adata_emb`` (required by the Leiden path).
+    """
+    from sklearn.metrics import (
+        adjusted_rand_score,
+        normalized_mutual_info_score,
+        silhouette_score,
+    )
+
+    labels = adata_emb.obs[label_col].to_numpy()
+    X = adata_emb.obsm[embed_key]
+    mask = pd.notna(labels)
+
+    try:
+        import leidenalg  # noqa: F401
+    except ImportError:
+        clusters = _kmeans_clusters(X[mask], labels[mask])
+    else:
+        cluster_key = "__tmp_scib_cluster"
+        sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
+        clusters = adata_emb.obs[cluster_key].to_numpy()[mask]
+
+    labels, X = labels[mask], X[mask]
+    vc = pd.Series(labels).value_counts()
+    return {
+        "NMI_cluster/label": normalized_mutual_info_score(labels, clusters),
+        "ARI_cluster/label": adjusted_rand_score(labels, clusters),
+        "ASW_label": (
+            float(silhouette_score(X, labels))
+            if (vc.size > 1 and vc.min() >= 2)
+            else np.nan
+        ),
+    }
+
+
 def calculate_batch_integration_metrics(
     adata_emb: sc.AnnData,
     batch_column_name: str | None,
@@ -377,11 +431,6 @@ def calculate_batch_integration_metrics(
     >>> print(f"Avg Bio: {metrics['Avg_bio'].iloc[0]}")
     """
     import scib.metrics as scm
-    from sklearn.metrics import (
-        adjusted_rand_score,
-        normalized_mutual_info_score,
-        silhouette_score,
-    )
 
     batch_col, label_col = batch_column_name, target_column_name
 
@@ -396,28 +445,7 @@ def calculate_batch_integration_metrics(
     results = {}
 
     if single_batch:
-        # Single batch case: cluster with KMeans (no igraph/leidenalg dependency)
-        # and use sklearn metrics directly.
-        labels = adata_emb.obs[label_col].to_numpy()
-        X = adata_emb.obsm[embed_key]
-
-        # Filter out NaN labels
-        mask = pd.notna(labels)
-        labels, X = labels[mask], X[mask]
-
-        n_clusters = min(max(pd.Series(labels).nunique(), 1), len(X))
-        clusters = KMeans(n_clusters=n_clusters, n_init=10, random_state=0).fit_predict(
-            X
-        )
-
-        results["NMI_cluster/label"] = normalized_mutual_info_score(labels, clusters)
-        results["ARI_cluster/label"] = adjusted_rand_score(labels, clusters)
-        vc = pd.Series(labels).value_counts()
-        results["ASW_label"] = (
-            float(silhouette_score(X, labels))
-            if (vc.size > 1 and vc.min() >= 2)
-            else np.nan
-        )
+        results = single_batch_bio_metrics(adata_emb, embed_key, label_col)
     else:
         # Multiple batches: use scib.metrics for comprehensive evaluation
         results_df = scm.metrics(
@@ -444,12 +472,14 @@ def calculate_batch_integration_metrics(
 
     # Calculate average bio score
     bio_keys = ["NMI_cluster/label", "ARI_cluster/label", "ASW_label"]
-    results["avg_bio"] = np.nanmean([results.get(k, np.nan) for k in bio_keys])
+    results["avg_bio"] = float(np.nanmean([results.get(k, np.nan) for k in bio_keys]))
 
     # Calculate average batch score (only for multiple batches)
     if not single_batch:
         batch_keys = ["graph_conn", "ASW_label/batch"]
-        results["avg_batch"] = np.nanmean([results.get(k, np.nan) for k in batch_keys])
+        results["avg_batch"] = float(
+            np.nanmean([results.get(k, np.nan) for k in batch_keys])
+        )
 
     # Rename metrics for clarity
     rename = {

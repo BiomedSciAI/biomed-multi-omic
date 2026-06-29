@@ -64,7 +64,7 @@ METADATA = "node_id: cell_type_id\nnode_name: cell_type_name\nunknown_id: unknow
 
 def _write_graphmlz(path: Path, nodes, edges) -> None:
     """
-    Write a gzipped GraphML file in the same dialect igraph emits.
+    Write a gzipped GraphML file that encodes the synthetic ontology DAG.
 
     Attributes are declared by ``attr.name`` (``cell_type_id`` / ``cell_type_name``)
     so the file is a faithful stand-in for the production artifact and is readable
@@ -73,7 +73,6 @@ def _write_graphmlz(path: Path, nodes, edges) -> None:
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<graphml xmlns="http://graphml.graphdrawing.org/xmlns">',
-        "<!-- Created by igraph -->",
         '  <key id="v_cell_type_id" for="node" attr.name="cell_type_id" attr.type="string"/>',
         '  <key id="v_cell_type_name" for="node" attr.name="cell_type_name" attr.type="string"/>',
         '  <graph id="G" edgedefault="directed">',
