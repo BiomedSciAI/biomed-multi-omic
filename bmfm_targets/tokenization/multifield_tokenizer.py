@@ -323,6 +323,7 @@ class MultiFieldTokenizer:
             logger.error(f"failed to load {path} as a fast tokenizer")
             raise e
 
+        _register_added_special_tokens(loaded_tok, path)
         self.tokenizers[field_name] = loaded_tok
 
     def load_all_subtokenizers(self):
@@ -705,6 +706,49 @@ def _is_bpe_tokenizer(path: str | Path) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
     return model.get("type") == "BPE"
+
+
+def _register_added_special_tokens(loaded_tok, path: str | Path | None = None) -> None:
+    """
+    Mark `special` added tokens as additional_special_tokens.
+
+    transformers 4 read these from special_tokens_map.json into
+    additional_special_tokens, so they counted in `all_special_tokens`. v5 instead
+    loads them from tokenizer_config.json's added_tokens_decoder as plain added tokens
+    that are absent from `all_special_tokens`, which shrinks `num_special_tokens` and
+    breaks loading checkpoints whose special-token embedding tables were sized with the
+    full count. Re-register them so the count is restored; they are already in the vocab,
+    so no ids change. Both layouts are checked since published checkpoints predate the
+    added_tokens_decoder migration.
+    """
+    candidates: list[str] = []
+    decoder = getattr(loaded_tok, "added_tokens_decoder", None) or {}
+    for _, token in sorted(decoder.items()):
+        if getattr(token, "special", False):
+            candidates.append(token.content)
+    if path is not None:
+        special_tokens_map_file = Path(path) / "special_tokens_map.json"
+        if special_tokens_map_file.is_file():
+            stm = json.loads(special_tokens_map_file.read_text())
+            for entry in stm.get("additional_special_tokens", []):
+                candidates.append(
+                    entry["content"] if isinstance(entry, dict) else entry
+                )
+
+    already_special = set(loaded_tok.all_special_tokens)
+    vocab = loaded_tok.get_vocab()
+    # only register tokens already present in the vocab, so no new ids are minted
+    extra_special = [
+        token
+        for token in dict.fromkeys(candidates)
+        if token not in already_special and token in vocab
+    ]
+    if not extra_special:
+        return
+    existing = list(getattr(loaded_tok, "additional_special_tokens", []) or [])
+    loaded_tok.add_special_tokens(
+        {"additional_special_tokens": existing + extra_special}
+    )
 
 
 def set_custom_cls_post_processor(
