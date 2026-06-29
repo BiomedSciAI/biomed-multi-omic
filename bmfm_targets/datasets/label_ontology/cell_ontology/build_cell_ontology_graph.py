@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 
+import gzip
 from collections.abc import Iterable
 from importlib import resources
 
 import cellxgene_census
 import click
-import igraph
+import networkx as nx
 import pronto
 
 UNKNOWN_ID = "unknown"
@@ -84,49 +85,56 @@ def default_ontology_filename():
     return filename
 
 
-def build_graph(ontology_filename: str) -> igraph.Graph:
-    """Converts ontology to a igraph graph and removes obsolete ontology ids."""
+def build_graph(ontology_filename: str) -> nx.DiGraph:
+    """Converts ontology to a networkx graph and removes obsolete ontology ids."""
     ontology = pronto.Ontology(ontology_filename)
     non_obsolete_terms = [
         i for i in ontology.terms() if not i.obsolete and i.id != UNKNOWN_ID
     ]
-    ids = [i.id for i in non_obsolete_terms]
-    names = [i.name for i in non_obsolete_terms]
-    definitions = [i.definition for i in non_obsolete_terms]
+    ids = {i.id for i in non_obsolete_terms}
 
-    id2index = {i: index for index, i in enumerate(ids)}
-    n_nodes = len(ids)
-    edges = []
+    graph = nx.DiGraph()
     for term in non_obsolete_terms:
-        for i in term.superclasses(distance=1):
-            if i.id != term.id:
-                edges.append([id2index[i.id], id2index[term.id]])
-    graph = igraph.Graph(n_nodes, edges, directed=True)
-    graph.vs[CELL_TYPE_ID] = ids
-    graph.vs[CELL_TYPE_NAME] = names
-    graph.vs[CELL_TYPE_DEFINITION] = definitions
+        graph.add_node(
+            term.id,
+            **{
+                CELL_TYPE_ID: term.id,
+                CELL_TYPE_NAME: term.name or "",
+                CELL_TYPE_DEFINITION: str(term.definition) if term.definition else "",
+            },
+        )
+    # Edges point superclass (parent) -> term (child), matching the previous
+    # igraph construction; obsolete superclasses are not part of the graph.
+    for term in non_obsolete_terms:
+        for superclass in term.superclasses(distance=1):
+            if superclass.id != term.id and superclass.id in ids:
+                graph.add_edge(superclass.id, term.id)
 
     return graph
+
+
+def write_graphmlz(graph: nx.DiGraph, filename: str) -> None:
+    """Write a directed graph to a gzip-compressed GraphML file."""
+    with gzip.open(filename, "wb") as fp:
+        nx.write_graphml(graph, fp)
 
 
 def remove_obsolete(terms: Iterable[pronto.term.Term]):
     return [i for i in terms if not i.obsolete]
 
 
-def remove_dead_leaves(graph, cxg_ids: set[str]):
+def remove_dead_leaves(graph: nx.DiGraph, cxg_ids: set[str]):
     """Removes leaves from the graph until all graphs leaves are from CELLxGENE."""
     found_dead_leaves = True
     while found_dead_leaves:
-        leaves = {
-            graph.vs[i][CELL_TYPE_ID]: i
-            for i, deg in enumerate(graph.degree(mode="out"))
-            if deg == 0
-        }
-        leaf_set = set(leaves)
-        leaf_set -= cxg_ids
-        if leaf_set:
-            to_remove = [leaves[i] for i in leaf_set]
-            graph.delete_vertices(to_remove)
+        to_remove = [
+            node
+            for node in graph
+            if graph.out_degree(node) == 0
+            and graph.nodes[node][CELL_TYPE_ID] not in cxg_ids
+        ]
+        if to_remove:
+            graph.remove_nodes_from(to_remove)
             found_dead_leaves = True
         else:
             found_dead_leaves = False
@@ -192,11 +200,11 @@ def build_ontology_graph(
     )
     cxg_cells = get_cxg_cell(organism, census_uri, census_version)
     remove_dead_leaves(graph, cxg_cells)
-    n_leaves = len([i for i in graph.degree(mode="out") if i == 0])
-    print(f"Number of vertices in the final graph: {graph.vcount()}")
+    n_leaves = sum(1 for node in graph if graph.out_degree(node) == 0)
+    print(f"Number of vertices in the final graph: {graph.number_of_nodes()}")
     print(f"Number of leaves in the final graph: {n_leaves}")
 
-    graph.write_graphmlz(output_graph_filename)
+    write_graphmlz(graph, output_graph_filename)
 
 
 if __name__ == "__main__":
