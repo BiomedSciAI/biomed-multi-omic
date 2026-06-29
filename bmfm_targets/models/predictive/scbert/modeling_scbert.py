@@ -611,10 +611,9 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
 
     """
 
-    _tied_weights_keys = {
-        "predictions.decoder.bias": None,
-        "cls.predictions.decoder.weight": None,
-    }
+    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
+    # get_expanded_tied_weights_keys does not regex-match None values and crash.
+    _tied_weights_keys = {}
 
     def __init__(self, config: SCBertConfig):
         """
@@ -854,10 +853,9 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
 
     """
 
-    _tied_weights_keys = {
-        "predictions.decoder.bias": None,
-        "cls.predictions.decoder.weight": None,
-    }
+    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
+    # get_expanded_tied_weights_keys does not regex-match None values and crash.
+    _tied_weights_keys = {}
 
     def __init__(self, config: SCBertConfig):
         """
@@ -983,10 +981,9 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
 
     """
 
-    _tied_weights_keys = {
-        "predictions.decoder.bias": None,
-        "cls.predictions.decoder.weight": None,
-    }
+    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
+    # get_expanded_tied_weights_keys does not regex-match None values and crash.
+    _tied_weights_keys = {}
 
     def __init__(self, config: SCBertConfig):
         """

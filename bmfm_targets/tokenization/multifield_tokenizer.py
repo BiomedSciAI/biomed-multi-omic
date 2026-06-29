@@ -476,6 +476,12 @@ class MultiFieldTokenizer:
             field_encodings = field_tokenizer(*field_inputs, **all_kwargs)
 
             if field.tokenization_strategy == "continuous_value_encoder":
+                # The default tokenizer may be backed by a plain fast tokenizer (e.g. the
+                # BPE DNA vocab) whose model_input_names omit token_type_ids. Single-
+                # sequence inputs are all type 0, so fall back to zeros when absent.
+                token_type_ids = field_encodings.get("token_type_ids")
+                if token_type_ids is None:
+                    token_type_ids = torch.zeros_like(field_encodings["input_ids"])
                 field_encodings[
                     "input_ids"
                 ] = self._replace_tokenized_ids_with_continuous_values(
@@ -484,7 +490,7 @@ class MultiFieldTokenizer:
                     field=field,
                     input_ids=field_encodings["input_ids"].float(),
                     added_specials=field_encodings["special_tokens_mask"],
-                    token_type_ids=field_encodings["token_type_ids"],
+                    token_type_ids=token_type_ids,
                 )
 
             encodings[field.field_name] = field_encodings

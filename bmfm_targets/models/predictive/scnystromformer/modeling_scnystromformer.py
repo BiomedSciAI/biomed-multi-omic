@@ -521,10 +521,9 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
 
     """
 
-    _tied_weights_keys = {
-        "predictions.decoder.bias": None,
-        "cls.predictions.decoder.weight": None,
-    }
+    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
+    # get_expanded_tied_weights_keys does not regex-match None values and crash.
+    _tied_weights_keys = {}
 
     def __init__(self, config: SCNystromformerConfig):
         """
@@ -771,10 +770,9 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
 
     """
 
-    _tied_weights_keys = {
-        "predictions.decoder.bias": None,
-        "cls.predictions.decoder.weight": None,
-    }
+    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
+    # get_expanded_tied_weights_keys does not regex-match None values and crash.
+    _tied_weights_keys = {}
 
     def __init__(self, config: SCNystromformerConfig):
         """
@@ -888,10 +886,9 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
 
     """
 
-    _tied_weights_keys = {
-        "predictions.decoder.bias": None,
-        "cls.predictions.decoder.weight": None,
-    }
+    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
+    # get_expanded_tied_weights_keys does not regex-match None values and crash.
+    _tied_weights_keys = {}
 
     def __init__(self, config: SCNystromformerConfig):
         """
