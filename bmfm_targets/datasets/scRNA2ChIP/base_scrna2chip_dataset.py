@@ -23,12 +23,17 @@ class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
         # doesn't need a **kwargs catch-all.
         super_params = inspect.signature(BaseRNAExpressionDataset.__init__).parameters
         super_kwargs = {k: v for k, v in kwargs.items() if k in super_params}
+        # super().__init__ split-filters self.processed_data via filter_data(); our
+        # override below also stashes the *all-split* ChIP cells in self._all_chip_cells
+        # so the metrics ground truth can span held-out tissues (see filter_data).
         super().__init__(*args, **super_kwargs)
         self.new_field = kwargs["new_field"]
         # chip_pairing_strategy is extracted after the super() filter (same pattern as
         # new_field): "random" keeps the existing random-draw behaviour; "pseudobulk"
         # pairs each scRNA cell to the deterministic mean ChIP profile of its group.
         self.chip_pairing_strategy = kwargs.get("chip_pairing_strategy", "random")
+        # Split-restricted cells: these drive iteration and random/pseudobulk pairing,
+        # so a train-split dataset never sees or pairs against held-out ChIP (no leak).
         self.chipseq_cells = self.processed_data[
             self.processed_data.obs.query("data_type == 'ChIP'").index
         ]
@@ -39,55 +44,110 @@ class BasescRNA2ChIPDataset(BaseRNAExpressionDataset):
         self.cell_names = np.array(self.processed_data.obs_names)
         self.metadata = self.processed_data.obs
 
-        # Always build group_means for per-group metrics (used by the module via
-        # prepare_extra_training_module_kwargs → self.kwargs["group_means"]).
-        self.group_means = self._build_chip_group_means()
-        # Reuse the same AnnData for pseudobulk pairing; the random strategy
-        # doesn't need _chip_group_means at item-fetch time.
+        # group_means is the per-tissue pseudobulk ground truth used for val/test metrics
+        # (reaches the module via prepare_extra_training_module_kwargs →
+        # self.kwargs["group_means"]). Build it over ChIP cells from ALL splits — like
+        # the perturbation dataset, which builds group_means before split-restricting its
+        # cells — so predictions on held-out tissues can be scored. Append an
+        # "Average_Perturbation_Train" row (mean ChIP over train tissues) so the metrics
+        # report baseline_*_from_avg_perturbation ("does the model beat the average
+        # training tissue?"). That baseline needs the split column; skip it when absent
+        # (e.g. tiny synthetic fixtures with no split column).
+        include_avg_baseline = (
+            self.split_column_name is not None
+            and self.split_column_name in self._all_chip_cells.obs.columns
+        )
+        self.group_means = self._build_chip_group_means(
+            self._all_chip_cells, include_avg_baseline=include_avg_baseline
+        )
+        del self._all_chip_cells  # transient; only needed to build group_means
+
+        # Pseudobulk pairing target: deterministic per-tissue mean over THIS split's ChIP
+        # cells only (no avg row, no held-out leakage). Random pairing ignores this.
         if self.chip_pairing_strategy == "pseudobulk":
-            self._chip_group_means = self.group_means
+            self._chip_group_means = self._build_chip_group_means(self.chipseq_cells)
         else:
             self._chip_group_means = None
 
-    def _build_chip_group_means(self):
+    def filter_data(self, data):
         """
-        Precompute per-group pseudobulk means over the ChIP cells.
+        Split-filter as usual, but also stash all-split ChIP cells for group_means.
+
+        ``BaseRNAExpressionDataset.filter_data`` restricts ``processed_data`` to
+        ``self.split``. scRNA2ChIP needs its pseudobulk *ground truth* (``group_means``)
+        to span every split so held-out tissues can be scored, while the iterated/paired
+        cells stay split-restricted. We therefore run one extra, split-suppressed pass
+        purely to capture the ChIP cells across all splits (with the same gene/query
+        filtering), and return the normal split-filtered data unchanged for the rest of
+        ``__init__`` (subsampling, metadata, etc.).
+        """
+        saved_split = self.split
+        self.split = None
+        try:
+            all_split = super().filter_data(data)
+        finally:
+            self.split = saved_split
+        self._all_chip_cells = all_split[
+            all_split.obs.query("data_type == 'ChIP'").index
+        ].copy()
+        return super().filter_data(data)
+
+    def _build_chip_group_means(self, chip_cells, include_avg_baseline: bool = False):
+        """
+        Precompute per-group pseudobulk means over the given ChIP cells.
 
         For a single label column (the common case) the column name is used
         directly as the grouping key.  For multiple label columns a composite
         key column is built by joining the column values with ``"__"`` so that
         ``make_group_means`` receives a single string column.
 
+        Parameters
+        ----------
+        chip_cells : sc.AnnData
+            ChIP cells to aggregate. Pass all-split cells for the metrics ground
+            truth, or the current split's cells for the pseudobulk pairing target.
+        include_avg_baseline : bool, default False
+            When True, append an ``"Average_Perturbation_Train"`` row (mean over
+            train-split groups) so the aggregated metrics can report
+            ``baseline_*_from_avg_perturbation``. Requires the split column to be
+            present in ``chip_cells.obs``.
+
         Returns
         -------
         sc.AnnData
-            One pseudobulk row per unique label value (or composite label).
-            ``obs_names`` are the label values used for lookup in
-            ``_get_label_key``.
+            One pseudobulk row per unique label value (or composite label), plus the
+            optional average-baseline row. ``obs_names`` are the label values used
+            for lookup in ``_get_label_key``.
         """
         label_cols = self.label_columns if self.label_columns else ["tissue_label"]
+        if include_avg_baseline:
+            avg_kwargs = {
+                "avg_row_label": "Average_Perturbation_Train",
+                "split_column_name": self.split_column_name,
+            }
+        else:
+            avg_kwargs = {"avg_row_label": None, "split_column_name": None}
+
         if len(label_cols) == 1:
             return make_group_means(
-                self.chipseq_cells,
+                chip_cells,
                 perturbation_column_name=label_cols[0],
-                split_column_name=None,
-                avg_row_label=None,
                 exp_before_mean=False,
+                **avg_kwargs,
             )
         # Multiple label columns: build a composite key so make_group_means
         # receives a single grouping column.
         sep = "__"
         composite_col = sep.join(label_cols)
-        chipseq_copy = self.chipseq_cells.copy()
+        chipseq_copy = chip_cells.copy()
         chipseq_copy.obs[composite_col] = chipseq_copy.obs[label_cols].apply(
             lambda row: sep.join(str(row[col]) for col in label_cols), axis=1
         )
         return make_group_means(
             chipseq_copy,
             perturbation_column_name=composite_col,
-            split_column_name=None,
-            avg_row_label=None,
             exp_before_mean=False,
+            **avg_kwargs,
         )
 
     def _get_label_key(self, metadata: dict) -> str:
