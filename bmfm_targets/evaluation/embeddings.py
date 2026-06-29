@@ -396,16 +396,19 @@ def calculate_batch_integration_metrics(
     results = {}
 
     if single_batch:
-        # Single batch case: use sklearn metrics directly
-        cluster_key = "__tmp_scib_cluster"
-        sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
-        clusters = adata_emb.obs[cluster_key].to_numpy()
+        # Single batch case: cluster with KMeans (no igraph/leidenalg dependency)
+        # and use sklearn metrics directly.
         labels = adata_emb.obs[label_col].to_numpy()
         X = adata_emb.obsm[embed_key]
 
         # Filter out NaN labels
         mask = pd.notna(labels)
-        clusters, labels, X = clusters[mask], labels[mask], X[mask]
+        labels, X = labels[mask], X[mask]
+
+        n_clusters = min(max(pd.Series(labels).nunique(), 1), len(X))
+        clusters = KMeans(n_clusters=n_clusters, n_init=10, random_state=0).fit_predict(
+            X
+        )
 
         results["NMI_cluster/label"] = normalized_mutual_info_score(labels, clusters)
         results["ARI_cluster/label"] = adjusted_rand_score(labels, clusters)

@@ -376,14 +376,21 @@ class BatchIntegrationCallback(pl.Callback):
         results = {}
 
         if single_batch:
-            cluster_key = "__tmp_scib_cluster"
-            sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
-            clusters = adata_emb.obs[cluster_key].to_numpy()
+            from sklearn.cluster import KMeans
+
             labels = adata_emb.obs[label_col].to_numpy()
             X = adata_emb.obsm[MODEL_EMBED_KEY]
 
             mask = pd.notna(labels)
-            clusters, labels, X = clusters[mask], labels[mask], X[mask]
+            labels, X = labels[mask], X[mask]
+
+            # Default clustering is KMeans (no igraph/leidenalg dependency).
+            # k is the number of label classes; leiden remains available via the
+            # scib multi-batch path when those optional, copyleft deps are present.
+            n_clusters = min(max(pd.Series(labels).nunique(), 1), len(X))
+            clusters = KMeans(
+                n_clusters=n_clusters, n_init=10, random_state=0
+            ).fit_predict(X)
 
             results["NMI_cluster/label"] = normalized_mutual_info_score(
                 labels, clusters

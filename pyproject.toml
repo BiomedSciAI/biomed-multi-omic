@@ -50,7 +50,7 @@ dependencies = [
   "huggingface_hub",
   "numexpr",
   "pybigwig",
-  "igraph",
+  "networkx",
 ]
 
 [project.optional-dependencies]
