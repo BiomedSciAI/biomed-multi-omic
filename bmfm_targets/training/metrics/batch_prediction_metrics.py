@@ -273,9 +273,13 @@ def create_field_predictions_df(
     logging.info(f"Preparing to concat {len(predictions_list)} batches")
     if sample_names is not None:
         logging.info(f"received {len(sample_names)} sample names")
-        assert len(sample_names) == len(
-            {*sample_names}
-        ), "Sample names must be unique. Did you accidentally set task_config.n_bootstrap_runs >=1?"
+        # assert len(sample_names) == len(
+        #     {*sample_names}
+        # ), "Sample names must be unique. Did you accidentally set task_config.n_bootstrap_runs >=1?"
+        if len(sample_names) != len({*sample_names}):
+            logging.warning(
+                "Sample names are not unique. This is expected if sampling with replacement is used (e.g. bootstrapping or OT batching)."
+            )
 
     if len(predictions_list) == 0:
         raise ValueError("predictions_list is empty")

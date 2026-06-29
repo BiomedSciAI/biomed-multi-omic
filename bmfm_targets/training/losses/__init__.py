@@ -31,9 +31,10 @@ from .objectives import (
     IsZeroFocalObjective,
     MAEObjective,
     MSEObjective,
+    PopulationOTObjective,
     TokenValueObjective,
 )
-from .sources import FieldSource, LabelSource, WCEDFieldSource
+from .sources import FieldSource, LabelSource, WCEDFieldSource, WCEDPopulationSource
 
 # Main container
 from .task import LossTask, lookup_wced_output_index
@@ -66,6 +67,9 @@ __all__ = [
     "IsZeroFocalObjective",
     "BCEWithLogitsObjective",
     "HCEObjective",
+    "PopulationOTObjective",
+    # Data sources (extra)
+    "WCEDPopulationSource",
     # Main container
     "LossTask",
     # Utility functions

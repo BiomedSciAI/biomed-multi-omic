@@ -225,27 +225,6 @@ class MultiFieldCollator:
         logger.warning(f"Unknown label '{val_str}' for column '{col}', using -100.")
         return -100
 
-    def _infer_collation_behavior(self) -> dict[str, bool]:
-        """
-        Infer what to pack based on fields, label_columns, and masker.
-
-        Returns
-        -------
-            dict with keys:
-                - pack_masked_labels: True if masker is present
-                - pack_label_ids: True if label_columns are present
-                - pack_field_labels: True if there are non-input fields (sequence labeling)
-        """
-        return {
-            "pack_masked_labels": self.masker is not None,
-            "pack_label_ids": (
-                self.label_columns is not None
-                and len(self.label_columns) > 0
-                and self.label_dict is not None
-            ),
-            "pack_field_labels": len(self.label_field_names) > 0,
-        }
-
     @property
     def selective_dropout_weights(self):
         return getattr(self.masker, "selective_dropout_weights", None)
@@ -291,11 +270,8 @@ class MultiFieldCollator:
                 if key in examples[0].metadata:
                     batch[key] = [mfi.metadata.get(key) for mfi in examples]
 
-        # Infer behavior instead of checking collation_strategy
-        behavior = self._infer_collation_behavior()
-
         # Pack label_ids if we have label_columns (classification/multitask)
-        if behavior["pack_label_ids"]:
+        if self.label_columns and self.label_dict:
             batch["label_ids"] = self.read_label_ids(examples)
 
         self._encode_continuous_value_special_tokens(batch, self.fields)
@@ -348,11 +324,8 @@ class MultiFieldCollator:
 
         return_dict = {"input_ids": input_ids, "attention_mask": attention_mask}
 
-        # Infer behavior instead of checking collation_strategy
-        behavior = self._infer_collation_behavior()
-
         # Pack masked labels if masker is present (MLM/WCED)
-        if behavior["pack_masked_labels"]:
+        if self.masker is not None:
             input_ids, labels, attention_mask = self.masker.mask_inputs(
                 self.fields, batch
             )
@@ -363,23 +336,14 @@ class MultiFieldCollator:
                     "attention_mask": attention_mask,
                 }
             )
-        # Pack field labels if there are non-input fields (sequence labeling)
-        elif behavior["pack_field_labels"]:
-            special_tokens_mask = batch[self.input_field_names[0]][
-                "special_tokens_mask"
-            ].bool()
-            # Only include label fields that actually exist in the batch
-            labels = {
-                field: batch[field]["input_ids"]
-                for field in self.label_field_names
-                if field in batch
-            }
-            for field_labels in labels.values():
-                field_labels[special_tokens_mask] = -100
-            return_dict["labels"] = labels
+        # Sequence labeling labels -- but don't mess with masking labels by accident
+        if self.label_field_names:
+            labels = return_dict.setdefault("labels", {})
+            for k, v in self._get_label_field_labels(batch).items():
+                labels.setdefault(k, v)
 
         # Pack label_ids if we have label_columns (classification/multitask)
-        if behavior["pack_label_ids"] and "label_ids" in batch:
+        if self.label_columns and self.label_dict and "label_ids" in batch:
             if "labels" in return_dict:
                 return_dict["labels"].update(batch["label_ids"])
             else:
@@ -391,3 +355,19 @@ class MultiFieldCollator:
         )
 
         return return_dict
+
+    def _get_label_field_labels(self, batch: dict):
+        special_tokens_mask = batch[self.input_field_names[0]][
+            "special_tokens_mask"
+        ].bool()
+        # Only include label fields that were actually tokenized into the batch.
+        # Label fields can be absent (e.g. inference without paired labels), in
+        # which case they must be skipped rather than raising a KeyError.
+        labels = {
+            field: batch[field]["input_ids"]
+            for field in self.label_field_names
+            if field in batch
+        }
+        for field_labels in labels.values():
+            field_labels[special_tokens_mask] = -100
+        return labels

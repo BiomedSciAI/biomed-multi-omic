@@ -175,7 +175,43 @@ class BaseTrainingModule(pl.LightningModule):
         self.prediction_df = {}
         self.token_level_errors = {}
         self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
+        _pgc = self.trainer_config.perturbation_group_column
+        if _pgc not in self.sample_metadata_keys:
+            self.sample_metadata_keys.append(_pgc)
         self.save_hyperparameters(ignore=["tokenizer"])
+
+    def _forward_and_compute_losses(
+        self, batch: dict
+    ) -> tuple[SequenceClassifierOutputWithEmbeddings, dict]:
+        """
+        Run model forward pass and compute all losses for the batch.
+
+        This shared helper is called by ``training_step``, ``validation_step``,
+        and ``test_step`` to avoid repeating the forward + loss logic in each
+        method.  Subclasses may override this single method to change the loss
+        computation path (e.g., add an extra regulariser) without touching the
+        per-split logging/metrics logic.
+
+        Args:
+        ----
+            batch: Batch dictionary with keys ``"input_ids"``, ``"attention_mask"``
+                and ``"labels"``.
+
+        Returns:
+        -------
+            tuple: ``(outputs, all_losses)`` where *outputs* is the raw model
+                output and *all_losses* is the ``dict[str, Tensor]`` produced by
+                :func:`calculate_losses`.
+
+        """
+        labels = batch["labels"]
+        outputs = self.model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            labels=labels,
+        )
+        all_losses = calculate_losses(self.loss_tasks, outputs.logits, labels)
+        return outputs, all_losses
 
     def update_metrics(
         self,
@@ -188,6 +224,11 @@ class BaseTrainingModule(pl.LightningModule):
 
         Extracts and formats inputs for each task's metrics, then applies the
         appropriate metric collection based on the data split.
+
+        Tasks whose objective has ``contributes_sample_metrics == False`` (e.g.,
+        ``PopulationOTObjective``) are excluded from the per-sample metric path
+        to avoid shape mismatches when the label tensor does not align with the
+        batch dimension.
 
         Args:
         ----
@@ -205,6 +246,7 @@ class BaseTrainingModule(pl.LightningModule):
         metric_inputs = [
             loss_task.extract_metric_inputs(outputs.logits, labels)
             for loss_task in self.loss_tasks
+            if loss_task.objective.contributes_sample_metrics
         ]
         # Filter out None results (e.g., from conditional decoders like MVC)
         metric_inputs = [mi for mi in metric_inputs if mi is not None]
@@ -244,11 +286,18 @@ class BaseTrainingModule(pl.LightningModule):
         return results
 
     def initialize_metrics(self):
-        # Count how many tasks share each metric_key
-        metric_key_counts = Counter(lt.metric_key for lt in self.loss_tasks)
+        # Only count sample-metric tasks when detecting duplicate keys, and
+        # only register metrics for tasks that contribute per-sample metrics.
+        # Tasks with contributes_sample_metrics == False (e.g., population_ot)
+        # have empty default_metrics() and must not overwrite the metric
+        # collection registered by another task sharing the same metric_key.
+        sample_metric_tasks = [
+            lt for lt in self.loss_tasks if lt.objective.contributes_sample_metrics
+        ]
+        metric_key_counts = Counter(lt.metric_key for lt in sample_metric_tasks)
 
         metrics_dict = {}
-        for loss_task in self.loss_tasks:
+        for loss_task in sample_metric_tasks:
             # Perplexity needs logits, but duplicated metric_keys use predictions
             exclude = (
                 {"perplexity"} if metric_key_counts[loss_task.metric_key] > 1 else None
@@ -345,13 +394,7 @@ class BaseTrainingModule(pl.LightningModule):
         labels = batch["labels"]
         batch_size = batch["input_ids"].shape[0]
 
-        outputs = self.model(
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            labels=labels,
-        )
-
-        all_losses = calculate_losses(self.loss_tasks, outputs.logits, labels)
+        outputs, all_losses = self._forward_and_compute_losses(batch)
         loss = all_losses["loss"]
         step_metrics = self.update_metrics(labels, outputs, split="train")
 
@@ -371,13 +414,7 @@ class BaseTrainingModule(pl.LightningModule):
         labels = batch["labels"]
         batch_size = batch["input_ids"].shape[0]
 
-        outputs = self.model(
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            labels=labels,
-        )
-
-        all_losses = calculate_losses(self.loss_tasks, outputs.logits, labels)
+        outputs, all_losses = self._forward_and_compute_losses(batch)
         loss = all_losses["loss"]
         self.update_metrics(labels, outputs, split="validation")
 
@@ -399,13 +436,7 @@ class BaseTrainingModule(pl.LightningModule):
         labels = batch["labels"]
         batch_size = batch["input_ids"].shape[0]
 
-        outputs = self.model(
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            labels=labels,
-        )
-
-        all_losses = calculate_losses(self.loss_tasks, outputs.logits, labels)
+        outputs, all_losses = self._forward_and_compute_losses(batch)
         loss = all_losses["loss"]
         step_metrics = self.update_metrics(labels, outputs, split="test")
         with torch.no_grad():
@@ -512,12 +543,19 @@ class BaseTrainingModule(pl.LightningModule):
                 )
 
     def get_prediction_active_keys(self, label_task_only=False):
-        """Returns a list of keys to save batch predictions."""
+        """
+        Returns a list of keys to save batch predictions.
+
+        Tasks excluded:
+        - ``hce`` objectives (hierarchical cross-entropy has a special metric path)
+        - Tasks with ``contributes_sample_metrics == False`` (e.g., ``population_ot``),
+          which are population-level losses with no per-sample tensor alignment.
+        """
         active_keys = {
             loss_task.metric_key: loss_task
             for loss_task in self.loss_tasks
-            if loss_task.objective.name
-            != "hce"  # FIXED: Check objective.name instead of loss_display_name
+            if loss_task.objective.name != "hce"
+            and loss_task.objective.contributes_sample_metrics
             and (not label_task_only or isinstance(loss_task.source, LabelSource))
         }
         return active_keys
@@ -894,12 +932,30 @@ class BaseTrainingModule(pl.LightningModule):
                 split, label_metric_key
             )
 
+    # def get_supported_field_metric_keys(
+    #     self, limit_to_continuous_value_encoder=False
+    # ) -> set[str]:
+    #     is_supported_filter = (
+    #         lambda lt: isinstance(lt.source, FieldSource)
+    #         and "expressions" in lt.source.name
+    #     )
+    #     if limit_to_continuous_value_encoder:
+    #         filter_func = (
+    #             lambda lt: is_supported_filter(lt)
+    #             and lt.field.tokenization_strategy == "continuous_value_encoder"
+    #         )
+    #     else:
+    #         filter_func = is_supported_filter
+    #     return {lt.metric_key for lt in filter(filter_func, self.loss_tasks)}
+
     def get_supported_field_metric_keys(
         self, limit_to_continuous_value_encoder=False
     ) -> set[str]:
         is_supported_filter = (
             lambda lt: isinstance(lt.source, FieldSource)
             and "expressions" in lt.source.name
+            and lt.objective.contributes_sample_metrics
+            # <-- Add this check
         )
         if limit_to_continuous_value_encoder:
             filter_func = (

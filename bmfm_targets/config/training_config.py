@@ -241,12 +241,14 @@ class TrainerConfig:
     batch_prediction_behavior: str | int | None = None
     lora_config: Any = None
     enable_perturbation_metrics: bool = False
+    perturbation_group_column: str = "perturbed_genes"
 
     def __setstate__(self, state):
         # Handle removed fields from old checkpoints
         state.pop("metrics", None)
         state.pop("batch_size", None)
         state.setdefault("enable_perturbation_metrics", False)
+        state.setdefault("perturbation_group_column", "perturbed_genes")
         self.__dict__.update(state)
 
     def get_lora_config(self) -> LoraConfigWrapper:

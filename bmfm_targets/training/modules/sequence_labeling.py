@@ -25,6 +25,12 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
         ):
             # warned already in super()._shared_test_val_on_end
             return
+        if not self.trainer_config.enable_perturbation_metrics:
+            logger.info(
+                "Skipping perturbation/ChIP metrics: enable_perturbation_metrics=False. "
+                "Set trainer.enable_perturbation_metrics=true to enable."
+            )
+            return
         for field_metric_key in self.get_supported_field_metric_keys():
             logger.info(f"Calculating perturbation metrics for {field_metric_key}")
             if not any(
@@ -40,8 +46,27 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
             self.log_perturbation_specific_metrics(split, preds_df)
             break
 
-    def log_perturbation_specific_metrics(self, split, predictions_df):
+    def _resolve_perturbation_config(self) -> tuple[str, object]:
+        """
+        Return (group_column, group_means) from trainer_config and module kwargs.
+
+        Centralises the configuration resolution so the perturbation and ChIP
+        code paths differ only by config values, not by scattered attribute lookups.
+
+        Returns
+        -------
+        tuple[str, object | None]
+            ``group_column`` is the obs-level identifier used to group predictions
+            (e.g. ``"perturbed_genes"`` or ``"tissue_label"``).
+            ``group_means`` is the AnnData of pseudobulk ground-truth means, or
+            ``None`` if not available.
+        """
+        group_column = self.trainer_config.perturbation_group_column
         group_means = self.kwargs.get("group_means")
+        return group_column, group_means
+
+    def log_perturbation_specific_metrics(self, split, predictions_df):
+        group_column, group_means = self._resolve_perturbation_config()
         if group_means is None:
             logger.warning(
                 "No group_means found in kwargs cannot do perturbation metrics"
@@ -51,26 +76,36 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
         grouped_ground_truth = pm.get_grouped_ground_truth(group_means)
         logger.info("Averaging group predictions (pseudobulks)")
         grouped_predictions = pm.get_grouped_predictions(
-            predictions_df, grouped_ground_truth
+            predictions_df, grouped_ground_truth, group_column=group_column
         )
 
         top20 = self.kwargs.get("top20_de")
         agg_metrics_list = []
         agg_metrics_top20_list = []
 
-        logger.info("prepare args for discrimination score metric")
+        # discrimination_score is specific to gene perturbations (uses split("_") to
+        # decompose combinatorial double-gene knockouts). Skip for non-perturbation
+        # group columns such as tissue_label.
+        use_discrimination_score = group_column == "perturbed_genes"
+        distances = None
+        norm_ranks: dict = {}
 
-        (
-            real_effects,
-            pred_effects,
-            perturbations,
-            overlap_genes,
-        ) = pm.prepare_args_for_discrimination_score(grouped_predictions)
-        logger.info("Calculating discrimination score")
-        norm_ranks, distances = pm.discrimination_score(
-            real_effects, pred_effects, perturbations, overlap_genes
-        )
-        logger.info(f"Calculating metrics for {len(perturbations)} perturbations")
+        if use_discrimination_score:
+            logger.info("prepare args for discrimination score metric")
+            (
+                real_effects,
+                pred_effects,
+                perturbations,
+                overlap_genes,
+            ) = pm.prepare_args_for_discrimination_score(grouped_predictions)
+            logger.info("Calculating discrimination score")
+            norm_ranks, distances = pm.discrimination_score(
+                real_effects, pred_effects, perturbations, overlap_genes
+            )
+        else:
+            perturbations = grouped_predictions.index.get_level_values(0).unique()
+
+        logger.info(f"Calculating metrics for {len(perturbations)} groups")
         for pert in perturbations:
             if pert == "":
                 logger.warning(
@@ -80,13 +115,14 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
             agg_metrics = pm.get_aggregated_perturbation_metrics(
                 grouped_predictions.loc[pert]
             )
-            agg_metrics["discrimination_score"] = norm_ranks[pert]
+            if use_discrimination_score:
+                agg_metrics["discrimination_score"] = norm_ranks[pert]
             if len(perturbations) <= 10:
                 self.log_aggregate_perturbation_metrics(split, agg_metrics, pert, "")
             agg_metrics["pert"] = pert
             agg_metrics_list.append(agg_metrics)
 
-            if top20:
+            if top20 and use_discrimination_score:
                 # it is possible that some highly variable genes are missing
                 # mostly due to small batches and short max_length values
                 valid_indices = [
@@ -155,16 +191,21 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
             split, "aggregation metrics per perturbation", agg_metrics_df_with_mean
         )
         self.log_mean_aggregate_perturbation_metrics(agg_metrics_df, split, "")
-        self.plot_agg_pred_vs_baseline_scatter(
-            split, agg_metrics_df, "agg_pcc", "baseline_agg_pcc_from_avg_perturbation"
-        )
-        self.plot_heatmap(
-            split,
-            distances,
-            "ground-truth",
-            "predictions",
-            "Predicted vs ground-truth L1 distances of pseudo bulks",
-        )
+        if "baseline_agg_pcc_from_avg_perturbation" in agg_metrics_df.columns:
+            self.plot_agg_pred_vs_baseline_scatter(
+                split,
+                agg_metrics_df,
+                "agg_pcc",
+                "baseline_agg_pcc_from_avg_perturbation",
+            )
+        if distances is not None:
+            self.plot_heatmap(
+                split,
+                distances,
+                "ground-truth",
+                "predictions",
+                "Predicted vs ground-truth L1 distances of pseudo bulks",
+            )
 
         agg_metrics_top20_df = pd.DataFrame().from_records(agg_metrics_top20_list)
         if "pert" in agg_metrics_top20_df.columns:
@@ -176,22 +217,22 @@ class SequenceLabelingTrainingModule(BaseTrainingModule):
             agg_metrics_top20_df_with_mean = pd.concat(
                 [agg_metrics_top20_df, mean_row], ignore_index=True
             )
-
-        self.log_table(
-            split,
-            "aggregation metrics top20 differentially expressed genes per perturbation",
-            agg_metrics_top20_df_with_mean,
-        )
-        self.log_mean_aggregate_perturbation_metrics(
-            agg_metrics_top20_df, split, "top20_de_"
-        )
-        self.plot_agg_pred_vs_baseline_scatter(
-            split,
-            agg_metrics_top20_df,
-            "agg_pcc",
-            "baseline_agg_pcc_from_avg_perturbation",
-            "Top20 DE ",
-        )
+            self.log_table(
+                split,
+                "aggregation metrics top20 differentially expressed genes per perturbation",
+                agg_metrics_top20_df_with_mean,
+            )
+            self.log_mean_aggregate_perturbation_metrics(
+                agg_metrics_top20_df, split, "top20_de_"
+            )
+            if "baseline_agg_pcc_from_avg_perturbation" in agg_metrics_top20_df.columns:
+                self.plot_agg_pred_vs_baseline_scatter(
+                    split,
+                    agg_metrics_top20_df,
+                    "agg_pcc",
+                    "baseline_agg_pcc_from_avg_perturbation",
+                    "Top20 DE ",
+                )
 
     def plot_agg_pred_vs_baseline_scatter(
         self,

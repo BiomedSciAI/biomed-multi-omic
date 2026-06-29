@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import logging
 import os
@@ -158,7 +159,22 @@ class SCBertMainConfig:
         yaml_fields: list[FieldInfo] | None,
         is_training: bool,
     ) -> list[FieldInfo]:
-        """Merge fields: checkpoint wins for existing, new YAML fields added in training."""
+        """
+        Merge fields from checkpoint and YAML configs.
+
+        For training mode, conflicting fields (present in both checkpoint and YAML)
+        are merged attribute-by-attribute:
+        - Encoder/architecture attributes come from the CHECKPOINT (must match pretrained
+          weights): ``vocab_size``, ``pretrained_embedding``, ``vocab_update_strategy``,
+          ``tokenization_strategy``, ``num_special_tokens``, ``encoder_kwargs``,
+          ``datastore_config``.
+        - Decoder/task attributes come from the YAML (reflect the current downstream
+          task): ``decode_modes``, ``is_masked``, ``is_input``.
+
+        Brand-new YAML fields (not present in the checkpoint) are appended as-is.
+
+        For test/predict mode, checkpoint fields are returned unchanged.
+        """
         logger.info(
             msg=f"Merging fields: checkpoint fields: {ckpt_fields} and {yaml_fields}"
         )
@@ -179,11 +195,34 @@ class SCBertMainConfig:
             logger.info("fields: No YAML fields specified, using checkpoint fields")
             return ckpt_fields
 
-        # Training: merge - checkpoint fields win, new YAML fields added
+        # Training: attribute-aware merge for conflicting fields; append brand-new YAML fields.
+        # Encoder attrs (architecture / pretrained weights) come from checkpoint.
+        # Decoder/task attrs (decode_modes, is_masked, is_input) come from YAML.
         ckpt_field_names = {f.field_name for f in ckpt_fields}
-        yaml_field_names = {f.field_name for f in yaml_fields}
+        yaml_by_name = {f.field_name: f for f in yaml_fields}
 
-        merged = list(ckpt_fields)
+        merged = []
+        for ckpt_f in ckpt_fields:
+            yaml_f = yaml_by_name.get(ckpt_f.field_name)
+            if yaml_f is None:
+                # Field only in checkpoint — keep as-is
+                merged.append(ckpt_f)
+            else:
+                # Conflicting field: encoder attrs from checkpoint, decoder attrs from YAML
+                merged_f = dataclasses.replace(
+                    ckpt_f,
+                    decode_modes=yaml_f.decode_modes,
+                    is_masked=yaml_f.is_masked,
+                    is_input=yaml_f.is_input,
+                )
+                logger.info(
+                    f"fields: Merged '{ckpt_f.field_name}': encoder attrs from checkpoint "
+                    f"(vocab_size={ckpt_f.vocab_size}), decoder attrs from YAML "
+                    f"(decode_modes={yaml_f.decode_modes}, is_masked={yaml_f.is_masked}, "
+                    f"is_input={yaml_f.is_input})"
+                )
+                merged.append(merged_f)
+
         new_fields = [f for f in yaml_fields if f.field_name not in ckpt_field_names]
         if new_fields:
             logger.info(
@@ -191,12 +230,6 @@ class SCBertMainConfig:
                 f"{[f.field_name for f in new_fields]}"
             )
             merged.extend(new_fields)
-
-        conflicting = yaml_field_names & ckpt_field_names
-        if conflicting:
-            logger.info(
-                f"fields: Using checkpoint config for existing fields: {sorted(conflicting)}"
-            )
 
         return merged
 
@@ -226,8 +259,10 @@ class SCBertMainConfig:
                 )
             return ckpt_cols
 
-        # Training: YAML-authoritative
-        return yaml_cols if yaml_cols else ckpt_cols
+        # Training: YAML-authoritative. Use `is not None` so an explicit empty list
+        # (label_columns: []) is respected as "no labels" rather than falling back
+        # to the checkpoint's label columns.
+        return yaml_cols if yaml_cols is not None else ckpt_cols
 
     def _merge_configs_from_checkpoint(self) -> None:
         """Merge configs from checkpoint with YAML configs based on task type."""
@@ -354,6 +389,211 @@ class SCBertMainConfig:
         # Merge trainer config
         if ckpt_trainer_config and self.trainer:
             self.trainer = self.trainer.merge_from_checkpoint(ckpt_trainer_config)
+
+        # Reconcile built decoder heads against the active losses (prune ghost heads in
+        # training) and log checkpoint parameter / head accounting, so silent parameter
+        # blow-ups from the merge -- e.g. an unused WCED head adding ~73M params -- are
+        # surfaced rather than only discovered as an OOM.
+        self._reconcile_decode_heads_with_losses(is_training)
+        self._log_checkpoint_param_accounting(ckpt_dict, ckpt_model_config)
+
+    @staticmethod
+    def _loss_field_name(loss: Any) -> str | None:
+        """
+        Extract the field name a loss targets, across config forms.
+
+        Losses may be raw dicts / OmegaConf ``DictConfig`` (field-based losses carry a
+        ``field_name`` key; label-based losses carry ``label_column_name`` and are
+        ignored here) or bound/unbound ``LossTask`` objects exposing
+        ``source.field_name``.
+
+        Returns
+        -------
+            The field name, or ``None`` for label-based losses / unrecognized forms.
+        """
+        get = getattr(loss, "get", None)
+        if callable(get):
+            try:
+                field_name = loss.get("field_name")
+            except Exception:
+                field_name = None
+            if field_name is not None:
+                return field_name
+        source = getattr(loss, "source", None)
+        if source is not None:
+            field_name = getattr(source, "field_name", None)
+            if field_name is not None:
+                return field_name
+        return getattr(loss, "field_name", None)
+
+    def _reconcile_decode_heads_with_losses(self, is_training: bool) -> None:
+        """
+        Prune decoder heads no active loss references, and warn on mismatches.
+
+        A decoder head ``"{field_name}_{decode_mode}"`` is built whenever a field
+        declares ``decode_modes``. If no active loss references that field, the head is a
+        "ghost": it consumes parameters and GPU memory but receives no gradient. In
+        training such heads are dropped (the field's ``decode_modes`` is set to ``None``)
+        with a warning. Pruning never happens in test/predict because heads are needed to
+        produce outputs even without losses. Masked fields are never pruned (that would
+        violate the ``is_masked`` => ``decode_modes`` invariant); they only warn.
+
+        The inverse mismatch -- a loss referencing a field that builds no decode head --
+        is also surfaced as a warning.
+        """
+        if not is_training:
+            return
+        losses = getattr(self.trainer, "losses", None) if self.trainer else None
+        if not losses:
+            return
+
+        referenced = {
+            field_name
+            for field_name in (self._loss_field_name(loss) for loss in losses)
+            if field_name
+        }
+
+        new_fields = []
+        for f in self.fields:
+            if f.decode_modes and f.field_name not in referenced:
+                heads = [f"{f.field_name}_{mode}" for mode in f.decode_modes]
+                if f.is_masked:
+                    logger.warning(
+                        "decode heads: masked field '%s' declares heads %s but no active "
+                        "loss references it; leaving in place (check your losses config).",
+                        f.field_name,
+                        heads,
+                    )
+                    new_fields.append(f)
+                else:
+                    logger.warning(
+                        "decode heads: pruning unused head(s) %s -- no active loss "
+                        "references field '%s'. These would add untrained parameters and "
+                        "GPU memory. Add a loss for this field if the head is intended.",
+                        heads,
+                        f.field_name,
+                    )
+                    new_fields.append(dataclasses.replace(f, decode_modes=None))
+            else:
+                new_fields.append(f)
+        self.fields = new_fields
+
+        decoding_fields = {f.field_name for f in self.fields if f.decode_modes}
+        for field_name in referenced:
+            if field_name not in decoding_fields:
+                logger.warning(
+                    "decode heads: loss references field '%s' but no decode head will be "
+                    "built for it (field missing or has no decode_modes).",
+                    field_name,
+                )
+
+    def _estimate_head_params(
+        self, field: FieldInfo, mode: str, decoder_kwargs: Any, hidden_size: int | None
+    ) -> int | None:
+        """
+        Estimate the parameter count (weight + bias) of a decode head.
+
+        Returns ``None`` when the size cannot be determined (e.g. unknown
+        ``hidden_size`` or vocab size).
+        """
+        if not hidden_size:
+            return None
+        if mode == "wced":
+            vocab_field_name = (decoder_kwargs or {}).get("vocab_field")
+            vocab_field = next(
+                (f for f in self.fields if f.field_name == vocab_field_name), None
+            )
+            output_dim = getattr(vocab_field, "vocab_size", None)
+        elif mode == "token_scores":
+            output_dim = field.vocab_size
+        else:
+            output_dim = 1
+        if not output_dim:
+            return None
+        return output_dim * hidden_size + output_dim
+
+    def _log_checkpoint_param_accounting(self, ckpt_dict, ckpt_model_config) -> None:
+        """
+        Log checkpoint parameter and decoder-head accounting.
+
+        Surfaces silent parameter changes from the checkpoint merge -- e.g. an unused
+        WCED head adding ~73M params -- by reporting the checkpoint's total parameter
+        count, which decoder heads it contains, which heads this run will build, and the
+        estimated parameter delta for heads that are newly added (random-init) or dropped.
+
+        Diagnostic only: never raises -- any failure is logged at debug level.
+        """
+
+        def _cfg_get(cfg, key):
+            if cfg is None:
+                return None
+            value = getattr(cfg, key, None)
+            if value is None and hasattr(cfg, "get"):
+                try:
+                    value = cfg.get(key)
+                except Exception:
+                    value = None
+            return value
+
+        try:
+            state_dict = (
+                ckpt_dict.get("state_dict") if hasattr(ckpt_dict, "get") else None
+            )
+            if not state_dict:
+                return
+            total_params = sum(t.numel() for t in state_dict.values())
+
+            marker = ".field_decoders."
+            ckpt_head_params: dict[str, int] = {}
+            for key, tensor in state_dict.items():
+                idx = key.find(marker)
+                if idx == -1:
+                    continue
+                head = key[idx + len(marker) :].split(".")[0]
+                ckpt_head_params[head] = ckpt_head_params.get(head, 0) + tensor.numel()
+
+            build_head_specs = {
+                f"{f.field_name}_{mode}": (f, mode, kwargs)
+                for f in self.fields
+                for mode, kwargs in (f.decode_modes or {}).items()
+            }
+            build_heads = set(build_head_specs)
+            ckpt_heads = set(ckpt_head_params)
+
+            logger.info(
+                "checkpoint params: total=%d; checkpoint decode heads=%s; heads to build=%s",
+                total_params,
+                sorted(ckpt_heads),
+                sorted(build_heads),
+            )
+
+            dropped = ckpt_heads - build_heads
+            if dropped:
+                dropped_params = sum(ckpt_head_params[h] for h in dropped)
+                logger.warning(
+                    "checkpoint params: ~%d pretrained decode-head param(s) will be "
+                    "DROPPED -- in checkpoint but not built: %s",
+                    dropped_params,
+                    {h: ckpt_head_params[h] for h in sorted(dropped)},
+                )
+
+            added = build_heads - ckpt_heads
+            if added:
+                hidden_size = _cfg_get(ckpt_model_config, "hidden_size")
+                estimates = {
+                    h: self._estimate_head_params(*build_head_specs[h], hidden_size)
+                    for h in sorted(added)
+                }
+                total_added = sum(v for v in estimates.values() if v)
+                logger.warning(
+                    "checkpoint params: %d decode head(s) are NEW (random-init, not in "
+                    "checkpoint), adding ~%s params: %s",
+                    len(added),
+                    total_added or "unknown",
+                    estimates,
+                )
+        except Exception as exc:  # diagnostic only -- must not break config loading
+            logger.debug("checkpoint param accounting skipped: %s", exc)
 
     @staticmethod
     def _instantiate_and_setup_data_module(

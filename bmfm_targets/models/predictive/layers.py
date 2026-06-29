@@ -592,6 +592,17 @@ class SCBaseFieldDecoder(nn.Module):
                 field_logits[field_decoder_name] = field_decoder(
                     pooled_output, mvc_query_embeddings[field_name]
                 )
+            elif field_decoder_name.endswith("_wced"):
+                # WCED is a whole-cell decoder: only the decode token (index 0) is
+                # ever consumed downstream (see WCEDFieldSource.extract_logits, which
+                # slices result[:, 0, :]). Running the vocab-wide projection over the
+                # full sequence would materialize a [batch, seq_len, vocab] tensor and
+                # its gradient -- seq_len x larger than needed and the dominant
+                # activation-memory cost for large gene vocabularies. Restrict the
+                # projection to the decode token; output stays [batch, 1, vocab].
+                field_logits[field_decoder_name] = field_decoder(
+                    hidden_states[:, :1, :]
+                )
             else:
                 field_logits[field_decoder_name] = field_decoder(hidden_states)
         return field_logits
