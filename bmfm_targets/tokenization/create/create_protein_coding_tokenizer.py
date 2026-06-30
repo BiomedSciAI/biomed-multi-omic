@@ -62,17 +62,14 @@ def create_subset_tokenizer(
 
     json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
-    # 4. Rebuild added_tokens_decoder with the subset ids. transformers >= 5 prefers
-    #    this fast-path mapping over the legacy special_tokens_map.json when loading, so
-    #    it must stay consistent with the new vocab (a stale decoder collides on load,
-    #    and dropping it forces the special_tokens_map.json path, whose bare-dict
-    #    additional_special_tokens the Rust backend rejects).
+    # 4. Drop added_tokens_decoder. The runtime loader reads the added tokens straight
+    #    from tokenizer.json (MultiFieldTokenizer.load_subtokenizer loads via
+    #    tokenizer_file=), so a decoder blob in tokenizer_config.json is dead weight that
+    #    can silently drift from the subset vocab. Remove any stale one carried over from
+    #    the reference tokenizer.
     cfg_path = field_dir / "tokenizer_config.json"
     cfg = json.loads(cfg_path.read_text())
-    cfg["added_tokens_decoder"] = {
-        str(entry["id"]): {k: v for k, v in entry.items() if k != "id"}
-        for entry in data["added_tokens"]
-    }
+    cfg.pop("added_tokens_decoder", None)
     cfg_path.write_text(json.dumps(cfg, indent=2))
 
     # 5. Enforce Object Style in special_tokens_map.json

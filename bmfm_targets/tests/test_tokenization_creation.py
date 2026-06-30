@@ -60,31 +60,24 @@ def test_config_integrity(pc_tokenizer):
     assert data["additional_special_tokens"][0]["normalized"] is False
 
 
-def test_added_tokens_decoder_consistent_with_tokenizer_json():
+def test_genes_special_tokens_loaded_without_decoder_blob(pc_tokenizer):
     """
-    Drift guard: added_tokens_decoder in tokenizer_config.json must be consistent
-    with the added_tokens list in tokenizer.json.
+    The genes subtokenizer must expose its full special-token set even though
+    tokenizer_config.json carries no added_tokens_decoder blob.
 
-    create_protein_coding_tokenizer.py rebuilds added_tokens_decoder from the
-    added_tokens entries in tokenizer.json (lines 72-75 of the script).  If someone
-    edits tokenizer.json without re-running the script the two files diverge silently.
-    This test reproduces that exact derivation and compares against the committed blob.
+    The loader reads the tokens straight from tokenizer.json and re-registers the
+    [CLS_*]/[S]/[T] specials from special_tokens_map.json, so all_special_tokens must
+    match the reference all_genes_v2 tokenizer's genes field.
     """
-    tok_json = json.loads((_PC_VOCAB_DIR / "tokenizer.json").read_text())
-    tok_cfg = json.loads((_PC_VOCAB_DIR / "tokenizer_config.json").read_text())
+    mft, path = pc_tokenizer
 
-    # Reproduce the exact mapping built by create_subset_tokenizer (see
-    # create_protein_coding_tokenizer.py lines 72-75).
-    expected_decoder = {
-        str(entry["id"]): {k: v for k, v in entry.items() if k != "id"}
-        for entry in tok_json["added_tokens"]
-    }
-
-    committed_decoder = tok_cfg.get("added_tokens_decoder", {})
-
-    assert committed_decoder == expected_decoder, (
-        "added_tokens_decoder in tokenizer_config.json is out of sync with "
-        "added_tokens in tokenizer.json. Re-run "
-        "bmfm_targets/tokenization/create/create_protein_coding_tokenizer.py "
-        "to regenerate."
+    cfg = json.loads(
+        (path / "tokenizers" / "genes" / "tokenizer_config.json").read_text()
     )
+    assert "added_tokens_decoder" not in cfg
+
+    genes_specials = set(mft.get_field_tokenizer("genes").all_special_tokens)
+    ref_specials = set(
+        get_all_genes_v2_tokenizer().get_field_tokenizer("genes").all_special_tokens
+    )
+    assert genes_specials == ref_specials

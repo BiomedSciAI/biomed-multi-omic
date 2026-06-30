@@ -283,15 +283,20 @@ class MultiFieldTokenizer:
                 field_name,
             )
         try:
-            # Load the serialized fast tokenizer (tokenizer.json) verbatim — it already
+            # Load the serialized fast tokenizer (tokenizer.json) directly. It already
             # encodes the correct model (WordLevel for gene/expression vocabs, BPE for
-            # DNA) and pre_tokenizer, so there is nothing to rebuild. Going through
-            # BertTokenizerFast would discard that backend: transformers >= 5 aliases it
-            # to BertTokenizer, which rebuilds a WordPiece model from vocab.txt and forces
-            # a BertPreTokenizer, silently converting WordLevel gene vocabs to WordPiece
-            # and collapsing BPE DNA vocabs to [UNK]. transformers >= 5 also no longer
-            # reads the legacy special_tokens_map.json, so pass its entries explicitly to
-            # restore the pad/cls/sep/unk/mask attributes used for padding.
+            # DNA), the pre_tokenizer, and the complete added-token vocab, so there is
+            # nothing to rebuild. Loading the file directly (rather than via
+            # from_pretrained / BertTokenizerFast) sidesteps two transformers >= 5 traps:
+            #   * BertTokenizerFast is aliased to BertTokenizer, which rebuilds a WordPiece
+            #     model from vocab.txt — silently converting WordLevel gene vocabs to
+            #     WordPiece and collapsing BPE DNA vocabs to [UNK].
+            #   * from_pretrained mis-iterates a bare ``additional_special_tokens`` list in
+            #     tokenizer_config.json and crashes in the Rust ``add_tokens`` unless the
+            #     config also ships an ``added_tokens_decoder`` block.
+            # transformers >= 5 also no longer reads the legacy special_tokens_map.json, so
+            # pass its entries explicitly to restore the pad/cls/sep/unk/mask attributes
+            # used for padding.
             special_tokens_map_file = Path(path) / "special_tokens_map.json"
             special_tokens = (
                 json.loads(special_tokens_map_file.read_text())
@@ -299,14 +304,16 @@ class MultiFieldTokenizer:
                 else {}
             )
             # entries may be plain strings or serialised AddedToken dicts; reduce to the
-            # token content so they are valid from_pretrained kwargs (list-valued
-            # additional_special_tokens are handled by _register_added_special_tokens).
+            # token content so they are valid kwargs (list-valued additional_special_tokens
+            # are handled by _register_added_special_tokens below).
             special_tokens = {
                 key: (value["content"] if isinstance(value, dict) else value)
                 for key, value in special_tokens.items()
                 if not isinstance(value, list)
             }
-            loaded_tok = PreTrainedTokenizerFast.from_pretrained(path, **special_tokens)
+            loaded_tok = PreTrainedTokenizerFast(
+                tokenizer_file=str(Path(path) / "tokenizer.json"), **special_tokens
+            )
         except Exception as e:
             logger.error(f"failed to load {path} as a fast tokenizer")
             raise e
