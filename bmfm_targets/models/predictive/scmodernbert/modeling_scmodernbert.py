@@ -20,7 +20,6 @@ from transformers.utils.import_utils import (
 )
 
 from bmfm_targets.config import SCModernBertConfig
-from bmfm_targets.models.common.init_utils import init_unless_loaded
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
@@ -539,21 +538,19 @@ class SCModernBertPreTrainedModel(PreTrainedModel):
             cutoff_factor = 3
 
         def init_weight(module: nn.Module, std: float):
-            # Guard against transformers v5 re-calling _init_weights on already-loaded params.
-            init_unless_loaded(
+            # transformers v5 wraps initialize_weights with guard_torch_init_functions, so
+            # torch.nn.init.* calls automatically skip already-loaded params.
+            nn.init.trunc_normal_(
                 module.weight,
-                lambda: nn.init.trunc_normal_(
-                    module.weight,
-                    mean=0.0,
-                    std=std,
-                    a=-cutoff_factor * std,
-                    b=cutoff_factor * std,
-                ),
+                mean=0.0,
+                std=std,
+                a=-cutoff_factor * std,
+                b=cutoff_factor * std,
             )
 
             if isinstance(module, nn.Linear):
                 if module.bias is not None:
-                    init_unless_loaded(module.bias, lambda: nn.init.zeros_(module.bias))
+                    nn.init.zeros_(module.bias)
 
         stds = {
             "in": self.config.initializer_range,
@@ -570,9 +567,9 @@ class SCModernBertPreTrainedModel(PreTrainedModel):
             init_weight(module.Wqkv, stds["in"])
             init_weight(module.Wo, stds["out"])
         elif isinstance(module, nn.LayerNorm):
-            init_unless_loaded(module.weight, lambda: module.weight.data.fill_(1.0))
+            nn.init.ones_(module.weight)
             if module.bias is not None:
-                init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
+                nn.init.zeros_(module.bias)
 
     def set_attention_implementation(self, attn_implementation: dict | str):
         """Checks and dispatches to hhe requested attention implementation."""

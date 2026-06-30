@@ -16,7 +16,6 @@ from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_l
 from transformers.utils import logging
 
 from bmfm_targets.config import SCBertConfig
-from bmfm_targets.models.common.init_utils import init_unless_loaded
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
@@ -429,18 +428,14 @@ class SCBertPreTrainedModel(PreTrainedModel):
         if isinstance(module, nn.Linear):
             # Slightly different from the TF version which uses truncated_normal for initialization
             # cf https://github.com/pytorch/pytorch/pull/5617
-            # Guard against transformers v5 re-calling _init_weights on already-loaded params.
-            init_unless_loaded(
-                module.weight,
-                lambda: module.weight.data.normal_(
-                    mean=0.0, std=self.config.initializer_range
-                ),
-            )
+            # transformers v5 wraps initialize_weights with guard_torch_init_functions, so
+            # torch.nn.init.* calls automatically skip already-loaded params.
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
-                init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
+                nn.init.zeros_(module.bias)
         elif isinstance(module, nn.LayerNorm):
-            init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
-            init_unless_loaded(module.weight, lambda: module.weight.data.fill_(1.0))
+            nn.init.zeros_(module.bias)
+            nn.init.ones_(module.weight)
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, SCBertEncoder):

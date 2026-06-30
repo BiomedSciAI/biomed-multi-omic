@@ -25,7 +25,6 @@ from bmfm_targets.config.model_config import (
     PerformerKernel,
     SCPerformerConfig,
 )
-from bmfm_targets.models.common.init_utils import init_unless_loaded
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
@@ -858,30 +857,23 @@ class SCPerformerPreTrainedModel(PreTrainedModel):
     def _init_weights(self, module):
         """Initialize the weights."""
         if isinstance(module, nn.Linear):
-            # Guard against transformers v5 re-calling _init_weights on already-loaded params.
-            init_unless_loaded(
-                module.weight,
-                lambda: module.weight.data.normal_(
-                    mean=0.0, std=self.config.initializer_range
-                ),
-            )
+            # transformers v5 wraps initialize_weights with guard_torch_init_functions, so
+            # torch.nn.init.* calls automatically skip already-loaded params.
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
-                init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
+                nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            init_unless_loaded(
-                module.weight,
-                lambda: (
-                    module.weight.data.normal_(
-                        mean=0.0, std=self.config.initializer_range
-                    ),
-                    module.weight.data[module.padding_idx].zero_()
-                    if module.padding_idx is not None
-                    else None,
-                ),
-            )
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+            # Slicing weight[padding_idx] drops the _is_hf_initialized flag that the
+            # torch.nn.init guard relies on, so guard the padding-row zero explicitly.
+            # This mirrors transformers' own base _init_weights (modeling_utils.py).
+            if module.padding_idx is not None and not getattr(
+                module.weight, "_is_hf_initialized", False
+            ):
+                nn.init.zeros_(module.weight[module.padding_idx])
         elif isinstance(module, nn.LayerNorm):
-            init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
-            init_unless_loaded(module.weight, lambda: module.weight.data.fill_(1.0))
+            nn.init.zeros_(module.bias)
+            nn.init.ones_(module.weight)
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, SCPerformerEncoder):
