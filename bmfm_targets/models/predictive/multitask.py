@@ -199,7 +199,6 @@ class MultiTaskClassifier(nn.Module):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
@@ -209,7 +208,6 @@ class MultiTaskClassifier(nn.Module):
         outputs = self.base_model(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,

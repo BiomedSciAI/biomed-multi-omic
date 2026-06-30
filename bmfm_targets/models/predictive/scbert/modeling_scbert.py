@@ -12,17 +12,13 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_layer
+from transformers.pytorch_utils import apply_chunking_to_forward
 from transformers.utils import logging
 
 from bmfm_targets.config import SCBertConfig
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
-)
-from bmfm_targets.models.predictive._compat_utils import (
-    find_pruneable_heads_and_indices,
-    get_head_mask,
 )
 from bmfm_targets.models.predictive.attentions import attention_factory
 from bmfm_targets.models.predictive.layers import (
@@ -74,7 +70,6 @@ class SCBertSelfAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: (
@@ -135,10 +130,6 @@ class SCBertSelfAttention(nn.Module):
         # seem a bit unusual, but is taken from the original Transformer paper.
         attention_probs = self.dropout(attention_probs)
 
-        # Mask heads if we want to
-        if head_mask is not None:
-            attention_probs = attention_probs * head_mask
-
         context_layer: torch.Tensor = torch.matmul(attention_probs, value_layer)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
@@ -161,42 +152,10 @@ class SCBertAttention(nn.Module):
         self.output = SCSelfOutput(config)
         self.pruned_heads: set[int] = set()
 
-    def prune_heads(self, heads: list[int]):
-        """
-        Prune heads of the layer.
-
-        Args:
-        ----
-            heads (list[int]): A list of heads to prune.
-
-        """
-        if len(heads) == 0:
-            return
-        heads, index = find_pruneable_heads_and_indices(
-            heads,
-            self.self.num_attention_heads,
-            self.self.attention_head_size,
-            self.pruned_heads,
-        )
-
-        # Prune linear layers
-        self.self.query = prune_linear_layer(self.self.query, index)
-        self.self.key = prune_linear_layer(self.self.key, index)
-        self.self.value = prune_linear_layer(self.self.value, index)
-        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
-
-        # Update hyper params and store pruned heads
-        self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
-        self.self.all_head_size = (
-            self.self.attention_head_size * self.self.num_attention_heads
-        )
-        self.pruned_heads = self.pruned_heads.union(heads)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
@@ -205,7 +164,6 @@ class SCBertAttention(nn.Module):
         self_outputs = self.self(
             hidden_states,
             attention_mask,
-            head_mask,
             encoder_hidden_states,
             encoder_attention_mask,
             past_key_value,
@@ -241,7 +199,6 @@ class SCBertLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
@@ -254,7 +211,6 @@ class SCBertLayer(nn.Module):
         self_attention_outputs = self.attention(
             hidden_states,
             attention_mask,
-            head_mask,
             output_attentions=output_attentions,
             past_key_value=self_attn_past_key_value,
         )
@@ -284,7 +240,6 @@ class SCBertLayer(nn.Module):
             cross_attention_outputs = self.crossattention(
                 attention_output,
                 attention_mask,
-                head_mask,
                 encoder_hidden_states,
                 encoder_attention_mask,
                 cross_attn_past_key_value,
@@ -332,7 +287,6 @@ class SCBertEncoder(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
@@ -359,7 +313,6 @@ class SCBertEncoder(nn.Module):
                 assert all_hidden_states is not None
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            layer_head_mask = head_mask[i] if head_mask is not None else None
             past_key_value = past_key_values[i] if past_key_values is not None else None
 
             if self.gradient_checkpointing and self.training:
@@ -374,7 +327,6 @@ class SCBertEncoder(nn.Module):
                     create_custom_forward(layer_module),
                     hidden_states,
                     attention_mask,
-                    layer_head_mask,
                     encoder_hidden_states,
                     encoder_attention_mask,
                 )
@@ -382,7 +334,6 @@ class SCBertEncoder(nn.Module):
                 layer_outputs = layer_module(
                     hidden_states,
                     attention_mask,
-                    layer_head_mask,
                     encoder_hidden_states,
                     encoder_attention_mask,
                     past_key_value,
@@ -474,21 +425,10 @@ class SCBertModel(SCBertPreTrainedModel):
     # def set_input_embeddings(self, value):
     #    self.embeddings.gene_embeddings = value
 
-    def _prune_heads(self, heads_to_prune):
-        """
-        Prunes heads of the model.
-
-        heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
-        class PreTrainedModel
-        """
-        for layer, heads in heads_to_prune.items():
-            self.encoder.layer[layer].attention.prune_heads(heads)
-
     def forward(
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -565,13 +505,6 @@ class SCBertModel(SCBertPreTrainedModel):
         else:
             encoder_extended_attention_mask = None
 
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape bsz x n_heads x N x N
-        # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
-        # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = get_head_mask(head_mask, self.config.num_hidden_layers)
-
         embedding_output = self.embeddings(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
@@ -580,7 +513,6 @@ class SCBertModel(SCBertPreTrainedModel):
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
-            head_mask=head_mask,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_extended_attention_mask,
             past_key_values=past_key_values,
@@ -657,7 +589,6 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -676,10 +607,6 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -701,7 +628,6 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
         outputs = self.scbert(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
@@ -784,7 +710,6 @@ class SCBertForSequenceClassification(SCBertPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
@@ -801,10 +726,6 @@ class SCBertForSequenceClassification(SCBertPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -821,7 +742,6 @@ class SCBertForSequenceClassification(SCBertPreTrainedModel):
         outputs = self.scbert(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -896,7 +816,6 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -915,10 +834,6 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -940,7 +855,6 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
         outputs = self.scbert(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
@@ -1013,7 +927,6 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -1033,10 +946,6 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -1058,7 +967,6 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
         outputs = self.scbert(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,

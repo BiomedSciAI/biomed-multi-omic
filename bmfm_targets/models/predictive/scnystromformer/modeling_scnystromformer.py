@@ -12,17 +12,13 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_layer
+from transformers.pytorch_utils import apply_chunking_to_forward
 from transformers.utils import logging
 
 from bmfm_targets.config import SCNystromformerConfig
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
-)
-from bmfm_targets.models.predictive._compat_utils import (
-    find_pruneable_heads_and_indices,
-    get_head_mask,
 )
 from bmfm_targets.models.predictive.layers import (
     SCEmbeddingsLayer,
@@ -247,29 +243,6 @@ class SCNystromformerAttention(nn.Module):
         self.output = SCSelfOutput(config)
         self.pruned_heads = set()
 
-    def prune_heads(self, heads):
-        if len(heads) == 0:
-            return
-        heads, index = find_pruneable_heads_and_indices(
-            heads,
-            self.self.num_attention_heads,
-            self.self.attention_head_size,
-            self.pruned_heads,
-        )
-
-        # Prune linear layers
-        self.self.query = prune_linear_layer(self.self.query, index)
-        self.self.key = prune_linear_layer(self.self.key, index)
-        self.self.value = prune_linear_layer(self.self.value, index)
-        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
-
-        # Update hyper params and store pruned heads
-        self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
-        self.self.all_head_size = (
-            self.self.attention_head_size * self.self.num_attention_heads
-        )
-        self.pruned_heads = self.pruned_heads.union(heads)
-
     def forward(self, hidden_states, attention_mask=None, output_attentions=False):
         self_outputs = self.self(hidden_states, attention_mask, output_attentions)
         attention_output = self.output(self_outputs[0], hidden_states)
@@ -328,7 +301,6 @@ class SCNystromformerEncoder(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
     ):
@@ -429,21 +401,12 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
     # def set_input_embeddings(self, value):
     #     self.embeddings.word_embeddings = value
 
-    def _prune_heads(self, heads_to_prune):
-        """
-        Prunes heads of the model. heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
-        class PreTrainedModel.
-        """
-        for layer, heads in heads_to_prune.items():
-            self.encoder.layer[layer].attention.prune_heads(heads)
-
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
         attention_mask: torch.FloatTensor | None = None,
         token_type_ids: torch.LongTensor | None = None,
         position_ids: torch.LongTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
@@ -483,13 +446,6 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
             attention_mask, input_shape
         )
 
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape bsz x n_heads x N x N
-        # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
-        # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = get_head_mask(head_mask, self.config.num_hidden_layers)
-
         embedding_output = self.embeddings(
             input_ids=input_ids,
         )
@@ -497,7 +453,6 @@ class SCNystromformerModel(SCNystromformerPreTrainedModel):
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
-            head_mask=head_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -570,7 +525,6 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
@@ -587,10 +541,6 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -604,7 +554,6 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
         outputs = self.scnystromformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -697,7 +646,6 @@ class SCNystromformerForSequenceClassification(SCNystromformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
@@ -714,10 +662,6 @@ class SCNystromformerForSequenceClassification(SCNystromformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -734,7 +678,6 @@ class SCNystromformerForSequenceClassification(SCNystromformerPreTrainedModel):
         outputs = self.scnystromformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -816,7 +759,6 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
@@ -833,10 +775,6 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -850,7 +788,6 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
         outputs = self.scnystromformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -921,7 +858,6 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
@@ -938,10 +874,6 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -955,7 +887,6 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
         outputs = self.scnystromformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,

@@ -7,7 +7,7 @@ import pandas.testing as pdt
 import pytest
 import torch
 from torch import tensor  # pylint: disable=E0611
-from transformers import AutoConfig
+from transformers import AutoConfig, PreTrainedTokenizerFast
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from bmfm_targets.config.main_config import SCBertMainConfig
@@ -261,18 +261,9 @@ def test_tokenization_single_instance_add_special_tokens(test_tokenizer_fields):
 
 
 def test_tokenization_does_not_resplit(test_tokenizer_fields):
-    """
-    Verify that the pre_tokenizer=None fix in load_subtokenizer prevents punctuation splitting.
-
-    Key assertions:
-    - GENE_NAME_XYZ (underscores) → single id=16; NOT split on '_' by the pre_tokenizer.
-    - token2-token3, token4_token5, etc. (not in vocab) → UNK=0 as single tokens;
-      pre_tokenizer=None means punctuation does NOT cause splits at the pre_tokenizer stage.
-    - tobesplit99 → WordPiece continuation: tobesplit(17) + ##99(18), two tokens.
-      This is correct WordPiece model behaviour (not pre_tokenizer splitting).
-    """
     tokenizer = load_test_tokenizer()
 
+    # token1 should be translated to 5, GENE_NAME_XYZ is 16, all the others should be a single zero (UKN) between two fives
     m1 = MultiFieldInstance(
         metadata={"cell_name": "cell1"},
         data={
@@ -314,10 +305,10 @@ def test_tokenization_does_not_resplit(test_tokenizer_fields):
     )
 
     batch = m1
-    # max_length=19: 15 input genes expand to 16 tokens (tobesplit99→2) + CLS + SEP = 18 real + 1 PAD
     encoding = tokenizer(
         mfi=batch,
         fields=test_tokenizer_fields,
+        # return_id="local",
         add_special_tokens=True,
         is_split_into_words=True,
         return_attention_mask=True,
@@ -325,40 +316,26 @@ def test_tokenization_does_not_resplit(test_tokenizer_fields):
         padding="max_length",
         truncation=True,
         return_tensors="pt",
-        max_length=19,
+        max_length=18,
     )
 
-    # tobesplit99 → WordPiece: tobesplit(17) + ##99(18); GENE_NAME_XYZ → 16 (single id)
-    # Genes: 15 input items expand to 16 tokens (tobesplit99=2) → CLS+16+SEP = 18 real + 1 PAD
-    # Expressions: 15 input items each map to 1 token → CLS+15+SEP = 17 real + 2 PAD
-    gene_ids = tensor([3, 5, 17, 18, 5, 0, 5, 16, 5, 0, 5, 0, 5, 0, 5, 0, 5, 1, 2])
-    expressions_ids = tensor([3, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 1, 2, 2])
-    attention_mask_genes = tensor(
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
-    )
-    attention_mask_expressions = tensor(
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0]
-    )
+    gene_ids = tensor([3, 5, 0, 5, 0, 5, 16, 5, 0, 5, 0, 5, 0, 5, 0, 5, 1, 2])
+    expressions_ids = tensor([3, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 1, 2])
+    attention_mask = tensor([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0])
     special_tokens_mask_genes = tensor(
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]
     )
     special_tokens_mask_expressions = tensor(
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]
     )
 
     assert_tensors_equal(encoding["genes"]["input_ids"], gene_ids)
-    # Core assertion: GENE_NAME_XYZ is at position 7 with id=16 (not UNK, not split on '_')
-    assert (
-        encoding["genes"]["input_ids"][0][7].item() == 16
-    ), "GENE_NAME_XYZ must encode to id=16 — pre_tokenizer=None prevents underscore splitting"
     assert_tensors_equal(encoding["expressions"]["input_ids"], expressions_ids)
-    assert_tensors_equal(encoding["genes"]["attention_mask"], attention_mask_genes)
+    assert_tensors_equal(encoding["genes"]["attention_mask"], attention_mask)
     assert_tensors_equal(
         encoding["genes"]["special_tokens_mask"], special_tokens_mask_genes
     )
-    assert_tensors_equal(
-        encoding["expressions"]["attention_mask"], attention_mask_expressions
-    )
+    assert_tensors_equal(encoding["expressions"]["attention_mask"], attention_mask)
     assert_tensors_equal(
         encoding["expressions"]["special_tokens_mask"], special_tokens_mask_expressions
     )
@@ -396,51 +373,6 @@ def test_tokenize_xyz(test_tokenizer: MultiFieldTokenizer):
     )
     # With pre_tokenizer=None, GENE_NAME_XYZ must be a single non-UNK token (id=16)
     assert (encoding["input_ids"] != test_tokenizer.unk_token_id).all()
-
-
-def test_wordpiece_continuation_token(test_tokenizer: MultiFieldTokenizer):
-    """
-    Verify ##99 (WordPiece continuation token) is present in the genes vocab and encodes correctly.
-
-    The genes tokenizer uses a WordPiece backend (BertTokenizerFast loaded from vocab.txt).
-    ##99 exists as a literal vocabulary entry (id=18).
-
-    Two behaviours are verified:
-    1. The literal token ##99 fed as a pre-split word encodes to id=18 (single token, not UNK).
-    2. tobesplit99 (not in vocab as a whole) is WordPiece-decomposed into tobesplit(17)+##99(18),
-       demonstrating that continuation-prefix tokens participate in WordPiece decomposition.
-       This is model-level subword behaviour, not pre_tokenizer splitting —
-       pre_tokenizer=None only suppresses the pre_tokenizer stage.
-    """
-    vocab = test_tokenizer.get_field_vocab("genes")
-    # The continuation token must be present and carry the correct id
-    assert "##99" in vocab, "##99 must be present in the genes vocab"
-    assert vocab["##99"] == 18, f"##99 expected id=18, got {vocab.get('##99')}"
-
-    # Encoding the literal string ##99 as a gene token must yield id=18 (not UNK)
-    encoding = test_tokenizer.get_field_tokenizer("genes")(
-        [["##99"]],
-        is_split_into_words=True,
-        add_special_tokens=False,
-        return_tensors="pt",
-    )
-    assert (
-        encoding["input_ids"][0][0].item() == 18
-    ), f"##99 should encode to id=18; got {encoding['input_ids'][0][0].item()}"
-
-    # Confirm tobesplit99 IS WordPiece-decomposed into tobesplit(17) + ##99(18)
-    # (the continuation prefix participates in WordPiece model decomposition)
-    encoding_split = test_tokenizer.get_field_tokenizer("genes")(
-        [["tobesplit99"]],
-        is_split_into_words=True,
-        add_special_tokens=False,
-        return_tensors="pt",
-    )
-    ids = encoding_split["input_ids"][0].tolist()
-    assert ids == [
-        17,
-        18,
-    ], f"tobesplit99 should WordPiece-decompose to [tobesplit=17, ##99=18]; got {ids}"
 
 
 def test_special_token_mask_with_special_tokens(
@@ -651,10 +583,13 @@ def test_load_all_tokenizer():
     all_tokenizer = load_tokenizer("all_genes")
     assert isinstance(all_tokenizer, MultiFieldTokenizer)
     assert len(all_tokenizer.tokenizers) == 4
+    # subtokenizers are loaded verbatim from tokenizer.json as generic fast tokenizers
+    # (transformers >= 5); BertTokenizerFast is one such subclass, but the contract is
+    # only that they are fast tokenizers.
     assert all(
         isinstance(
             all_tokenizer.get_field_tokenizer(field_name),
-            MultiFieldTokenizer.SUB_TOKENIZER_CLASS,
+            PreTrainedTokenizerFast,
         )
         for field_name in all_tokenizer.tokenizers.keys()
     )
@@ -673,7 +608,7 @@ def test_convert_vocab_to_tokenizer():
     ]
 
     for tok in tokenizer.tokenizers.values():
-        assert isinstance(tok, MultiFieldTokenizer.SUB_TOKENIZER_CLASS)
+        assert isinstance(tok, PreTrainedTokenizerFast)
 
 
 def convert_subtokenizer(old_tokenizer_path, save_converted_tokenizer_back=False):

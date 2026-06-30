@@ -17,7 +17,7 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_layer
+from transformers.pytorch_utils import apply_chunking_to_forward
 from transformers.utils import logging
 
 from bmfm_targets.config.model_config import (
@@ -28,10 +28,6 @@ from bmfm_targets.config.model_config import (
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
-)
-from bmfm_targets.models.predictive._compat_utils import (
-    find_pruneable_heads_and_indices,
-    get_head_mask,
 )
 from bmfm_targets.models.predictive.layers import (
     SCEmbeddingsLayer,
@@ -56,9 +52,6 @@ except ImportError:
 @contextmanager
 def null_context():
     yield
-
-
-# from .modeling_utils import find_pruneable_heads_and_indices, prune_linear_layer
 
 
 def exists(val):
@@ -382,7 +375,6 @@ class SCPerformerSelfAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: (
@@ -458,11 +450,10 @@ class SCPerformerSelfAttention(nn.Module):
         mask = attention_mask[:, None, :, None]
         value_layer = value_layer * mask
         attention_output = linear_attention(q, k, value_layer)
-        return self._finalize_attention_output(attention_output, head_mask)
-        # return self.compute_attention_with_projected_queries_and_keys(q, k, value_layer, mask=attention_mask, head_mask=head_mask, out_layer=self.out)
+        return self._finalize_attention_output(attention_output)
 
     def compute_attention_with_projected_queries_and_keys(
-        self, q_prime, k_prime, v, mask=None, head_mask=None, out_layer=None
+        self, q_prime, k_prime, v, mask=None, out_layer=None
     ):
         """
         Computes the attention output given Q' and K' from the above get_projected_queries_and_keys method.
@@ -490,7 +481,7 @@ class SCPerformerSelfAttention(nn.Module):
                 q_prime, k_prime_t
             )
 
-        return self._finalize_attention_output(output, head_mask)
+        return self._finalize_attention_output(output)
 
     def _numerator_for_projected_queries_and_keys(
         self, q_prime, k_prime_t, v, mask=None
@@ -534,15 +525,9 @@ class SCPerformerSelfAttention(nn.Module):
             torch.abs(denom) <= self.normalization_stabilizer
         )
 
-    def _finalize_attention_output(
-        self, context, head_mask=None, att_map_to_output=None
-    ):
+    def _finalize_attention_output(self, context, att_map_to_output=None):
         def unshape(x):
             return x.transpose(1, 2).reshape(x.shape[0], -1, x.shape[1] * x.shape[-1])
-
-        # Mask heads if we want to
-        if head_mask is not None:
-            context *= head_mask
 
         context = unshape(context)  # (bs, q_length, dim)
         context = self.out(context)  # (bs, q_length, dim)
@@ -557,20 +542,6 @@ class SCPerformerSelfAttention(nn.Module):
         self.s = None
         self.z = None
 
-    def prune_heads(self, heads):
-        if len(heads) == 0:
-            return
-
-        attention_head_size = self.hidden_size // self.num_attention_heads
-        heads, index = find_pruneable_heads_and_indices(
-            heads, self.num_attention_heads, attention_head_size, self.pruned_heads
-        )
-
-        # Update hyper params
-        self.num_attention_heads -= len(heads)
-        self.hidden_size = attention_head_size * self.num_attention_heads
-        self.pruned_heads = self.pruned_heads.union(heads)
-
 
 class SCPerformerAttention(nn.Module):
     def __init__(self, config):
@@ -579,42 +550,10 @@ class SCPerformerAttention(nn.Module):
         self.output = SCSelfOutput(config)
         self.pruned_heads: set[int] = set()
 
-    def prune_heads(self, heads: list[int]):
-        """
-        Prune heads of the layer.
-
-        Args:
-        ----
-            heads (list[int]): A list of heads to prune.
-
-        """
-        if len(heads) == 0:
-            return
-        heads, index = find_pruneable_heads_and_indices(
-            heads,
-            self.self.num_attention_heads,
-            self.self.attention_head_size,
-            self.pruned_heads,
-        )
-
-        # Prune linear layers
-        self.self.query = prune_linear_layer(self.self.query, index)
-        self.self.key = prune_linear_layer(self.self.key, index)
-        self.self.value = prune_linear_layer(self.self.value, index)
-        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
-
-        # Update hyper params and store pruned heads
-        self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
-        self.self.all_head_size = (
-            self.self.attention_head_size * self.self.num_attention_heads
-        )
-        self.pruned_heads = self.pruned_heads.union(heads)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
@@ -623,7 +562,6 @@ class SCPerformerAttention(nn.Module):
         self_outputs = self.self(
             hidden_states,
             attention_mask,
-            head_mask,
             encoder_hidden_states,
             encoder_attention_mask,
             past_key_value,
@@ -657,7 +595,6 @@ class SCPerformerLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
@@ -670,7 +607,6 @@ class SCPerformerLayer(nn.Module):
         self_attention_outputs = self.attention(
             hidden_states,
             attention_mask,
-            head_mask,
             output_attentions=output_attentions,
             past_key_value=self_attn_past_key_value,
         )
@@ -700,7 +636,6 @@ class SCPerformerLayer(nn.Module):
             cross_attention_outputs = self.crossattention(
                 attention_output,
                 attention_mask,
-                head_mask,
                 encoder_hidden_states,
                 encoder_attention_mask,
                 cross_attn_past_key_value,
@@ -748,7 +683,6 @@ class SCPerformerEncoder(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
@@ -775,7 +709,6 @@ class SCPerformerEncoder(nn.Module):
                 assert all_hidden_states is not None
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            layer_head_mask = head_mask[i] if head_mask is not None else None
             past_key_value = past_key_values[i] if past_key_values is not None else None
 
             if self.gradient_checkpointing and self.training:
@@ -790,7 +723,6 @@ class SCPerformerEncoder(nn.Module):
                     create_custom_forward(layer_module),
                     hidden_states,
                     attention_mask,
-                    layer_head_mask,
                     encoder_hidden_states,
                     encoder_attention_mask,
                 )
@@ -798,7 +730,6 @@ class SCPerformerEncoder(nn.Module):
                 layer_outputs = layer_module(
                     hidden_states,
                     attention_mask,
-                    layer_head_mask,
                     encoder_hidden_states,
                     encoder_attention_mask,
                     past_key_value,
@@ -915,21 +846,10 @@ class SCPerformerModel(SCPerformerPreTrainedModel):
     # def set_input_embeddings(self, value):
     #    self.embeddings.gene_embeddings = value
 
-    def _prune_heads(self, heads_to_prune):
-        """
-        Prunes heads of the model.
-
-        heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
-        class PreTrainedModel
-        """
-        for layer, heads in heads_to_prune.items():
-            self.encoder.layer[layer].attention.prune_heads(heads)
-
     def forward(
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -1005,13 +925,6 @@ class SCPerformerModel(SCPerformerPreTrainedModel):
         else:
             encoder_extended_attention_mask = None
 
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape bsz x n_heads x N x N
-        # input head_mask has shape [num_attention_heads] or [num_hidden_layers x num_attention_heads]
-        # and head_mask is converted to shape [num_hidden_layers x batch x num_attention_heads x seq_length x seq_length]
-        head_mask = get_head_mask(head_mask, self.config.num_hidden_layers)
-
         embedding_output = self.embeddings(
             input_ids=input_ids,
             # inputs_embeds=inputs_embeds,
@@ -1020,7 +933,6 @@ class SCPerformerModel(SCPerformerPreTrainedModel):
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_extended_attention_mask,
             past_key_values=past_key_values,
@@ -1098,7 +1010,6 @@ class SCPerformerForMaskedLM(SCPerformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -1117,10 +1028,6 @@ class SCPerformerForMaskedLM(SCPerformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -1142,7 +1049,6 @@ class SCPerformerForMaskedLM(SCPerformerPreTrainedModel):
         outputs = self.scperformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
@@ -1225,7 +1131,6 @@ class SCPerformerForSequenceClassification(SCPerformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         output_attentions: bool | None = None,
@@ -1242,10 +1147,6 @@ class SCPerformerForSequenceClassification(SCPerformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -1262,7 +1163,6 @@ class SCPerformerForSequenceClassification(SCPerformerPreTrainedModel):
         outputs = self.scperformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -1337,7 +1237,6 @@ class SCPerformerForSequenceLabeling(SCPerformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -1356,10 +1255,6 @@ class SCPerformerForSequenceLabeling(SCPerformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -1381,7 +1276,6 @@ class SCPerformerForSequenceLabeling(SCPerformerPreTrainedModel):
         outputs = self.scperformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
@@ -1454,7 +1348,6 @@ class SCPerformerForMultiTaskModeling(SCPerformerPreTrainedModel):
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
         encoder_attention_mask: torch.Tensor | None = None,
@@ -1473,10 +1366,6 @@ class SCPerformerForMultiTaskModeling(SCPerformerPreTrainedModel):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are NOT MASKED,
                 - 0 for tokens that are MASKED.
-            head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_hidden_layers, num_heads)`, `optional`):
-                Mask to nullify selected heads of the self-attention modules. Mask values selected in ``[0, 1]``:
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
             inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, num_fields, sequence_length, hidden_size)`, `optional`):
                 Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
                 This is useful if you want more control over how to convert :obj:`input_ids` indices into associated vectors
@@ -1498,7 +1387,6 @@ class SCPerformerForMultiTaskModeling(SCPerformerPreTrainedModel):
         outputs = self.scperformer(
             input_ids,
             attention_mask=attention_mask,
-            head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,

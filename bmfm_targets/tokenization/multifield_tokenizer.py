@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 from tokenizers import Tokenizer
+from tokenizers.normalizers import BertNormalizer
 from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.models.bert import BertTokenizerFast
@@ -282,46 +283,58 @@ class MultiFieldTokenizer:
                 field_name,
             )
         try:
-            if _is_bpe_tokenizer(path):
-                # transformers >= 5 merged BertTokenizerFast into BertTokenizer, which
-                # rebuilds a WordPiece backend from vocab.txt and unconditionally forces
-                # a BertPreTokenizer, discarding the backend stored in tokenizer.json.
-                # For the BPE DNA vocabs that collapses every sequence to [UNK], so load
-                # tokenizer.json verbatim to keep the real BPE model and pre-tokenizer.
-                # v5 also no longer reads the legacy special_tokens_map.json, so pass it
-                # explicitly to restore the pad/cls/sep/unk/mask attributes needed for
-                # padding.
-                special_tokens_map_file = Path(path) / "special_tokens_map.json"
-                special_tokens = (
-                    json.loads(special_tokens_map_file.read_text())
-                    if special_tokens_map_file.is_file()
-                    else {}
-                )
-                # entries may be plain strings or serialised AddedToken dicts; reduce to
-                # the token content so they are valid from_pretrained kwargs.
-                special_tokens = {
-                    key: (value["content"] if isinstance(value, dict) else value)
-                    for key, value in special_tokens.items()
-                    if not isinstance(value, list)
-                }
-                loaded_tok = PreTrainedTokenizerFast.from_pretrained(
-                    path, **special_tokens
-                )
-            else:
-                loaded_tok = self.SUB_TOKENIZER_CLASS.from_pretrained(
-                    path,
-                    do_lower_case=False,
-                    tokenize_chinese_chars=False,
-                    clean_text=False,
-                    strip_accents=None,
-                )
-                # v5 BertTokenizerFast re-applies BertPreTokenizer unconditionally; our
-                # WordLevel gene/token vocabs must not split on punctuation/hyphens.
-                if hasattr(loaded_tok, "backend_tokenizer"):
-                    loaded_tok.backend_tokenizer.pre_tokenizer = None
+            # Load the serialized fast tokenizer (tokenizer.json) verbatim — it already
+            # encodes the correct model (WordLevel for gene/expression vocabs, BPE for
+            # DNA) and pre_tokenizer, so there is nothing to rebuild. Going through
+            # BertTokenizerFast would discard that backend: transformers >= 5 aliases it
+            # to BertTokenizer, which rebuilds a WordPiece model from vocab.txt and forces
+            # a BertPreTokenizer, silently converting WordLevel gene vocabs to WordPiece
+            # and collapsing BPE DNA vocabs to [UNK]. transformers >= 5 also no longer
+            # reads the legacy special_tokens_map.json, so pass its entries explicitly to
+            # restore the pad/cls/sep/unk/mask attributes used for padding.
+            special_tokens_map_file = Path(path) / "special_tokens_map.json"
+            special_tokens = (
+                json.loads(special_tokens_map_file.read_text())
+                if special_tokens_map_file.is_file()
+                else {}
+            )
+            # entries may be plain strings or serialised AddedToken dicts; reduce to the
+            # token content so they are valid from_pretrained kwargs (list-valued
+            # additional_special_tokens are handled by _register_added_special_tokens).
+            special_tokens = {
+                key: (value["content"] if isinstance(value, dict) else value)
+                for key, value in special_tokens.items()
+                if not isinstance(value, list)
+            }
+            loaded_tok = PreTrainedTokenizerFast.from_pretrained(path, **special_tokens)
         except Exception as e:
             logger.error(f"failed to load {path} as a fast tokenizer")
             raise e
+
+        # transformers 4 built every subtokenizer with do_lower_case=False,
+        # tokenize_chinese_chars=False, clean_text=False, strip_accents=None, overriding
+        # whatever normalizer was serialized. Some shipped gene vocabs (all_genes_vocab,
+        # gene2vec_vocab) and the test fixtures carry a stale lowercase=True / chinese=True
+        # BertNormalizer that would lowercase gene symbols (TP53 -> tp53 -> [UNK]). Re-apply
+        # the canonical case-sensitive normalizer rather than trusting the serialized one.
+        if getattr(loaded_tok, "backend_tokenizer", None) is not None:
+            loaded_tok.backend_tokenizer.normalizer = BertNormalizer(
+                clean_text=False,
+                handle_chinese_chars=False,
+                strip_accents=False,
+                lowercase=False,
+            )
+
+        # transformers 4 loaded these as BertTokenizerFast, whose model_input_names
+        # include token_type_ids; a generic PreTrainedTokenizerFast defaults to
+        # ["input_ids", "attention_mask"] and would drop the type ids the multifield
+        # tokenizer relies on (e.g. 0/1 segments for paired sequences). Restore them.
+        if "token_type_ids" not in loaded_tok.model_input_names:
+            loaded_tok.model_input_names = [
+                "input_ids",
+                "token_type_ids",
+                "attention_mask",
+            ]
 
         _register_added_special_tokens(loaded_tok, path)
         self.tokenizers[field_name] = loaded_tok
@@ -689,23 +702,6 @@ class MultiFieldTokenizer:
 
             for i, j in product(special_token_ids, repeat=2):
                 assert i == j
-
-
-def _is_bpe_tokenizer(path: str | Path) -> bool:
-    """
-    Return True when the subtokenizer at ``path`` stores a BPE backend.
-
-    BPE subtokenizers (the DNA vocabs) must be loaded straight from tokenizer.json
-    because transformers >= 5 cannot round-trip them through BertTokenizerFast.
-    """
-    tokenizer_json = Path(path) / "tokenizer.json"
-    if not tokenizer_json.is_file():
-        return False
-    try:
-        model = json.loads(tokenizer_json.read_text()).get("model") or {}
-    except (json.JSONDecodeError, OSError):
-        return False
-    return model.get("type") == "BPE"
 
 
 def _register_added_special_tokens(loaded_tok, path: str | Path | None = None) -> None:

@@ -759,7 +759,6 @@ class SCModernBertModel(SCModernBertPreTrainedModel):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
-        head_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, ...] | BaseModelOutputWithPoolingAndCrossAttentions:
         output_attentions = (
             output_attentions
