@@ -181,28 +181,45 @@ class SCModernBertRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
+        # transformers >= 5 removed "default" from ROPE_INIT_FUNCTIONS and relocated the
+        # no-scaling computation onto each rotary-embedding class. Mirror that split:
+        # compute the default inv_freq locally, defer the scaled variants to the registry.
         if self.rope_type == "default":
-            # Standard (no-scaling) RoPE: v5 removed 'default' from ROPE_INIT_FUNCTIONS;
-            # compute inv_freq directly using the base theta from config.
-            head_dim = getattr(config, "head_dim", None) or (
-                config.hidden_size // config.num_attention_heads
+            inv_freq, self.attention_scaling = self.compute_default_rope_parameters(
+                self.config, device
             )
-            base = config.rope_theta
-            inv_freq = 1.0 / (
-                base
-                ** (
-                    torch.arange(0, head_dim, 2, dtype=torch.int64).to(
-                        device=device, dtype=torch.float
-                    )
-                    / head_dim
-                )
-            )
-            self.attention_scaling = 1.0
         else:
             self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
             inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config: SCModernBertConfig, device=None
+    ) -> tuple[torch.Tensor, float]:
+        """
+        Compute the inverse frequencies for standard (no-scaling) RoPE.
+
+        Mirrors ``ModernBertRotaryEmbedding.compute_default_rope_parameters`` in
+        transformers >= 5, which dropped "default" from ``ROPE_INIT_FUNCTIONS`` and moved
+        the original-RoPE computation onto the rotary-embedding class. Returns the inverse
+        frequencies and the post-processing attention scaling (always 1.0 for this type).
+        """
+        head_dim = getattr(config, "head_dim", None) or (
+            config.hidden_size // config.num_attention_heads
+        )
+        base = config.rope_theta
+        inv_freq = 1.0 / (
+            base
+            ** (
+                torch.arange(0, head_dim, 2, dtype=torch.int64).to(
+                    device=device, dtype=torch.float
+                )
+                / head_dim
+            )
+        )
+        return inv_freq, 1.0
 
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
