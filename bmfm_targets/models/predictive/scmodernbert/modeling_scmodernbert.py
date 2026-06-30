@@ -20,6 +20,7 @@ from transformers.utils.import_utils import (
 )
 
 from bmfm_targets.config import SCModernBertConfig
+from bmfm_targets.models.common.init_utils import init_unless_loaded
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
@@ -538,17 +539,21 @@ class SCModernBertPreTrainedModel(PreTrainedModel):
             cutoff_factor = 3
 
         def init_weight(module: nn.Module, std: float):
-            nn.init.trunc_normal_(
+            # Guard against transformers v5 re-calling _init_weights on already-loaded params.
+            init_unless_loaded(
                 module.weight,
-                mean=0.0,
-                std=std,
-                a=-cutoff_factor * std,
-                b=cutoff_factor * std,
+                lambda: nn.init.trunc_normal_(
+                    module.weight,
+                    mean=0.0,
+                    std=std,
+                    a=-cutoff_factor * std,
+                    b=cutoff_factor * std,
+                ),
             )
 
             if isinstance(module, nn.Linear):
                 if module.bias is not None:
-                    nn.init.zeros_(module.bias)
+                    init_unless_loaded(module.bias, lambda: nn.init.zeros_(module.bias))
 
         stds = {
             "in": self.config.initializer_range,
@@ -565,9 +570,9 @@ class SCModernBertPreTrainedModel(PreTrainedModel):
             init_weight(module.Wqkv, stds["in"])
             init_weight(module.Wo, stds["out"])
         elif isinstance(module, nn.LayerNorm):
-            module.weight.data.fill_(1.0)
+            init_unless_loaded(module.weight, lambda: module.weight.data.fill_(1.0))
             if module.bias is not None:
-                module.bias.data.zero_()
+                init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
 
     def set_attention_implementation(self, attn_implementation: dict | str):
         """Checks and dispatches to hhe requested attention implementation."""

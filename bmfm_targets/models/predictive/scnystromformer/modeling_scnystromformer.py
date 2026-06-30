@@ -16,6 +16,7 @@ from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_l
 from transformers.utils import logging
 
 from bmfm_targets.config import SCNystromformerConfig
+from bmfm_targets.models.common.init_utils import init_unless_loaded
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
@@ -386,18 +387,30 @@ class SCNystromformerPreTrainedModel(PreTrainedModel):
         if isinstance(module, nn.Linear | nn.Conv2d):
             # Slightly different from the TF version which uses truncated_normal for initialization
             # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # Guard against transformers v5 re-calling _init_weights on already-loaded params.
+            init_unless_loaded(
+                module.weight,
+                lambda: module.weight.data.normal_(
+                    mean=0.0, std=self.config.initializer_range
+                ),
+            )
             if module.bias is not None:
-                module.bias.data.zero_()
+                init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
         elif isinstance(module, nn.Embedding):
-            # v5: skip re-initialization for weights already loaded from checkpoint
-            if not getattr(module.weight, "_is_hf_initialized", False):
-                module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-                if module.padding_idx is not None:
+            init_unless_loaded(
+                module.weight,
+                lambda: (
+                    module.weight.data.normal_(
+                        mean=0.0, std=self.config.initializer_range
+                    ),
                     module.weight.data[module.padding_idx].zero_()
+                    if module.padding_idx is not None
+                    else None,
+                ),
+            )
         elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+            init_unless_loaded(module.bias, lambda: module.bias.data.zero_())
+            init_unless_loaded(module.weight, lambda: module.weight.data.fill_(1.0))
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, SCNystromformerEncoder):
