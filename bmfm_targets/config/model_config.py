@@ -60,12 +60,21 @@ class SCModelConfigBase(PretrainedConfig):
     def __setstate__(self, state):
         state.setdefault("label_columns", None)
         state.setdefault("_output_attentions", state.get("output_attentions", None))
-        # transformers >= 5 reads these private implementation fields through property
-        # getters in PreTrainedModel.__init__. Configs pickled by transformers 4 (e.g.
-        # the published checkpoints) lack them and would raise AttributeError, so default
-        # them to None exactly as a fresh PretrainedConfig.__init__ would.
-        state.setdefault("_attn_implementation_internal", None)
-        state.setdefault("_experts_implementation_internal", None)
+        # Forward-compat: transformers >= 5 adds private implementation fields (e.g.
+        # _attn_implementation_internal, _experts_implementation_internal) that are read
+        # via property getters during PreTrainedModel.__init__. Configs pickled by
+        # transformers 4 (the published checkpoints) lack them. Back-fill every base
+        # PretrainedConfig default that is missing from the unpickled state, so new v5
+        # private fields are handled automatically without editing this method.
+        #
+        # Order matters: the _output_attentions line above maps the legacy
+        # output_attentions value into _output_attentions and must win over the generic
+        # default (False) supplied by PretrainedConfig().__dict__. Because setdefault
+        # never overwrites an already-present key, placing the explicit lines first
+        # guarantees that legacy checkpoint values take precedence over the defaults
+        # injected by the loop below.
+        for key, value in PretrainedConfig().__dict__.items():
+            state.setdefault(key, value)
         self.__dict__.update(state)
 
 

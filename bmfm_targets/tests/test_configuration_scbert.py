@@ -1,4 +1,5 @@
 import os
+import pickle
 import tempfile
 from functools import partial
 
@@ -392,3 +393,44 @@ def test_instantiate_gradient_reversal_layer():
 
     assert isinstance(decoders["good_reg_label"].decoder, torch.nn.Linear)
     assert isinstance(decoders["good_reg_label"].decoder, torch.nn.Linear)
+
+
+def test_setstate_forward_compat_restores_v5_private_fields(fields, label_columns):
+    """
+    Regression test: __setstate__ must back-fill private v5 PretrainedConfig fields.
+
+    Simulates loading a transformers-4 checkpoint whose pickled config is missing the
+    private implementation fields introduced in transformers >= 5
+    (_attn_implementation_internal, _experts_implementation_internal). Without the
+    back-fill loop these fields are absent and property getters raise AttributeError
+    during PreTrainedModel.__init__.
+    """
+    cfg = config.SCBertConfig(fields=fields, label_columns=label_columns)
+
+    # Simulate a transformers-4 pickle by stripping the v5 private fields.
+    state = dict(cfg.__dict__)
+    v5_private_fields = [
+        "_attn_implementation_internal",
+        "_experts_implementation_internal",
+    ]
+    for key in v5_private_fields:
+        state.pop(key, None)
+
+    # Reconstruct via __setstate__ (the path taken when unpickling).
+    inst = config.SCBertConfig.__new__(config.SCBertConfig)
+    inst.__setstate__(state)
+
+    # All stripped fields must be restored.
+    for key in v5_private_fields:
+        assert hasattr(inst, key), f"missing field after __setstate__: {key}"
+        assert inst._attn_implementation_internal is None
+        assert inst._experts_implementation_internal is None
+
+    # Accessing the property must not raise AttributeError.
+    _ = inst._attn_implementation
+
+    # Also verify a full pickle round-trip works end-to-end.
+    cfg2 = pickle.loads(pickle.dumps(cfg))
+    assert cfg2._attn_implementation_internal is None
+    assert cfg2._experts_implementation_internal is None
+    _ = cfg2._attn_implementation
