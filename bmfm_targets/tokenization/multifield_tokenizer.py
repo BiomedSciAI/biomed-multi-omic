@@ -297,12 +297,25 @@ class MultiFieldTokenizer:
             # transformers >= 5 also no longer reads the legacy special_tokens_map.json, so
             # pass its entries explicitly to restore the pad/cls/sep/unk/mask attributes
             # used for padding.
-            special_tokens_map_file = Path(path) / "special_tokens_map.json"
-            special_tokens = (
-                json.loads(special_tokens_map_file.read_text())
-                if special_tokens_map_file.is_file()
-                else {}
-            )
+            _SPECIAL_TOKEN_KEYS = {
+                "pad_token",
+                "cls_token",
+                "sep_token",
+                "unk_token",
+                "mask_token",
+                "bos_token",
+                "eos_token",
+            }
+            for candidate in ["special_tokens_map.json", "tokenizer_config.json"]:
+                f = Path(path) / candidate
+                if f.is_file():
+                    cfg = json.loads(f.read_text())
+                    special_tokens = {
+                        k: v for k, v in cfg.items() if k in _SPECIAL_TOKEN_KEYS
+                    }
+                    break
+            else:
+                special_tokens = {}
             # entries may be plain strings or serialised AddedToken dicts; reduce to the
             # token content so they are valid kwargs (list-valued additional_special_tokens
             # are handled by _register_added_special_tokens below).
