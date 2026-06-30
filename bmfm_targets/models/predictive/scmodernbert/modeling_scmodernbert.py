@@ -962,10 +962,6 @@ class SCModernBertPredictionHead(nn.Module):
 
 
 class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
-    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
-    # get_expanded_tied_weights_keys does not regex-match None values and crash.
-    _tied_weights_keys = {}
-
     def __init__(self, config: SCModernBertConfig):
         super().__init__(config)
         self.config = config
@@ -990,10 +986,6 @@ class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.cls.predictions.decoder = new_embeddings
-
-    def tie_weights(self, **kwargs):
-        logger.warning("Tie weights not supported for this model")
-        return
 
     def forward(
         self,
@@ -1269,10 +1261,6 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self, **kwargs):
-        logger.warning("Tie weights not supported for this model")
-        return
-
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
@@ -1352,10 +1340,6 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
 
 
 class SCModernBertForMultiTaskModeling(SCModernBertPreTrainedModel):
-    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
-    # get_expanded_tied_weights_keys does not regex-match None values and crash.
-    _tied_weights_keys = {}
-
     def __init__(self, config: SCModernBertConfig):
         super().__init__(config)
 
@@ -1383,10 +1367,6 @@ class SCModernBertForMultiTaskModeling(SCModernBertPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
-
-    def tie_weights(self, **kwargs):
-        logger.warning("Tie weights not supported for this model")
-        return
 
     def forward(
         self,

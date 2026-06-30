@@ -25,6 +25,10 @@ class SCModelConfigBase(PretrainedConfig):
     is_decoder: bool = False
     add_cross_attention: bool = False
     chunk_size_feed_forward: int = 0
+    # These models do not tie input/output embeddings. Declared explicitly so
+    # transformers >= 5 get_expanded_tied_weights_keys() short-circuits to {} and
+    # never inspects _tied_weights_keys (which we therefore don't need to set).
+    tie_word_embeddings = False
 
     def to_dict(self):
         """Serializes class to a Python dictionary."""

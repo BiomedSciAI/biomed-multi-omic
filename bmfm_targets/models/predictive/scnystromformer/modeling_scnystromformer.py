@@ -534,10 +534,6 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
 
     """
 
-    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
-    # get_expanded_tied_weights_keys does not regex-match None values and crash.
-    _tied_weights_keys = {}
-
     def __init__(self, config: SCNystromformerConfig):
         """
         Initializes the model.
@@ -577,10 +573,6 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
             "Tie weights not supported for this model. This is used for tying weights. If you need to use tie weights fix it"
         )
         self.cls.predictions.decoder = new_embeddings
-
-    def tie_weights(self, **kwargs):
-        logger.warning("Tie weights not supported for this model")
-        return
 
     def forward(
         self,
@@ -783,10 +775,6 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
 
     """
 
-    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
-    # get_expanded_tied_weights_keys does not regex-match None values and crash.
-    _tied_weights_keys = {}
-
     def __init__(self, config: SCNystromformerConfig):
         """
         Initializes the model.
@@ -831,10 +819,6 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
             "Tie weights not supported for this model. This is used for tying weights. If you need to use tie weights fix it"
         )
         self.cls.predictions.decoder = new_embeddings
-
-    def tie_weights(self, **kwargs):
-        logger.warning("Tie weights not supported for this model")
-        return
 
     def forward(
         self,
@@ -899,10 +883,6 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
 
     """
 
-    # No real weight tying (tie_weights is a no-op); empty so transformers >= 5
-    # get_expanded_tied_weights_keys does not regex-match None values and crash.
-    _tied_weights_keys = {}
-
     def __init__(self, config: SCNystromformerConfig):
         """
         Initializes the model.
@@ -944,10 +924,6 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
             "Tie weights not supported for this model. This is used for tying weights. If you need to use tie weights fix it"
         )
         self.cls.predictions.decoder = new_embeddings
-
-    def tie_weights(self, **kwargs):
-        logger.warning("Tie weights not supported for this model")
-        return
 
     def forward(
         self,
