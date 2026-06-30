@@ -234,10 +234,10 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
 
 
 class LlamaForSequenceClassificationModel(nn.Module, CheckpointMixin, InitWeightsMixin):
-    # No `config_class`: this model is registered for AutoModelForSequenceClassification
-    # with whichever LlamaConfig subclass is instantiated (see LlamaConfig.__init__), so a
-    # static config_class would trip the transformers >= 5 register consistency check. It
-    # is only ever built via build_model(), never AutoModel.from_config, so it isn't needed.
+    # No `config_class`: AutoModel registration happens at module-import scope (see the
+    # bottom of this file) and registers LlamaForMultiTaskModel for LlamaForMultiTaskConfig.
+    # LlamaForSequenceClassificationModel is only ever built via build_model(), never
+    # AutoModel.from_config, so a static config_class is not needed here.
 
     def __init__(self, config: LlamaForMultiTaskConfig):
         super().__init__()
