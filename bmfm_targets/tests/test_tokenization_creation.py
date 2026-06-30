@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +9,14 @@ from bmfm_targets.tokenization.create.create_protein_coding_tokenizer import (
 from bmfm_targets.tokenization.load import get_all_genes_v2_tokenizer
 from bmfm_targets.tokenization.multifield_tokenizer import MultiFieldTokenizer
 from bmfm_targets.tokenization.resources.reference_data import get_protein_coding_genes
+
+_PC_VOCAB_DIR = (
+    Path(__file__).parent.parent
+    / "tokenization"
+    / "protein_coding_vocab"
+    / "tokenizers"
+    / "genes"
+)
 
 
 @pytest.fixture(scope="module")
@@ -49,3 +58,33 @@ def test_config_integrity(pc_tokenizer):
     assert isinstance(data["cls_token"], dict)
     assert isinstance(data["additional_special_tokens"][0], dict)
     assert data["additional_special_tokens"][0]["normalized"] is False
+
+
+def test_added_tokens_decoder_consistent_with_tokenizer_json():
+    """
+    Drift guard: added_tokens_decoder in tokenizer_config.json must be consistent
+    with the added_tokens list in tokenizer.json.
+
+    create_protein_coding_tokenizer.py rebuilds added_tokens_decoder from the
+    added_tokens entries in tokenizer.json (lines 72-75 of the script).  If someone
+    edits tokenizer.json without re-running the script the two files diverge silently.
+    This test reproduces that exact derivation and compares against the committed blob.
+    """
+    tok_json = json.loads((_PC_VOCAB_DIR / "tokenizer.json").read_text())
+    tok_cfg = json.loads((_PC_VOCAB_DIR / "tokenizer_config.json").read_text())
+
+    # Reproduce the exact mapping built by create_subset_tokenizer (see
+    # create_protein_coding_tokenizer.py lines 72-75).
+    expected_decoder = {
+        str(entry["id"]): {k: v for k, v in entry.items() if k != "id"}
+        for entry in tok_json["added_tokens"]
+    }
+
+    committed_decoder = tok_cfg.get("added_tokens_decoder", {})
+
+    assert committed_decoder == expected_decoder, (
+        "added_tokens_decoder in tokenizer_config.json is out of sync with "
+        "added_tokens in tokenizer.json. Re-run "
+        "bmfm_targets/tokenization/create/create_protein_coding_tokenizer.py "
+        "to regenerate."
+    )
