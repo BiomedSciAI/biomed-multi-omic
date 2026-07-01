@@ -27,17 +27,17 @@ from bmfm_targets.datasets.label_ontology import LabelOntology
 #   * multiple levels,
 #   * a node reachable from two parents ("CL:shared" via both A and B), i.e. a
 #     genuine DAG rather than a tree,
-#   * a leaf that is also a direct child of the root.
+#   * a leaf that is also a direct child of the root (CL:direct).
 #
-#                 CL:root
-#                 /     \
-#             CL:A       CL:B
-#            /    \      /   \
-#     CL:leaf1  CL:shared    CL:C
-#                              |
-#                           CL:leaf2
+#                       CL:root
+#                    /    |    \
+#                CL:A  CL:B  CL:direct
+#               /    \  /   \
+#        CL:leaf1  CL:shared  CL:C
+#                               |
+#                            CL:leaf2
 #
-# Leaves (no out-edges): CL:leaf1, CL:shared, CL:leaf2
+# Leaves (no out-edges): CL:leaf1, CL:shared, CL:leaf2, CL:direct
 NODES: dict[str, tuple[str, str]] = {
     # graphml node id -> (cell_type_id, cell_type_name)
     "n0": ("CL:root", "root"),
@@ -47,17 +47,19 @@ NODES: dict[str, tuple[str, str]] = {
     "n4": ("CL:leaf1", "leaf one"),
     "n5": ("CL:shared", "shared leaf"),
     "n6": ("CL:leaf2", "leaf two"),
+    "n7": ("CL:direct", "direct leaf"),
 }
 EDGES: list[tuple[str, str]] = [
     ("n0", "n1"),
     ("n0", "n2"),
+    ("n0", "n7"),
     ("n1", "n4"),
     ("n1", "n5"),
     ("n2", "n5"),
     ("n2", "n3"),
     ("n3", "n6"),
 ]
-LEAVES = {"CL:leaf1", "CL:shared", "CL:leaf2"}
+LEAVES = {"CL:leaf1", "CL:shared", "CL:leaf2", "CL:direct"}
 
 METADATA = "node_id: cell_type_id\nnode_name: cell_type_name\nunknown_id: unknown\n"
 
@@ -121,9 +123,10 @@ def test_direct_construction_matches_from_directory(synthetic_ontology_dir: Path
         graph_filename=synthetic_ontology_dir / "ontology.graphml",
     )
     assert direct.get_label_dictionary() == {
-        "CL:leaf1": 0,
-        "CL:leaf2": 1,
-        "CL:shared": 2,
+        "CL:direct": 0,
+        "CL:leaf1": 1,
+        "CL:leaf2": 2,
+        "CL:shared": 3,
     }
 
 
@@ -156,6 +159,11 @@ def test_find_leaves_handles_dag_with_shared_descendant(ontology: LabelOntology)
     # CL:shared is reachable from both CL:A and CL:B; it must appear under both.
     assert "CL:shared" in ontology.find_leaves("CL:A")
     assert set(ontology.find_leaves("CL:B")) == {"CL:shared", "CL:leaf2"}
+
+
+def test_find_leaves_direct_child_of_root_is_leaf(ontology: LabelOntology):
+    assert ontology.find_leaves("CL:direct") == ["CL:direct"]
+    assert "CL:direct" in ontology.find_leaves("CL:root")
 
 
 def test_find_leaves_of_a_leaf_is_itself(ontology: LabelOntology):

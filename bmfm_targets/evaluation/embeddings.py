@@ -341,8 +341,9 @@ def single_batch_bio_metrics(
     Clusters with Leiden when igraph/leidenalg are installed, so the returned
     values match historical runs; otherwise falls back to KMeans(k=#label
     classes) so the metrics stay computable without those optional, copyleft
-    dependencies. Assumes ``sc.pp.neighbors`` has already been run on
-    ``adata_emb`` (required by the Leiden path).
+    dependencies. Both paths cluster on the full data before masking to NaN-free
+    rows. Assumes ``sc.pp.neighbors`` has already been run on ``adata_emb``
+    (required by the Leiden path).
     """
     from sklearn.metrics import (
         adjusted_rand_score,
@@ -357,11 +358,12 @@ def single_batch_bio_metrics(
     try:
         import leidenalg  # noqa: F401
     except ImportError:
-        clusters = _kmeans_clusters(X[mask], labels[mask])
+        clusters = _kmeans_clusters(X, labels)[mask]
     else:
         cluster_key = "__tmp_scib_cluster"
         sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
         clusters = adata_emb.obs[cluster_key].to_numpy()[mask]
+        del adata_emb.obs[cluster_key]
 
     labels, X = labels[mask], X[mask]
     vc = pd.Series(labels).value_counts()
