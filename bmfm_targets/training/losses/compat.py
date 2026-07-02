@@ -142,8 +142,16 @@ def _create_field_loss(
     # Create appropriate objective
     objective = _create_objective(loss_name, loss_config)
 
+    # Use CellEmbeddingContrastiveSource for contrastive losses
+    if loss_name == "contrastive":
+        from bmfm_targets.training.losses.sources import CellEmbeddingContrastiveSource
+
+        source = CellEmbeddingContrastiveSource(
+            field_name=field_name,
+            contrast_target=loss_config.get("contrast_target", "cls"),
+        )
     # Use WCEDFieldSource for WCED losses, FieldSource otherwise
-    if wced_target is not None:
+    elif wced_target is not None:
         source = WCEDFieldSource(
             field_name=field_name,
             wced_target=wced_target,
@@ -200,6 +208,14 @@ def _create_objective(loss_name: str, loss_config: dict):
         return BCEWithLogitsObjective()
     elif loss_name == "hce":
         return HCEObjective()
+    elif loss_name == "contrastive":
+        from bmfm_targets.training.losses.objectives import ContrastiveObjective
+
+        return ContrastiveObjective(
+            temperature=loss_config.get("temperature"),
+            symmetric=loss_config.get("symmetric", True),
+            gather_distributed=loss_config.get("gather_distributed", True),
+        )
     else:
         raise ValueError(f"Unknown loss name: {loss_name}")
 

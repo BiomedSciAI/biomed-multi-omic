@@ -619,4 +619,101 @@ class HCEObjective(Objective):
         return "hce"
 
 
+class ContrastiveObjective(Objective):
+    """InfoNCE / CLIP symmetric contrastive loss over paired cell views."""
+
+    def __init__(
+        self,
+        temperature: float | None = None,
+        symmetric: bool = True,
+        gather_distributed: bool = True,
+    ):
+        super().__init__()
+        self._temperature = temperature  # None -> use learnable scale from source
+        self._symmetric = symmetric
+        self._gather_distributed = gather_distributed
+
+    @property
+    def contributes_sample_metrics(self) -> bool:
+        return False
+
+    @property
+    def name(self) -> str:
+        return "contrastive"
+
+    @property
+    def decoder_suffix(self) -> str:
+        return "_contrastive"
+
+    def bind(self, fields, label_columns):
+        pass
+
+    def default_metrics(self) -> list:
+        return []
+
+    def get_predictions(self, z, scale=None):
+        return z
+
+    def compute(self, z, scale) -> torch.Tensor | None:
+        import torch
+        import torch.nn.functional as F
+
+        if z is None:
+            return None
+        N = z.shape[0] // 2
+        if N < 2:
+            return None
+
+        za, zb = z[:N], z[N:]
+        za = F.normalize(za, dim=-1)
+        zb = F.normalize(zb, dim=-1)
+
+        if self._gather_distributed:
+            try:
+                import torch.distributed as dist
+
+                if dist.is_available() and dist.is_initialized():
+                    world = dist.get_world_size()
+                    rank = dist.get_rank()
+                    za_list = [torch.zeros_like(za) for _ in range(world)]
+                    zb_list = [torch.zeros_like(zb) for _ in range(world)]
+                    dist.all_gather(za_list, za)
+                    dist.all_gather(zb_list, zb)
+                    # preserve gradient on local shard
+                    za_list[rank] = za
+                    zb_list[rank] = zb
+                    za = torch.cat(za_list, dim=0)
+                    zb = torch.cat(zb_list, dim=0)
+                    N = za.shape[0]
+            except Exception:
+                pass
+
+        if self._temperature is not None:
+            s = 1.0 / self._temperature
+            logits_ab = za @ zb.T * s
+        else:
+            if scale is None:
+                s = 1.0 / 0.07
+                logits_ab = za @ zb.T * s
+            else:
+                # scale is logit_scale parameter: exp(scale)
+                logits_ab = za @ zb.T * scale.exp()
+
+        t = torch.arange(N, device=za.device)
+        if self._symmetric:
+            loss = 0.5 * (
+                F.cross_entropy(logits_ab, t) + F.cross_entropy(logits_ab.T, t)
+            )
+        else:
+            loss = F.cross_entropy(logits_ab, t)
+
+        # stash diagnostics for logging
+        with torch.no_grad():
+            self._last_recall_at1 = (logits_ab.argmax(1) == t).float().mean().item()
+            if scale is not None:
+                self._last_logit_scale = scale.item()
+
+        return loss
+
+
 # Made with Bob

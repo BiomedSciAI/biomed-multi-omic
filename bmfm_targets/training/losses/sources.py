@@ -377,4 +377,51 @@ class LabelSource(DataSource):
         return self.label_name
 
 
+class CellEmbeddingContrastiveSource(DataSource):
+    """Extracts CLS projection embeddings and learnable scale from model logits for contrastive loss."""
+
+    def __init__(self, field_name: str, contrast_target: str = "cls"):
+        # contrast_target: "cls" -> uses {field}_contrastive key; "wced" -> uses {field}_wced[:, 0, :]
+        self._field_name = field_name
+        self._contrast_target = contrast_target
+
+    @property
+    def name(self) -> str:
+        return self._field_name
+
+    @property
+    def loss_group(self) -> str:
+        return self._field_name
+
+    def resolve_schema(
+        self,
+        fields,
+        label_columns,
+        tokenizer=None,
+        decoder_suffix=None,
+        objective_name=None,
+    ):
+        pass
+
+    def get_output_size(self) -> int | None:
+        return None
+
+    def extract_logits(self, logits):
+        if self._contrast_target == "wced":
+            cloud = logits[f"{self._field_name}_wced"]
+            return cloud[:, 0, :]  # [2N, V] -> use first token
+        return logits[f"{self._field_name}_contrastive"]  # [2N, D]
+
+    def extract_labels(self, labels):
+        return None
+
+    def extract(self, outputs, batch):
+        z = self.extract_logits(outputs.logits)
+        scale = outputs.logits.get(f"{self._field_name}_contrastive_scale")
+        return z, scale
+
+    def concat_batch_tensors(self, predictions, field_name: str):
+        return predictions
+
+
 # Made with Bob

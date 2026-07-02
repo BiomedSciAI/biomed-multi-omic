@@ -179,11 +179,39 @@ class SCBertMainConfig:
             logger.info("fields: No YAML fields specified, using checkpoint fields")
             return ckpt_fields
 
-        # Training: merge - checkpoint fields win, new YAML fields added
+        # Training: merge - checkpoint fields win for most attrs, but YAML decode_modes are
+        # merged in so new heads (e.g. contrastive) can be added without retraining from scratch.
         ckpt_field_names = {f.field_name for f in ckpt_fields}
         yaml_field_names = {f.field_name for f in yaml_fields}
+        yaml_field_map = {f.field_name: f for f in yaml_fields}
 
-        merged = list(ckpt_fields)
+        merged = []
+        for ckpt_f in ckpt_fields:
+            if ckpt_f.field_name in yaml_field_map:
+                yaml_f = yaml_field_map[ckpt_f.field_name]
+                # Merge decode_modes: checkpoint modes + any new YAML modes not in checkpoint
+                if yaml_f.decode_modes and ckpt_f.decode_modes is not None:
+                    new_modes = {
+                        k: v
+                        for k, v in yaml_f.decode_modes.items()
+                        if k not in ckpt_f.decode_modes
+                    }
+                    if new_modes:
+                        import copy
+
+                        ckpt_f = copy.deepcopy(ckpt_f)
+                        ckpt_f.decode_modes = {**ckpt_f.decode_modes, **new_modes}
+                        logger.info(
+                            f"fields: Merged new decode_modes {list(new_modes.keys())} "
+                            f"into checkpoint field '{ckpt_f.field_name}'"
+                        )
+                elif yaml_f.decode_modes and ckpt_f.decode_modes is None:
+                    import copy
+
+                    ckpt_f = copy.deepcopy(ckpt_f)
+                    ckpt_f.decode_modes = yaml_f.decode_modes
+            merged.append(ckpt_f)
+
         new_fields = [f for f in yaml_fields if f.field_name not in ckpt_field_names]
         if new_fields:
             logger.info(
@@ -226,8 +254,8 @@ class SCBertMainConfig:
                 )
             return ckpt_cols
 
-        # Training: YAML-authoritative
-        return yaml_cols if yaml_cols else ckpt_cols
+        # Training: YAML-authoritative. Explicit empty list means "no label columns".
+        return yaml_cols if yaml_cols is not None else ckpt_cols
 
     def _merge_configs_from_checkpoint(self) -> None:
         """Merge configs from checkpoint with YAML configs based on task type."""

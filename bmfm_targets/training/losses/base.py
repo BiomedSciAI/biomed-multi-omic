@@ -288,5 +288,17 @@ class Objective(ABC):
     def name(self) -> str:
         """Return the name of this objective."""
 
+    @property
+    def contributes_sample_metrics(self) -> bool:
+        """
+        Return whether this objective contributes per-sample metrics.
+
+        Override and return ``False`` for population-level objectives (e.g.,
+        ``PopulationOTObjective``) that have no per-sample alignment with the
+        batch and must be excluded from the metric/prediction machinery.
+        Defaults to ``True`` for all standard objectives.
+        """
+        return True
+
 
 # Made with Bob

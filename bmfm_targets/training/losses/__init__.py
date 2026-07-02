@@ -24,6 +24,7 @@ from .compat import loss_dict_to_task
 # Concrete implementations
 from .objectives import (
     BCEWithLogitsObjective,
+    ContrastiveObjective,
     CrossEntropyObjective,
     FocalObjective,
     HCEObjective,
@@ -33,7 +34,12 @@ from .objectives import (
     MSEObjective,
     TokenValueObjective,
 )
-from .sources import FieldSource, LabelSource, WCEDFieldSource
+from .sources import (
+    CellEmbeddingContrastiveSource,
+    FieldSource,
+    LabelSource,
+    WCEDFieldSource,
+)
 
 # Main container
 from .task import LossTask, lookup_wced_output_index
@@ -52,11 +58,13 @@ __all__ = [
     "DataSource",
     "Objective",
     # Data sources
+    "CellEmbeddingContrastiveSource",
     "FieldSource",
     "LabelSource",
     "WCEDFieldSource",
     "lookup_wced_output_index",
     # Objectives
+    "ContrastiveObjective",
     "CrossEntropyObjective",
     "FocalObjective",
     "MSEObjective",

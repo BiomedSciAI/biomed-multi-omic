@@ -406,6 +406,39 @@ class SCPooler(nn.Module):
         return self.activation(pooled_output)
 
 
+class ContrastiveHead(nn.Module):
+    """Projects CLS embedding to a compact contrastive space."""
+
+    def __init__(
+        self,
+        config,
+        projection_dim: int = 128,
+        learnable_scale: bool = True,
+        decode_from: str = "cls",
+        **kwargs,
+    ):
+        super().__init__()
+        hidden_size = config.hidden_size
+        self._decode_from = decode_from
+        if projection_dim and projection_dim != hidden_size:
+            self.projection = nn.Linear(hidden_size, projection_dim, bias=False)
+        else:
+            self.projection = nn.Identity()
+            projection_dim = hidden_size
+        if learnable_scale:
+            self.logit_scale = nn.Parameter(torch.tensor(math.log(1 / 0.07)))
+        else:
+            self.register_buffer("logit_scale", torch.tensor(math.log(1 / 0.07)))
+
+    def forward(self, hidden_states, pooled_output=None):
+        if self._decode_from == "cls":
+            x = hidden_states[:, 0, :]
+        else:
+            x = pooled_output if pooled_output is not None else hidden_states[:, 0, :]
+        z = self.projection(x)
+        return z, self.logit_scale
+
+
 def make_field_decoder(
     config, field_name: str, decode_mode: str, output_dim: int = 1, **kwargs
 ) -> nn.Module:
@@ -427,6 +460,13 @@ def make_field_decoder(
         num_outputs_per_target = len(kwargs["logit_outputs"])
         assert output_dim > 1
         return FieldDecoder(config, output_dim, num_outputs_per_target)
+    elif decode_mode == "contrastive":
+        return ContrastiveHead(
+            config,
+            projection_dim=kwargs.get("projection_dim", 128),
+            learnable_scale=kwargs.get("learnable_scale", True),
+            decode_from=kwargs.get("decode_from", "cls"),
+        )
     else:
         raise ValueError(f"Unsupported decode mode: {decode_mode}")
 
@@ -592,6 +632,13 @@ class SCBaseFieldDecoder(nn.Module):
                 field_logits[field_decoder_name] = field_decoder(
                     pooled_output, mvc_query_embeddings[field_name]
                 )
+            elif (
+                "_contrastive" in field_decoder_name
+                and "_contrastive_scale" not in field_decoder_name
+            ):
+                z, scale = field_decoder(hidden_states, pooled_output)
+                field_logits[field_decoder_name] = z
+                field_logits[field_decoder_name + "_scale"] = scale
             else:
                 field_logits[field_decoder_name] = field_decoder(hidden_states)
         return field_logits
