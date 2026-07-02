@@ -476,11 +476,13 @@ class MultiFieldTokenizer:
             update_idx = ((~added_specials) & (token_type_ids == token_type_id)).bool()
             for sample_idx, x in enumerate(this_mfi):
                 sample_update_idx = update_idx[sample_idx]
-                trunc_sample_len = sample_update_idx.sum()
-                arr = torch.tensor(
-                    x[field.field_name][:trunc_sample_len], dtype=input_ids.dtype
-                )
-                input_ids[sample_idx][sample_update_idx] = arr
+                values = x[field.field_name]
+                n_values = len(values)
+                # Only write to the first n_values positions (rest are padding slots)
+                pos = sample_update_idx.nonzero(as_tuple=False).squeeze(1)
+                pos = pos[:n_values]
+                arr = torch.tensor(values[: len(pos)], dtype=input_ids.dtype)
+                input_ids[sample_idx][pos] = arr
 
         return input_ids
 
