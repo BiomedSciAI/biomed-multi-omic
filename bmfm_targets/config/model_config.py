@@ -50,13 +50,6 @@ class SCModelConfigBase(PretrainedConfig):
     def __setstate__(self, state):
         state.setdefault("label_columns", None)
         state.setdefault("_output_attentions", state.get("output_attentions", None))
-        state.setdefault("is_decoder", False)
-        state.setdefault("add_cross_attention", False)
-        state.setdefault("chunk_size_feed_forward", 0)
-        state.setdefault("is_encoder_decoder", False)
-        # transformers v5 internal attrs required to avoid AttributeError on __getattribute__
-        state.setdefault("_attn_implementation_internal", None)
-        state.setdefault("_experts_implementation_internal", None)
         self.__dict__.update(state)
 
 
@@ -185,13 +178,6 @@ class SCBertConfig(SCModelConfigBase):
             self.classifier_dropout = hidden_dropout_prob
         self.max_position_embeddings = max_position_embeddings
         self.position_embedding_type = position_embedding_type
-        # Explicit defaults for attrs transformers v5 no longer sets automatically
-        if not hasattr(self, "is_decoder"):
-            self.is_decoder = False
-        if not hasattr(self, "add_cross_attention"):
-            self.add_cross_attention = False
-        if not hasattr(self, "chunk_size_feed_forward"):
-            self.chunk_size_feed_forward = 0
 
 
 class SCModernBertConfig(SCModelConfigBase):

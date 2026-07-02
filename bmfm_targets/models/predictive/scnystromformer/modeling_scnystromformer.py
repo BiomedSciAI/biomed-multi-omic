@@ -12,14 +12,11 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_layer
-
-try:
-    from transformers.pytorch_utils import find_pruneable_heads_and_indices
-except ImportError:
-    from bmfm_targets.models.predictive._compat_utils import (
-        find_pruneable_heads_and_indices,
-    )
+from transformers.pytorch_utils import (
+    apply_chunking_to_forward,
+    find_pruneable_heads_and_indices,
+    prune_linear_layer,
+)
 from transformers.utils import logging
 
 from bmfm_targets.config import SCNystromformerConfig
@@ -564,7 +561,7 @@ class SCNystromformerForMaskedLM(SCNystromformerPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self, **kwargs):
+    def tie_weights(self):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -816,7 +813,7 @@ class SCNystromformerForSequenceLabeling(SCNystromformerPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self, **kwargs):
+    def tie_weights(self):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -927,7 +924,7 @@ class SCNystromformerForMultiTaskModeling(SCNystromformerPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self, **kwargs):
+    def tie_weights(self):
         logger.warning("Tie weights not supported for this model")
         return
 
