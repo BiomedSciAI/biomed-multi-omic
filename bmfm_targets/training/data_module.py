@@ -1310,3 +1310,65 @@ class DNASeqDataModule(pl.LightningDataModule):
             sequence_dropout_factor=self.sequence_dropout_factor,
             masker=self.masker,
         )
+
+
+class ContrastiveDataModule(DataModule):
+    """DataModule with condition-homogeneous batch sampling and paired-view collation."""
+
+    def __init__(
+        self,
+        *args,
+        condition_columns: list[str] | None = None,
+        n_cells_per_batch: int = 128,
+        contrastive_panel: dict | None = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self._condition_columns = condition_columns or ["celltype"]
+        self._n_cells_per_batch = n_cells_per_batch
+        self._contrastive_panel = contrastive_panel or {}
+
+    def train_dataloader(self):
+        import pandas as pd
+        from torch.utils.data import DataLoader
+
+        from bmfm_targets.datasets.paired_view_collator import _PairedViewCollator
+        from bmfm_targets.datasets.samplers import ConditionHomogeneousBatchSampler
+
+        dataset = self.train_dataset
+        # Build per-sample condition string from obs columns
+        obs = dataset.h5ad.obs if hasattr(dataset, "h5ad") else None
+        if obs is not None:
+            parts = []
+            for col in self._condition_columns:
+                if col in obs.columns:
+                    parts.append(obs[col].astype(str).reset_index(drop=True))
+            if parts:
+                obs_conditions = (
+                    parts[0]
+                    if len(parts) == 1
+                    else pd.Series(
+                        ["_".join(row) for row in zip(*[p.values for p in parts])]
+                    )
+                )
+            else:
+                obs_conditions = pd.Series(["all"] * len(dataset))
+        else:
+            obs_conditions = pd.Series(["all"] * len(dataset))
+
+        sampler = ConditionHomogeneousBatchSampler(
+            obs_conditions,
+            batch_size=self._n_cells_per_batch,
+            num_batches=len(dataset) // self._n_cells_per_batch,
+            replacement=False,
+        )
+        paired_collate = _PairedViewCollator(self.collate_fn, **self._contrastive_panel)
+
+        return DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            collate_fn=paired_collate,
+            num_workers=self.num_workers,
+            persistent_workers=self.num_workers > 0,
+            pin_memory=True,
+        )
