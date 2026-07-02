@@ -553,7 +553,11 @@ class DataModule(pl.LightningDataModule):
         if self.dataset_kwargs:
             final_dataset_kwargs = {**self.dataset_kwargs}
         final_dataset_kwargs["stratifying_label"] = self.stratifying_label
-        final_dataset_kwargs["processed_data_source"] = self.load_processed_data()
+        # A single shared source is loaded once here so it isn't re-read per split.
+        # A per-split mapping ({"train": ..., "dev": ...}) is left as-is; each split's
+        # file is read on demand in `_init_dataset`.
+        if not isinstance(final_dataset_kwargs.get("processed_data_source"), Mapping):
+            final_dataset_kwargs["processed_data_source"] = self.load_processed_data()
         final_dataset_kwargs["limit_samples_shuffle"] = self.shuffle
         if self.limit_genes is not None:
             final_dataset_kwargs["limit_genes"] = self._get_limited_gene_list(
@@ -574,11 +578,6 @@ class DataModule(pl.LightningDataModule):
 
     def load_processed_data(self):
         if self.dataset_kwargs and "processed_data_source" in self.dataset_kwargs:
-            # case: per-split sources, e.g. {"train": train.h5ad, "dev": val.h5ad}.
-            # Left unresolved here; setup() reads the file for each split (see
-            # `_init_dataset`), so we don't load every split into memory eagerly.
-            if isinstance(self.dataset_kwargs["processed_data_source"], Mapping):
-                return self.dataset_kwargs["processed_data_source"]
             # case: user provides anndata object already prepared in dataset_kwargs
             if isinstance(self.dataset_kwargs["processed_data_source"], AnnData):
                 return self.dataset_kwargs["processed_data_source"]
