@@ -28,7 +28,7 @@ jobs:
     - name: Install cURL Headers (for hic-straw install/build)
       run: |
         sudo apt-get update
-        sudo apt-get install libcurl4-openssl-dev
+        sudo apt-get update && sudo apt-get install libcurl4-openssl-dev
     - name: Install package
       run: uv pip install -q .
     - name: Print environment
