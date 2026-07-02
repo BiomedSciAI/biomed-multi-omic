@@ -1,4 +1,5 @@
 import atexit
+import json
 import math
 import os
 import tempfile
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import torch
 from tokenizers import Tokenizer
+from tokenizers.normalizers import BertNormalizer
 from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.models.bert import BertTokenizerFast
@@ -281,19 +283,80 @@ class MultiFieldTokenizer:
                 field_name,
             )
         try:
-            loaded_tok = self.SUB_TOKENIZER_CLASS.from_pretrained(
-                path,
-                do_lower_case=False,
-                tokenize_chinese_chars=False,
-                clean_text=False,
-                strip_accents=None,
+            # Load the serialized fast tokenizer (tokenizer.json) directly. It already
+            # encodes the correct model (WordLevel for gene/expression vocabs, BPE for
+            # DNA), the pre_tokenizer, and the complete added-token vocab, so there is
+            # nothing to rebuild. Loading the file directly (rather than via
+            # from_pretrained / BertTokenizerFast) sidesteps two transformers >= 5 traps:
+            #   * BertTokenizerFast is aliased to BertTokenizer, which rebuilds a WordPiece
+            #     model from vocab.txt — silently converting WordLevel gene vocabs to
+            #     WordPiece and collapsing BPE DNA vocabs to [UNK].
+            #   * from_pretrained mis-iterates a bare ``additional_special_tokens`` list in
+            #     tokenizer_config.json and crashes in the Rust ``add_tokens`` unless the
+            #     config also ships an ``added_tokens_decoder`` block.
+            # transformers >= 5 also no longer reads the legacy special_tokens_map.json, so
+            # pass its entries explicitly to restore the pad/cls/sep/unk/mask attributes
+            # used for padding.
+            _SPECIAL_TOKEN_KEYS = {
+                "pad_token",
+                "cls_token",
+                "sep_token",
+                "unk_token",
+                "mask_token",
+                "bos_token",
+                "eos_token",
+            }
+            for candidate in ["special_tokens_map.json", "tokenizer_config.json"]:
+                f = Path(path) / candidate
+                if f.is_file():
+                    cfg = json.loads(f.read_text())
+                    special_tokens = {
+                        k: v for k, v in cfg.items() if k in _SPECIAL_TOKEN_KEYS
+                    }
+                    break
+            else:
+                special_tokens = {}
+            # entries may be plain strings or serialised AddedToken dicts; reduce to the
+            # token content so they are valid kwargs (list-valued additional_special_tokens
+            # are handled by _register_added_special_tokens below).
+            special_tokens = {
+                key: (value["content"] if isinstance(value, dict) else value)
+                for key, value in special_tokens.items()
+                if not isinstance(value, list)
+            }
+            loaded_tok = PreTrainedTokenizerFast(
+                tokenizer_file=str(Path(path) / "tokenizer.json"), **special_tokens
             )
         except Exception as e:
-            logger.error(
-                f"failed to load {path} as a {self.SUB_TOKENIZER_CLASS.__name__}"
-            )
+            logger.error(f"failed to load {path} as a fast tokenizer")
             raise e
 
+        # transformers 4 built every subtokenizer with do_lower_case=False,
+        # tokenize_chinese_chars=False, clean_text=False, strip_accents=None, overriding
+        # whatever normalizer was serialized. Some shipped gene vocabs (all_genes_vocab,
+        # gene2vec_vocab) and the test fixtures carry a stale lowercase=True / chinese=True
+        # BertNormalizer that would lowercase gene symbols (TP53 -> tp53 -> [UNK]). Re-apply
+        # the canonical case-sensitive normalizer rather than trusting the serialized one.
+        if getattr(loaded_tok, "backend_tokenizer", None) is not None:
+            loaded_tok.backend_tokenizer.normalizer = BertNormalizer(
+                clean_text=False,
+                handle_chinese_chars=False,
+                strip_accents=False,
+                lowercase=False,
+            )
+
+        # transformers 4 loaded these as BertTokenizerFast, whose model_input_names
+        # include token_type_ids; a generic PreTrainedTokenizerFast defaults to
+        # ["input_ids", "attention_mask"] and would drop the type ids the multifield
+        # tokenizer relies on (e.g. 0/1 segments for paired sequences). Restore them.
+        if "token_type_ids" not in loaded_tok.model_input_names:
+            loaded_tok.model_input_names = [
+                "input_ids",
+                "token_type_ids",
+                "attention_mask",
+            ]
+
+        _register_added_special_tokens(loaded_tok, path)
         self.tokenizers[field_name] = loaded_tok
 
     def load_all_subtokenizers(self):
@@ -447,6 +510,12 @@ class MultiFieldTokenizer:
             field_encodings = field_tokenizer(*field_inputs, **all_kwargs)
 
             if field.tokenization_strategy == "continuous_value_encoder":
+                # The default tokenizer may be backed by a plain fast tokenizer (e.g. the
+                # BPE DNA vocab) whose model_input_names omit token_type_ids. Single-
+                # sequence inputs are all type 0, so fall back to zeros when absent.
+                token_type_ids = field_encodings.get("token_type_ids")
+                if token_type_ids is None:
+                    token_type_ids = torch.zeros_like(field_encodings["input_ids"])
                 field_encodings[
                     "input_ids"
                 ] = self._replace_tokenized_ids_with_continuous_values(
@@ -455,7 +524,7 @@ class MultiFieldTokenizer:
                     field=field,
                     input_ids=field_encodings["input_ids"].float(),
                     added_specials=field_encodings["special_tokens_mask"],
-                    token_type_ids=field_encodings["token_type_ids"],
+                    token_type_ids=token_type_ids,
                 )
 
             encodings[field.field_name] = field_encodings
@@ -655,6 +724,49 @@ class MultiFieldTokenizer:
                 assert i == j
 
 
+def _register_added_special_tokens(loaded_tok, path: str | Path | None = None) -> None:
+    """
+    Mark `special` added tokens as additional_special_tokens.
+
+    transformers 4 read these from special_tokens_map.json into
+    additional_special_tokens, so they counted in `all_special_tokens`. v5 instead
+    loads them from tokenizer_config.json's added_tokens_decoder as plain added tokens
+    that are absent from `all_special_tokens`, which shrinks `num_special_tokens` and
+    breaks loading checkpoints whose special-token embedding tables were sized with the
+    full count. Re-register them so the count is restored; they are already in the vocab,
+    so no ids change. Both layouts are checked since published checkpoints predate the
+    added_tokens_decoder migration.
+    """
+    candidates: list[str] = []
+    decoder = getattr(loaded_tok, "added_tokens_decoder", None) or {}
+    for _, token in sorted(decoder.items()):
+        if getattr(token, "special", False):
+            candidates.append(token.content)
+    if path is not None:
+        special_tokens_map_file = Path(path) / "special_tokens_map.json"
+        if special_tokens_map_file.is_file():
+            stm = json.loads(special_tokens_map_file.read_text())
+            for entry in stm.get("additional_special_tokens", []):
+                candidates.append(
+                    entry["content"] if isinstance(entry, dict) else entry
+                )
+
+    already_special = set(loaded_tok.all_special_tokens)
+    vocab = loaded_tok.get_vocab()
+    # only register tokens already present in the vocab, so no new ids are minted
+    extra_special = [
+        token
+        for token in dict.fromkeys(candidates)
+        if token not in already_special and token in vocab
+    ]
+    if not extra_special:
+        return
+    existing = list(getattr(loaded_tok, "additional_special_tokens", []) or [])
+    loaded_tok.add_special_tokens(
+        {"additional_special_tokens": existing + extra_special}
+    )
+
+
 def set_custom_cls_post_processor(
     subtok: PreTrainedTokenizerFast, cls_tokens: list[str]
 ):
@@ -677,6 +789,15 @@ def set_custom_cls_post_processor(
     # pair sequence: CLS_1 CLS_2 ... $A SEP $B SEP
     pair_template = f"{cls_section} $A {sep} $B {sep}"
     specials = list(zip(subtok.all_special_tokens, subtok.all_special_ids))
+    # TemplateProcessing in transformers >= 5 validates that every token named in the
+    # template is listed in `special_tokens`. The custom CLS tokens are present in the
+    # vocab but are not necessarily registered as special tokens, so add them explicitly
+    # (with their vocab ids) to avoid a "Missing SpecialToken" error.
+    known_special_tokens = {token for token, _ in specials}
+    for cls_token in cls_tokens:
+        if cls_token not in known_special_tokens:
+            specials.append((cls_token, subtok.convert_tokens_to_ids(cls_token)))
+            known_special_tokens.add(cls_token)
     subtok.backend_tokenizer.post_processor = TemplateProcessing(
         single=single_template, pair=pair_template, special_tokens=specials
     )  # pyright: ignore[reportAttributeAccessIssue]

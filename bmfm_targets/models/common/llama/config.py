@@ -5,9 +5,6 @@ from bmfm_targets.config import (
     LabelColumnInfo,
     SCModelConfigBase,
 )
-from bmfm_targets.models.common.hf_registration import (
-    register_automodel_for_sequence_classification,
-)
 
 from .constants import AttentionKind
 
@@ -44,15 +41,6 @@ class LlamaConfig(SCModelConfigBase):
         self.hidden_size = hidden_size
         self.hidden_dropout_prob = hidden_dropout_prob
         self.attention = TypeAdapter(AttentionKind).validate_python(attention)
-
-        from bmfm_targets.models.predictive.llama.model import (
-            LlamaForSequenceClassificationModel,
-        )
-
-        register_automodel_for_sequence_classification(
-            config_classes=[self.__class__],
-            seq_classes=[LlamaForSequenceClassificationModel],
-        )
 
     def build_model(self):
         from bmfm_targets.models.predictive.llama.model import (

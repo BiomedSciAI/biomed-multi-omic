@@ -47,6 +47,27 @@ from bmfm_targets.training.metrics.metric_handling import (
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_config_for_logging(model_config) -> dict:
+    """
+    Serialization-safe view of a transformers v5 config for loggers.
+
+    The raw PretrainedConfig dataclass breaks OmegaConf (its `dtype` field is a
+    torch.dtype / forward-ref). Coerce any non-OmegaConf-primitive value to str so
+    TensorBoard/ClearML can log the architecture.
+    """
+
+    def coerce(v):
+        if isinstance(v, dict):
+            return {k: coerce(x) for k, x in v.items()}
+        if isinstance(v, list | tuple):
+            return [coerce(x) for x in v]
+        if isinstance(v, str | int | float | bool | type(None)):
+            return v
+        return str(v)
+
+    return coerce(model_config.to_dict())
+
+
 class BaseTrainingModule(pl.LightningModule):
     def __init__(
         self,
@@ -175,7 +196,26 @@ class BaseTrainingModule(pl.LightningModule):
         self.prediction_df = {}
         self.token_level_errors = {}
         self.sample_metadata_keys = ["cell_name", "seq_id", "perturbed_genes"]
-        self.save_hyperparameters(ignore=["tokenizer"])
+        # `model_config` is excluded from `save_hyperparameters` because transformers >= 5
+        # turned `PretrainedConfig` into a dataclass whose `dtype` field is annotated
+        # `Union[str, torch.dtype]`. When a logger (e.g. TensorBoard) serialises hparams
+        # via OmegaConf, it recurses into that dataclass and raises an *uncaught*
+        # error (NameError on the `torch` forward-ref, then ConfigValueError on the
+        # container union), crashing training. Instead, a serialization-safe summary dict
+        # (produced by `_sanitize_config_for_logging`) is re-injected below so loggers
+        # show the architecture; the real config object is persisted straight into the
+        # checkpoint in `on_save_checkpoint` so `load_from_checkpoint` still receives
+        # the actual `SCModelConfigBase`.
+        self.save_hyperparameters(ignore=["tokenizer", "model_config"])
+        # Re-expose the architecture to loggers in a serialization-safe form. The raw
+        # PretrainedConfig is excluded above (its v5 dtype field breaks OmegaConf); the
+        # real object is still persisted into the checkpoint by on_save_checkpoint for
+        # load_from_checkpoint. Loggers read hparams_initial (a frozen snapshot), so we
+        # must update it too, not just self.hparams.
+        model_config_summary = _sanitize_config_for_logging(self.model_config)
+        self.hparams["model_config"] = model_config_summary
+        if hasattr(self, "_hparams_initial") and self._hparams_initial is not None:
+            self._hparams_initial["model_config"] = model_config_summary
 
     def update_metrics(
         self,
@@ -270,6 +310,19 @@ class BaseTrainingModule(pl.LightningModule):
 
     def on_validation_start(self) -> None:
         self.val_batch_predictions.clear()
+
+    def on_save_checkpoint(self, checkpoint: dict) -> None:
+        """
+        Persist ``model_config`` into the checkpoint hyper_parameters.
+
+        It is excluded from ``save_hyperparameters`` (see ``__init__``) so loggers do
+        not try to OmegaConf-serialise the transformers >= 5 config dataclass. We add the
+        real object back here, after Lightning has populated ``hyper_parameters``, so that
+        ``load_from_checkpoint`` receives it as a constructor argument.
+        """
+        super().on_save_checkpoint(checkpoint)
+        hparams = checkpoint.setdefault(self.CHECKPOINT_HYPER_PARAMS_KEY, {})
+        hparams["model_config"] = self.model_config
 
     def on_load_checkpoint(self, checkpoint: dict) -> None:
         """Migrate old checkpoint formats before Lightning loads them."""

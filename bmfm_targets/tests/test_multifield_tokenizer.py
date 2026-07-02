@@ -7,7 +7,7 @@ import pandas.testing as pdt
 import pytest
 import torch
 from torch import tensor  # pylint: disable=E0611
-from transformers import AutoConfig
+from transformers import AutoConfig, PreTrainedTokenizerFast
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from bmfm_targets.config.main_config import SCBertMainConfig
@@ -347,16 +347,19 @@ def assert_tensors_equal(result, expected, name=""):
     pdt.assert_frame_equal(ref, res, obj=name, by_blocks=True)
 
 
-@pytest.mark.xfail(
-    reason="__call__ function in PreTrainedTokenizerFast dose not allow to turn off splitting words into tokens"
-)
 def test_tokenize_xyz(test_tokenizer: MultiFieldTokenizer):
+    """
+    Verify GENE_NAME_XYZ (punctuated gene name) encodes to a single id via the field subtokenizer.
+
+    pre_tokenizer=None (set by load_subtokenizer) prevents splitting on underscores,
+    so calling the field tokenizer directly must also produce a single non-UNK token.
+    """
     vec = [
-        # ["token2", "token2", "token4", "GENE_NAME_XYZ", "token2", "token2", "token4"],
-        ["token2", "token2", "token4", "GENE.NAME.XYZ", "token2", "token2", "token4"],
+        ["token2", "token2", "token4", "GENE_NAME_XYZ", "token2", "token2", "token4"],
     ]
-    # "GENE_NAME_XYZ" is a token in the list
+    # "GENE_NAME_XYZ" is a token in the vocab (id=16); must NOT be split into unknowns
     vocab = test_tokenizer.get_field_vocab("genes")
+    assert "GENE_NAME_XYZ" in vocab, "GENE_NAME_XYZ must be present in the genes vocab"
     encoding = test_tokenizer.get_field_tokenizer("genes")(
         vec,
         return_attention_mask=False,
@@ -368,7 +371,7 @@ def test_tokenize_xyz(test_tokenizer: MultiFieldTokenizer):
         return_tensors="pt",
         max_length=16,
     )
-    # this will fail as GENE_NAME_XYZ will be split into five unknown tokens
+    # With pre_tokenizer=None, GENE_NAME_XYZ must be a single non-UNK token (id=16)
     assert (encoding["input_ids"] != test_tokenizer.unk_token_id).all()
 
 
@@ -580,10 +583,13 @@ def test_load_all_tokenizer():
     all_tokenizer = load_tokenizer("all_genes")
     assert isinstance(all_tokenizer, MultiFieldTokenizer)
     assert len(all_tokenizer.tokenizers) == 4
+    # subtokenizers are loaded verbatim from tokenizer.json as generic fast tokenizers
+    # (transformers >= 5); BertTokenizerFast is one such subclass, but the contract is
+    # only that they are fast tokenizers.
     assert all(
         isinstance(
             all_tokenizer.get_field_tokenizer(field_name),
-            MultiFieldTokenizer.SUB_TOKENIZER_CLASS,
+            PreTrainedTokenizerFast,
         )
         for field_name in all_tokenizer.tokenizers.keys()
     )
@@ -602,7 +608,7 @@ def test_convert_vocab_to_tokenizer():
     ]
 
     for tok in tokenizer.tokenizers.values():
-        assert isinstance(tok, MultiFieldTokenizer.SUB_TOKENIZER_CLASS)
+        assert isinstance(tok, PreTrainedTokenizerFast)
 
 
 def convert_subtokenizer(old_tokenizer_path, save_converted_tokenizer_back=False):
@@ -644,6 +650,12 @@ def test_convert_all_resource_sub_tokenizers():
 def test_multifield_tokenizer_can_work_with_string_inputs(
     test_tokenizer, snp2vec_fields
 ):
+    """
+    Verify string (non-split) inputs through the MultiFieldTokenizer for the DNA field.
+
+    The reference tokenizer is obtained via the production load path (load_subtokenizer /
+    get_field_tokenizer) so that this test and production code cannot drift independently.
+    """
     dna_sequence = "AGGCTGTGGCCACTACACCCACAATCTTCTGGGGGCCGGGTTTCTCCTACACCATAGAGACGGGTCCGGAAACGGGACAGAAGGCCCACCTTCCTCCCTCCGACGCCACCAATGAGGCCAACTAACCAGGAACCGAGGTAGAGAGGCCGCACAGCTGAGTCTCAGGCCGGTGCCATCTTAAGTGTGGGCGCCGCGACGAT"
     mfi = MultiFieldInstance(data={"dna_chunks": dna_sequence})
     output_from_multi_field_tokenizer = test_tokenizer(
@@ -659,16 +671,11 @@ def test_multifield_tokenizer_can_work_with_string_inputs(
         max_length=100,
     )["dna_chunks"]
 
-    from transformers import BertTokenizerFast
-
-    bert_tokenizer = BertTokenizerFast.from_pretrained(
-        f"{TEST_TOKENIZER_ROOT}/dna_chunks",
-        do_lower_case=False,
-        tokenize_chinese_chars=False,
-        clean_text=False,
-        strip_accents=None,
-    )
-    output_from_bert_tokenizer = bert_tokenizer(
+    # Obtain the reference subtokenizer through the production loader so that this test
+    # and the production path stay in sync (previously this inlined a copy of the BPE
+    # loading logic, which could drift from load_subtokenizer).
+    ref_tokenizer = test_tokenizer.get_field_tokenizer("dna_chunks")
+    output_from_ref_tokenizer = ref_tokenizer(
         dna_sequence,
         return_tensors="pt",
         add_special_tokens=True,
@@ -679,9 +686,9 @@ def test_multifield_tokenizer_can_work_with_string_inputs(
         truncation=True,
         max_length=100,
     )
-    for key in output_from_bert_tokenizer.keys():
+    for key in output_from_ref_tokenizer.keys():
         assert torch.equal(
-            output_from_bert_tokenizer[key], output_from_multi_field_tokenizer[key]
+            output_from_ref_tokenizer[key], output_from_multi_field_tokenizer[key]
         )
 
 

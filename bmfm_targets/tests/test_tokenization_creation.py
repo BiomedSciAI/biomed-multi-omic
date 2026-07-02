@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +9,14 @@ from bmfm_targets.tokenization.create.create_protein_coding_tokenizer import (
 from bmfm_targets.tokenization.load import get_all_genes_v2_tokenizer
 from bmfm_targets.tokenization.multifield_tokenizer import MultiFieldTokenizer
 from bmfm_targets.tokenization.resources.reference_data import get_protein_coding_genes
+
+_PC_VOCAB_DIR = (
+    Path(__file__).parent.parent
+    / "tokenization"
+    / "protein_coding_vocab"
+    / "tokenizers"
+    / "genes"
+)
 
 
 @pytest.fixture(scope="module")
@@ -49,3 +58,26 @@ def test_config_integrity(pc_tokenizer):
     assert isinstance(data["cls_token"], dict)
     assert isinstance(data["additional_special_tokens"][0], dict)
     assert data["additional_special_tokens"][0]["normalized"] is False
+
+
+def test_genes_special_tokens_loaded_without_decoder_blob(pc_tokenizer):
+    """
+    The genes subtokenizer must expose its full special-token set even though
+    tokenizer_config.json carries no added_tokens_decoder blob.
+
+    The loader reads the tokens straight from tokenizer.json and re-registers the
+    [CLS_*]/[S]/[T] specials from special_tokens_map.json, so all_special_tokens must
+    match the reference all_genes_v2 tokenizer's genes field.
+    """
+    mft, path = pc_tokenizer
+
+    cfg = json.loads(
+        (path / "tokenizers" / "genes" / "tokenizer_config.json").read_text()
+    )
+    assert "added_tokens_decoder" not in cfg
+
+    genes_specials = set(mft.get_field_tokenizer("genes").all_special_tokens)
+    ref_specials = set(
+        get_all_genes_v2_tokenizer().get_field_tokenizer("genes").all_special_tokens
+    )
+    assert genes_specials == ref_specials

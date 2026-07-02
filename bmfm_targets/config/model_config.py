@@ -20,6 +20,16 @@ FeatureGenerationAlgorithm = Enum(
 
 
 class SCModelConfigBase(PretrainedConfig):
+    # transformers >= 5 removed these defaults from PretrainedConfig; restore them here
+    # so all subclasses work without changes to every __init__.
+    is_decoder: bool = False
+    add_cross_attention: bool = False
+    chunk_size_feed_forward: int = 0
+    # These models do not tie input/output embeddings. Declared explicitly so
+    # transformers >= 5 get_expanded_tied_weights_keys() short-circuits to {} and
+    # never inspects _tied_weights_keys (which we therefore don't need to set).
+    tie_word_embeddings = False
+
     def to_dict(self):
         """Serializes class to a Python dictionary."""
         output = super().to_dict()
@@ -50,6 +60,21 @@ class SCModelConfigBase(PretrainedConfig):
     def __setstate__(self, state):
         state.setdefault("label_columns", None)
         state.setdefault("_output_attentions", state.get("output_attentions", None))
+        # Forward-compat: transformers >= 5 adds private implementation fields (e.g.
+        # _attn_implementation_internal, _experts_implementation_internal) that are read
+        # via property getters during PreTrainedModel.__init__. Configs pickled by
+        # transformers 4 (the published checkpoints) lack them. Back-fill every base
+        # PretrainedConfig default that is missing from the unpickled state, so new v5
+        # private fields are handled automatically without editing this method.
+        #
+        # Order matters: the _output_attentions line above maps the legacy
+        # output_attentions value into _output_attentions and must win over the generic
+        # default (False) supplied by PretrainedConfig().__dict__. Because setdefault
+        # never overwrites an already-present key, placing the explicit lines first
+        # guarantees that legacy checkpoint values take precedence over the defaults
+        # injected by the loop below.
+        for key, value in PretrainedConfig().__dict__.items():
+            state.setdefault(key, value)
         self.__dict__.update(state)
 
 

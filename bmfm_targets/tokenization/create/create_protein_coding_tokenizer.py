@@ -62,7 +62,11 @@ def create_subset_tokenizer(
 
     json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
-    # 4. Sanitize config (remove decoder to prevent ID collisions on load)
+    # 4. Drop added_tokens_decoder. The runtime loader reads the added tokens straight
+    #    from tokenizer.json (MultiFieldTokenizer.load_subtokenizer loads via
+    #    tokenizer_file=), so a decoder blob in tokenizer_config.json is dead weight that
+    #    can silently drift from the subset vocab. Remove any stale one carried over from
+    #    the reference tokenizer.
     cfg_path = field_dir / "tokenizer_config.json"
     cfg = json.loads(cfg_path.read_text())
     cfg.pop("added_tokens_decoder", None)
@@ -70,6 +74,14 @@ def create_subset_tokenizer(
 
     # 5. Enforce Object Style in special_tokens_map.json
     stm_path = field_dir / "special_tokens_map.json"
+    if not stm_path.exists():
+        # transformers >= 5 save_pretrained no longer emits special_tokens_map.json.
+        # Carry it over from the reference tokenizer; its special tokens (cls/sep/pad/
+        # unk/mask and the additional [CLS_*] tokens) are independent of the gene vocab
+        # subset, so downstream loaders still find them.
+        ref_stm_path = Path(base_mft.base_dir) / field / "special_tokens_map.json"
+        if ref_stm_path.exists():
+            stm_path.write_text(ref_stm_path.read_text())
     if stm_path.exists():
         stm = json.loads(stm_path.read_text())
         # Convert all entries to full objects

@@ -4,10 +4,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from transformers.configuration_utils import PretrainedConfig
-from transformers.pytorch_utils import (
-    find_pruneable_heads_and_indices,
-    prune_linear_layer,
-)
 
 from .layers import SCSelfOutput
 
@@ -83,7 +79,6 @@ class SelfTorchAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: (
@@ -132,9 +127,6 @@ class SelfTorchAttention(nn.Module):
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
 
-        if head_mask is not None:
-            raise ValueError("Head mask is not supported by custom attention class.")
-
         if output_attentions:
             raise ValueError(
                 "Custom attention class does not support output of attention probs."
@@ -175,41 +167,10 @@ class SCBertCustomAttention(nn.Module):
         self.output = SCSelfOutput(config)
         self.pruned_heads: set[int] = set()
 
-    def prune_heads(self, heads: list[int]):
-        """
-        Prune heads of the layer.
-
-        Args:
-        ----
-            heads (list[int]): A list of heads to prune.
-        """
-        if len(heads) == 0:
-            return
-        heads, index = find_pruneable_heads_and_indices(
-            heads,
-            self.self.num_attention_heads,
-            self.self.attention_head_size,
-            self.pruned_heads,
-        )
-
-        # Prune linear layers
-        self.self.query = prune_linear_layer(self.self.query, index)
-        self.self.key = prune_linear_layer(self.self.key, index)
-        self.self.value = prune_linear_layer(self.self.value, index)
-        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
-
-        # Update hyper params and store pruned heads
-        self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
-        self.self.all_head_size = (
-            self.self.attention_head_size * self.self.num_attention_heads
-        )
-        self.pruned_heads = self.pruned_heads.union(heads)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.FloatTensor | None = None,
-        head_mask: torch.FloatTensor | None = None,
         encoder_hidden_states: torch.FloatTensor | None = None,
         encoder_attention_mask: torch.FloatTensor | None = None,
         past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
@@ -218,7 +179,6 @@ class SCBertCustomAttention(nn.Module):
         self_outputs = self.self(
             hidden_states,
             attention_mask,
-            head_mask,
             encoder_hidden_states,
             encoder_attention_mask,
             past_key_value,

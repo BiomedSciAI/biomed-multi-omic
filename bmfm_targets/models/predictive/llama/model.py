@@ -55,7 +55,6 @@ class LlamaEncoderWithInputEmbedding(nn.Module):
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         output_hidden_states: bool | None = None,
         output_attentions: bool | None = None,
     ):
@@ -63,7 +62,6 @@ class LlamaEncoderWithInputEmbedding(nn.Module):
             input_ids,
             attention_mask,
             inputs_embeds,
-            head_mask=head_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
         )
@@ -80,7 +78,6 @@ class LlamaEncoderWithPoolingHead(LlamaEncoderWithInputEmbedding):
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         output_hidden_states: bool | None = None,
         output_attentions: bool | None = None,
     ):
@@ -88,7 +85,6 @@ class LlamaEncoderWithPoolingHead(LlamaEncoderWithInputEmbedding):
             input_ids,
             attention_mask,
             inputs_embeds,
-            head_mask=head_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
         )
@@ -104,6 +100,10 @@ class LlamaEncoderWithPoolingHead(LlamaEncoderWithInputEmbedding):
 
 
 class LlamaForMaskedLMModel(nn.Module, CheckpointMixin):
+    # transformers >= 5 reads `config_class` on auto-registered models in
+    # `_BaseAutoModelClass.from_config`; plain nn.Modules no longer inherit a default.
+    config_class = LlamaForMaskedLMConfig
+
     def __init__(self, config: LlamaForMaskedLMConfig):
         super().__init__()
 
@@ -165,6 +165,8 @@ class LlamaForMaskedLMModel(nn.Module, CheckpointMixin):
 
 
 class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
+    config_class = LlamaForMultiTaskConfig
+
     def __init__(self, config: LlamaForMultiTaskConfig):
         super().__init__()
 
@@ -228,6 +230,11 @@ class LlamaForMultiTaskModel(nn.Module, CheckpointMixin):
 
 
 class LlamaForSequenceClassificationModel(nn.Module, CheckpointMixin, InitWeightsMixin):
+    # No `config_class`: AutoModel registration happens at module-import scope (see the
+    # bottom of this file) and registers LlamaForMultiTaskModel for LlamaForMultiTaskConfig.
+    # LlamaForSequenceClassificationModel is only ever built via build_model(), never
+    # AutoModel.from_config, so a static config_class is not needed here.
+
     def __init__(self, config: LlamaForMultiTaskConfig):
         super().__init__()
 
@@ -242,14 +249,11 @@ class LlamaForSequenceClassificationModel(nn.Module, CheckpointMixin, InitWeight
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         inputs_embeds: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
     ) -> SequenceClassifierOutputWithEmbeddings:
-        if head_mask is not None:
-            raise ValueError("LLama model does not support head mask ...")
         if output_attentions:
             raise ValueError("LLama model does not support output attentions ...")
 

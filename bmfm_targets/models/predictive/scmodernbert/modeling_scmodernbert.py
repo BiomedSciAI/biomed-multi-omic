@@ -181,10 +181,45 @@ class SCModernBertRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
+        # transformers >= 5 removed "default" from ROPE_INIT_FUNCTIONS and relocated the
+        # no-scaling computation onto each rotary-embedding class. Mirror that split:
+        # compute the default inv_freq locally, defer the scaled variants to the registry.
+        if self.rope_type == "default":
+            inv_freq, self.attention_scaling = self.compute_default_rope_parameters(
+                self.config, device
+            )
+        else:
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+            inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config: SCModernBertConfig, device=None
+    ) -> tuple[torch.Tensor, float]:
+        """
+        Compute the inverse frequencies for standard (no-scaling) RoPE.
+
+        Mirrors ``ModernBertRotaryEmbedding.compute_default_rope_parameters`` in
+        transformers >= 5, which dropped "default" from ``ROPE_INIT_FUNCTIONS`` and moved
+        the original-RoPE computation onto the rotary-embedding class. Returns the inverse
+        frequencies and the post-processing attention scaling (always 1.0 for this type).
+        """
+        head_dim = getattr(config, "head_dim", None) or (
+            config.hidden_size // config.num_attention_heads
+        )
+        base = config.rope_theta
+        inv_freq = 1.0 / (
+            base
+            ** (
+                torch.arange(0, head_dim, 2, dtype=torch.int64).to(
+                    device=device, dtype=torch.float
+                )
+                / head_dim
+            )
+        )
+        return inv_freq, 1.0
 
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
@@ -520,6 +555,8 @@ class SCModernBertPreTrainedModel(PreTrainedModel):
             cutoff_factor = 3
 
         def init_weight(module: nn.Module, std: float):
+            # transformers v5 wraps initialize_weights with guard_torch_init_functions, so
+            # torch.nn.init.* calls automatically skip already-loaded params.
             nn.init.trunc_normal_(
                 module.weight,
                 mean=0.0,
@@ -547,9 +584,9 @@ class SCModernBertPreTrainedModel(PreTrainedModel):
             init_weight(module.Wqkv, stds["in"])
             init_weight(module.Wo, stds["out"])
         elif isinstance(module, nn.LayerNorm):
-            module.weight.data.fill_(1.0)
+            nn.init.ones_(module.weight)
             if module.bias is not None:
-                module.bias.data.zero_()
+                nn.init.zeros_(module.bias)
 
     def set_attention_implementation(self, attn_implementation: dict | str):
         """Checks and dispatches to hhe requested attention implementation."""
@@ -739,7 +776,6 @@ class SCModernBertModel(SCModernBertPreTrainedModel):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
-        head_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, ...] | BaseModelOutputWithPoolingAndCrossAttentions:
         output_attentions = (
             output_attentions
@@ -939,8 +975,6 @@ class SCModernBertPredictionHead(nn.Module):
 
 
 class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
-    _tied_weights_keys = ["cls.predictions.decoder.weight"]
-
     def __init__(self, config: SCModernBertConfig):
         super().__init__(config)
         self.config = config
@@ -965,10 +999,6 @@ class SCModernBertForMaskedLM(SCModernBertPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.cls.predictions.decoder = new_embeddings
-
-    def tie_weights(self):
-        logger.warning("Tie weights not supported for this model")
-        return
 
     def forward(
         self,
@@ -1244,10 +1274,6 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
-        logger.warning("Tie weights not supported for this model")
-        return
-
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
@@ -1327,11 +1353,6 @@ class SCModernBertForSequenceLabeling(SCModernBertPreTrainedModel):
 
 
 class SCModernBertForMultiTaskModeling(SCModernBertPreTrainedModel):
-    _tied_weights_keys = [
-        "cls.predictions.decoder.bias",
-        "cls.predictions.decoder.weight",
-    ]
-
     def __init__(self, config: SCModernBertConfig):
         super().__init__(config)
 
@@ -1359,10 +1380,6 @@ class SCModernBertForMultiTaskModeling(SCModernBertPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
-
-    def tie_weights(self):
-        logger.warning("Tie weights not supported for this model")
-        return
 
     def forward(
         self,
