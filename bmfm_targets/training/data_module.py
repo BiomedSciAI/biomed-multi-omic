@@ -504,38 +504,38 @@ class DataModule(pl.LightningDataModule):
         self.dataset_kwargs = self._prepare_dataset_kwargs()
 
         if stage == "fit" or stage is None:
-            self.train_dataset = self.DATASET_FACTORY(
-                **self.dataset_kwargs,
-                split="train",
-                limit_samples=self._dataset_sample_limit("train"),
-            )
-            self.dev_dataset = self.DATASET_FACTORY(
-                **self.dataset_kwargs,
-                split="dev",
-                limit_samples=self._dataset_sample_limit("dev"),
-            )
+            self.train_dataset = self._init_dataset("train")
+            self.dev_dataset = self._init_dataset("dev")
         if stage == "validate" or stage is None:
-            self.dev_dataset = self.DATASET_FACTORY(
-                **self.dataset_kwargs,
-                split="dev",
-                limit_samples=self._dataset_sample_limit("dev"),
-            )
+            self.dev_dataset = self._init_dataset("dev")
         if stage == "test" or stage is None:
-            self.test_dataset = self.DATASET_FACTORY(
-                **self.dataset_kwargs,
-                split="test",
-                limit_samples=self._dataset_sample_limit("test"),
-            )
-
+            self.test_dataset = self._init_dataset("test")
         if stage == "predict" or stage is None:
-            self.predict_dataset = self.DATASET_FACTORY(
-                **self.dataset_kwargs,
-                split=None,
-                limit_samples=self._dataset_sample_limit("predict"),
-            )
+            self.predict_dataset = self._init_dataset(None)
 
         if any(field.vocab_update_strategy == "dynamic" for field in self.fields):
             self.update_tokenizer()
+
+    def _init_dataset(self, split: str | None):
+        """
+        Construct the dataset for one split.
+
+        ``processed_data_source`` is either a single source (path/AnnData) shared
+        by all splits and filtered by a split column, or a per-split mapping such
+        as ``{"train": train.h5ad, "dev": val.h5ad}`` where each file already holds
+        exactly one split (so no further filtering is applied).
+        """
+        kwargs = {**self.dataset_kwargs}
+        source = kwargs.get("processed_data_source")
+        dataset_split = split
+        if split is not None and isinstance(source, Mapping):
+            kwargs["processed_data_source"] = source[split]
+            dataset_split = None
+        return self.DATASET_FACTORY(
+            **kwargs,
+            split=dataset_split,
+            limit_samples=self._dataset_sample_limit(split or "predict"),
+        )
 
     def _prepare_dataset_kwargs(self):
         """
@@ -553,7 +553,11 @@ class DataModule(pl.LightningDataModule):
         if self.dataset_kwargs:
             final_dataset_kwargs = {**self.dataset_kwargs}
         final_dataset_kwargs["stratifying_label"] = self.stratifying_label
-        final_dataset_kwargs["processed_data_source"] = self.load_processed_data()
+        # A single shared source is loaded once here so it isn't re-read per split.
+        # A per-split mapping ({"train": ..., "dev": ...}) is left as-is; each split's
+        # file is read on demand in `_init_dataset`.
+        if not isinstance(final_dataset_kwargs.get("processed_data_source"), Mapping):
+            final_dataset_kwargs["processed_data_source"] = self.load_processed_data()
         final_dataset_kwargs["limit_samples_shuffle"] = self.shuffle
         if self.limit_genes is not None:
             final_dataset_kwargs["limit_genes"] = self._get_limited_gene_list(
