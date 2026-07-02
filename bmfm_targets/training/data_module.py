@@ -526,7 +526,7 @@ class DataModule(pl.LightningDataModule):
         exactly one split (so no further filtering is applied).
         """
         kwargs = {**self.dataset_kwargs}
-        source = kwargs["processed_data_source"]
+        source = kwargs.get("processed_data_source")
         dataset_split = split
         if split is not None and isinstance(source, Mapping):
             kwargs["processed_data_source"] = source[split]
