@@ -1328,6 +1328,12 @@ class ContrastiveDataModule(DataModule):
         self._n_cells_per_batch = n_cells_per_batch
         self._contrastive_panel = contrastive_panel or {}
 
+    def get_trainer_callbacks(self) -> list:
+        """Surface contrastive recall/scale diagnostics on top of any base callbacks."""
+        from bmfm_targets.training.callbacks import ContrastiveMetricsCallback
+
+        return super().get_trainer_callbacks() + [ContrastiveMetricsCallback()]
+
     def train_dataloader(self):
         import pandas as pd
         from torch.utils.data import DataLoader

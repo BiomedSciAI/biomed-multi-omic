@@ -620,18 +620,37 @@ class HCEObjective(Objective):
 
 
 class ContrastiveObjective(Objective):
-    """InfoNCE / CLIP symmetric contrastive loss over paired cell views."""
+    """
+    InfoNCE / CLIP contrastive loss over two gene-panel views of each cell.
+
+    Two forms of the loss, matching scConcept (``model.py:_step``):
+
+    - ``both_batch=False`` (default): the symmetric N×N CLIP loss. View A of
+      cell ``i`` is a positive for view B of cell ``i``; the other N−1 cells in
+      the batch are negatives. Cross-entropy is taken in both directions
+      (A→B and B→A) and averaged.
+    - ``both_batch=True``: the reference's steady-state "combined" 2N×2N loss.
+      Both views are stacked into a single gallery of 2N embeddings; each of the
+      2N anchors is classified against all others, with its own trivial
+      self-match excluded. This gives ~2N−2 negatives per anchor (both views of
+      every other cell) instead of N−1. scConcept switches to this form after
+      ``loss_switch_step`` (default 10000), so it is the loss in force for most
+      of training; the step-based warmup curriculum itself is not replicated
+      here (the objective has no access to the global step).
+    """
 
     def __init__(
         self,
         temperature: float | None = None,
         symmetric: bool = True,
         gather_distributed: bool = True,
+        both_batch: bool = False,
     ):
         super().__init__()
         self._temperature = temperature  # None -> use learnable scale from source
         self._symmetric = symmetric
         self._gather_distributed = gather_distributed
+        self._both_batch = both_batch
 
     @property
     def contributes_sample_metrics(self) -> bool:
@@ -645,7 +664,8 @@ class ContrastiveObjective(Objective):
     def decoder_suffix(self) -> str:
         return "_contrastive"
 
-    def bind(self, fields, label_columns):
+    def bind(self, output_size=None, tokenizer=None) -> None:
+        """No output size to bind (batch-level objective)."""
         pass
 
     def default_metrics(self) -> list:
@@ -653,6 +673,21 @@ class ContrastiveObjective(Objective):
 
     def get_predictions(self, z, scale=None):
         return z
+
+    def _scale(self, scale) -> float | torch.Tensor:
+        """Resolve the logit-scale multiplier (fixed temperature or learnable)."""
+        if self._temperature is not None:
+            return 1.0 / self._temperature
+        if scale is None:
+            return 1.0 / 0.07
+        return scale.exp()  # scale is the learnable logit_scale parameter
+
+    @staticmethod
+    def _recall(logits: torch.Tensor, target: torch.Tensor, k: int) -> float:
+        k = min(k, logits.shape[1])
+        topk = logits.topk(k, dim=1).indices
+        hit = (topk == target.unsqueeze(1)).any(dim=1).float().mean()
+        return hit.item()
 
     def compute(self, z, scale) -> torch.Tensor | None:
         import torch
@@ -688,17 +723,28 @@ class ContrastiveObjective(Objective):
             except Exception:
                 pass
 
-        if self._temperature is not None:
-            s = 1.0 / self._temperature
-            logits_ab = za @ zb.T * s
-        else:
-            if scale is None:
-                s = 1.0 / 0.07
-                logits_ab = za @ zb.T * s
-            else:
-                # scale is logit_scale parameter: exp(scale)
-                logits_ab = za @ zb.T * scale.exp()
+        s = self._scale(scale)
 
+        if self._both_batch:
+            loss, recall1, recall5 = self._combined_loss(za, zb, s)
+        else:
+            loss, recall1, recall5 = self._simple_loss(za, zb, s)
+
+        with torch.no_grad():
+            self._last_recall_at1 = recall1
+            self._last_recall_at5 = recall5
+            if scale is not None:
+                self._last_logit_scale = scale.exp().item()
+
+        return loss
+
+    def _simple_loss(self, za, zb, s):
+        """Symmetric N×N CLIP loss (N−1 negatives per anchor)."""
+        import torch
+        import torch.nn.functional as F
+
+        logits_ab = za @ zb.T * s
+        N = za.shape[0]
         t = torch.arange(N, device=za.device)
         if self._symmetric:
             loss = 0.5 * (
@@ -706,14 +752,32 @@ class ContrastiveObjective(Objective):
             )
         else:
             loss = F.cross_entropy(logits_ab, t)
+        return loss, self._recall(logits_ab, t, 1), self._recall(logits_ab, t, 5)
 
-        # stash diagnostics for logging
-        with torch.no_grad():
-            self._last_recall_at1 = (logits_ab.argmax(1) == t).float().mean().item()
-            if scale is not None:
-                self._last_logit_scale = scale.item()
+    def _combined_loss(self, za, zb, s):
+        """
+        2N×2N "both_batch" loss (scConcept combined form).
 
-        return loss
+        Gallery = [za; zb] vs [zb; za]; the positive for each anchor sits on the
+        diagonal, and the anchor's own embedding (the trivial cosine-1 match) is
+        excluded by masking position (i, (i+N) mod 2N) to -inf.
+        """
+        import torch
+        import torch.nn.functional as F
+
+        N = za.shape[0]
+        cat1 = torch.cat([za, zb], dim=0)  # [2N, D]
+        cat2 = torch.cat([zb, za], dim=0)  # [2N, D]
+        logits = cat1 @ cat2.T * s  # [2N, 2N]
+
+        M = 2 * N
+        rows = torch.arange(M, device=za.device)
+        self_cols = (rows + N) % M  # position of each anchor's own embedding
+        logits[rows, self_cols] = float("-inf")
+
+        t = rows  # positive pair sits on the diagonal
+        loss = F.cross_entropy(logits, t)
+        return loss, self._recall(logits, t, 1), self._recall(logits, t, 5)
 
 
 # Made with Bob

@@ -21,6 +21,7 @@ class _PairedViewCollator:
         max_frac: float = 0.75,
         overlap_prob: float = 0.0,
         feature_dropout: float = 0.1,
+        panel_size_sampling: str = "log_uniform",
         seed: int | None = None,
     ):
         self._base_collate = base_collate
@@ -28,7 +29,31 @@ class _PairedViewCollator:
         self._max_frac = max_frac
         self._overlap_prob = overlap_prob
         self._feature_dropout = feature_dropout
+        if panel_size_sampling not in ("log_uniform", "uniform"):
+            raise ValueError(
+                f"panel_size_sampling must be 'log_uniform' or 'uniform', "
+                f"got {panel_size_sampling!r}"
+            )
+        self._panel_size_sampling = panel_size_sampling
         self._rng = np.random.default_rng(seed)
+
+    def _sample_panel_size(self, n: int) -> int:
+        """
+        Sample view-A panel size in [min_frac*n, max_frac*n].
+
+        ``log_uniform`` mirrors the reference ``collate.log_int_samping``, which
+        samples the size log-uniformly (biasing toward smaller, sparser panels
+        like real targeted assays); ``uniform`` samples it linearly.
+        """
+        lo = max(1, int(self._min_frac * n))
+        hi = max(lo, int(self._max_frac * n))
+        if lo == hi:
+            return lo
+        if self._panel_size_sampling == "log_uniform":
+            size = int(np.exp2(self._rng.uniform(np.log2(lo), np.log2(hi))))
+        else:
+            size = int(self._rng.uniform(lo, hi))
+        return int(np.clip(size, lo, hi))
 
     def _make_views(
         self, mfi: MultiFieldInstance
@@ -51,7 +76,7 @@ class _PairedViewCollator:
 
         # Shuffle and split
         perm = self._rng.permutation(n)
-        size_a = int(n * self._rng.uniform(self._min_frac, self._max_frac))
+        size_a = self._sample_panel_size(n)
         size_a = max(4, min(size_a, n - 4))  # keep at least 4 genes per view
 
         if self._rng.random() < self._overlap_prob:

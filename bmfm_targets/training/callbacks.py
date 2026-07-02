@@ -956,3 +956,45 @@ def add_control_samples(
     )
 
     return adata_combined
+
+
+class ContrastiveMetricsCallback(pl.Callback):
+    """
+    Logs contrastive diagnostics that batch-level objectives cannot surface
+    through the per-sample metric machinery.
+
+    ``ContrastiveObjective`` has ``contributes_sample_metrics == False``, so it
+    is excluded from the standard metric path. It stashes its last-batch
+    recall@1, recall@5 and (learnable) logit_scale on itself; this callback
+    reads those from the module's ``loss_tasks`` after each training/validation
+    batch and logs them, mirroring the recall/scale logging in the reference
+    scConcept trainer.
+    """
+
+    def _log(self, pl_module, prefix: str) -> None:
+        for loss_task in getattr(pl_module, "loss_tasks", []):
+            objective = getattr(loss_task, "objective", None)
+            if objective is None or objective.name != "contrastive":
+                continue
+            for attr, metric in (
+                ("_last_recall_at1", "recall@1"),
+                ("_last_recall_at5", "recall@5"),
+                ("_last_logit_scale", "logit_scale"),
+            ):
+                value = getattr(objective, attr, None)
+                if value is not None:
+                    pl_module.log(
+                        f"{prefix}/{metric}",
+                        float(value),
+                        on_step=(prefix == "train"),
+                        on_epoch=True,
+                        batch_size=1,
+                    )
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        self._log(pl_module, "train")
+
+    def on_validation_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    ):
+        self._log(pl_module, "val")

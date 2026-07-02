@@ -215,6 +215,7 @@ def _create_objective(loss_name: str, loss_config: dict):
             temperature=loss_config.get("temperature"),
             symmetric=loss_config.get("symmetric", True),
             gather_distributed=loss_config.get("gather_distributed", True),
+            both_batch=loss_config.get("both_batch", False),
         )
     else:
         raise ValueError(f"Unknown loss name: {loss_name}")

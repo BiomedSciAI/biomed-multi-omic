@@ -73,6 +73,9 @@ trainer:
     - field_name: expressions
       name: contrastive
       weight: 1.0
+      # 2N×2N combined loss (scConcept steady-state, model.py loss_switch_step);
+      # each anchor sees both views of every other cell as negatives.
+      both_batch: true
 
 task:
   _target_: bmfm_targets.config.TrainingTaskConfig
