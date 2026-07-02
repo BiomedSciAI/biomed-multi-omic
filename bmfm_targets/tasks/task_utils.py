@@ -428,8 +428,14 @@ def train(
     }
     # handle pytorch-lightning >=2.6.0 which requires weights_only and earlier which
     # cannot have it as an arg
-    if "weights_only" in pl_trainer.test.__annotations__:
-        kwargs["weights_only"] = False
+    try:
+        import inspect
+
+        fit_sig = inspect.signature(pl_trainer.fit)
+        if "weights_only" in fit_sig.parameters:
+            kwargs["weights_only"] = False
+    except (ValueError, TypeError):
+        pass
     pl_trainer.fit(**kwargs)
 
 

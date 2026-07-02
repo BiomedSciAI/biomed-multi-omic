@@ -12,11 +12,14 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import (
-    apply_chunking_to_forward,
-    find_pruneable_heads_and_indices,
-    prune_linear_layer,
-)
+from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_layer
+
+try:
+    from transformers.pytorch_utils import find_pruneable_heads_and_indices
+except ImportError:
+    from bmfm_targets.models.predictive._compat_utils import (
+        find_pruneable_heads_and_indices,
+    )
 from transformers.utils import logging
 
 from bmfm_targets.config import SCBertConfig
@@ -466,6 +469,13 @@ class SCBertModel(SCBertPreTrainedModel):
         self.pooler = SCPooler(config) if add_pooling_layer else None
         self.post_init()
 
+    def get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
+        from bmfm_targets.models.predictive._compat_utils import (
+            get_head_mask as _get_head_mask,
+        )
+
+        return _get_head_mask(head_mask, num_hidden_layers, is_attention_chunked)
+
     # def get_input_embeddings(self):
     #    return [self.embeddings.gene_embeddings, self.embeddings.expression_embeddings]
 
@@ -653,7 +663,7 @@ class SCBertForMaskedLM(SCBertPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -898,7 +908,7 @@ class SCBertForSequenceLabeling(SCBertPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 
@@ -1021,7 +1031,7 @@ class SCBertForMultiTaskModeling(SCBertPreTrainedModel):
         )
         self.cls.predictions.decoder = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         logger.warning("Tie weights not supported for this model")
         return
 
