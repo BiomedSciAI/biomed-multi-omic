@@ -37,11 +37,8 @@ data_module:
       test: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_h5ad/test.h5ad
     expose_zeros: all
 
-label_columns:
-  - _target_: bmfm_targets.config.LabelColumnInfo
-    label_column_name: cell_type_ontology_term_id
-    label_ontology: celltypeont
-    decode_from: 0
+# Pure-reconstruction ablation: no cell-type supervision (matches contrastive/both).
+label_columns: []
 
 fields:
   - _target_: bmfm_targets.config.FieldInfo
@@ -117,8 +114,6 @@ trainer:
       name: is_zero_bce
       wced_target: non_input_genes
       weight: 0.0
-    - label_column_name: cell_type_ontology_term_id
-      name: hce
 
 model:
   _target_: bmfm_targets.models.predictive.llama.LlamaForMultiTaskConfig
