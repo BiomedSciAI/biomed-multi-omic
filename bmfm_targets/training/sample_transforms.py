@@ -7,7 +7,6 @@ Used for modifying training logic or augmenting data.
 import random
 import warnings
 from functools import partial, reduce
-from operator import itemgetter
 from typing import Literal
 
 import numpy as np
@@ -711,7 +710,7 @@ def _random_pad_zero_expressed_genes(mfi: MultiFieldInstance, max_length: int):
         keep_indices.extend(random.sample(zero_indices, min(len(zero_indices), needed)))
 
     data_to_keep = {
-        field: list(itemgetter(*keep_indices)(values))
+        field: [values[i] for i in keep_indices]
         for field, values in mfi.data.items()
     }
     return MultiFieldInstance(data=data_to_keep, metadata=mfi.metadata)
@@ -758,7 +757,7 @@ def _batchwise_pad_zero_expressed_genes(
         output_indices = np.concatenate([sample_nz, sample_z[:128]])
 
     updated_data = {
-        field: list(itemgetter(*output_indices)(values))
+        field: [values[i] for i in output_indices]
         for field, values in mfi.data.items()
     }
 
