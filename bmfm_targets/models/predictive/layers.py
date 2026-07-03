@@ -642,6 +642,15 @@ class SCBaseFieldDecoder(nn.Module):
                 z, scale = field_decoder(hidden_states, pooled_output)
                 field_logits[field_decoder_name] = z
                 field_logits[field_decoder_name + "_scale"] = scale
+            elif field_decoder_name.endswith("_wced"):
+                # WCED predicts all genes from a single token (index 0); only that
+                # token is consumed downstream (WCEDFieldSource.decode_token_index=0),
+                # so only token 0 contributes to the loss/gradients. Decode just that
+                # token instead of materializing a [batch, seq_len, vocab, n_outputs]
+                # tensor for positions that are discarded — the OOM source in the
+                # WCED+contrastive arm. Numerically identical to slicing token 0 after
+                # a full-length decode.
+                field_logits[field_decoder_name] = field_decoder(hidden_states[:, :1, :])
             else:
                 field_logits[field_decoder_name] = field_decoder(hidden_states)
         return field_logits
