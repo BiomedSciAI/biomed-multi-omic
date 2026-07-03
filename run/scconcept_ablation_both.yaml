@@ -9,7 +9,7 @@ tokenizer:
 data_module:
   _target_: bmfm_targets.training.data_module.ContrastiveDataModule
   _partial_: true
-  num_workers: 8
+  num_workers: 16
   mlm: true
   shuffle: true
   max_length: 1024
@@ -75,7 +75,7 @@ fields:
 task:
   _target_: bmfm_targets.config.TrainingTaskConfig
   default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/${track_clearml.task_name}
-  max_epochs: 10
+  max_epochs: 11
   limit_train_batches: null
   limit_val_batches: 20
   precision: 16-mixed
