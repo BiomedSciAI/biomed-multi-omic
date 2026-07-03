@@ -37,8 +37,11 @@ data_module:
   dataset_kwargs:
     processed_data_source: /Users/dmichael/github/biomed-multi-omic/data/real/pbmc3k.h5ad
   transform_datasets: false
+  # Group mini-batches by source dataset (paper-faithful). PBMC3k is a single
+  # dataset, so this collapses to one group (random batching), which is correct
+  # for a single-study dev run. Do NOT group by cell type (degenerate negatives).
   condition_columns:
-    - celltype
+    - dataset_id
   n_cells_per_batch: ${n_cells_per_batch}
 
 model:

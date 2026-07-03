@@ -1,0 +1,110 @@
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: protein_coding
+  prepend_tokens: null
+
+data_module:
+  _target_: bmfm_targets.training.data_module.ContrastiveDataModule
+  _partial_: true
+  num_workers: 8
+  mlm: false
+  shuffle: true
+  max_length: 1024
+  sequence_order: random
+  batch_size: ${n_cells_per_batch}
+  limit_genes: protein_coding
+  log_normalize_transform: false
+  transform_datasets: false
+  dataset_kwargs:
+    processed_data_source: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_h5ad/processed.h5ad
+    split_column_name: split
+    expose_zeros: null
+  # Paper-faithful: group each mini-batch by source dataset (not cell type), so
+  # negatives are a natural mix of related cell types within one study, and the
+  # model can't use inter-dataset technical differences as a shortcut.
+  condition_columns:
+    - dataset_id
+  n_cells_per_batch: ${n_cells_per_batch}
+  contrastive_panel:
+    min_frac: 0.25
+    max_frac: 0.75
+    overlap_prob: 0.0
+    panel_size_sampling: log_uniform
+
+label_columns: []
+
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: genes
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: expressions
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: scale_adapt
+      n_sin_basis: 48
+      basis_scale: 0.01
+      trainable: false
+      zero_as_special_token: true
+    decode_modes:
+      contrastive:
+        projection_dim: 128
+        learnable_scale: true
+        decode_from: cls
+
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/${track_clearml.task_name}
+  max_epochs: 10
+  limit_train_batches: null
+  limit_val_batches: 20
+  precision: 16-mixed
+  val_check_interval: 0.2
+  gradient_clip_val: 0.5
+  accelerator: gpu
+  max_steps: -1
+  tf32_mode: medium
+  accumulate_grad_batches: 1
+  freeze_layers: false
+  resume_training_from_ckpt: false
+  num_sanity_val_steps: 2
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 1000
+  weight_decay: 0.1
+  learning_rate: 1.0e-4
+  betas:
+    - 0.9
+    - 0.99
+  epsilon: 1.0e-08
+  lr_decay_steps: null
+  losses:
+    - field_name: expressions
+      name: contrastive
+      both_batch: true
+      weight: 1.0
+
+model:
+  _target_: bmfm_targets.models.predictive.llama.LlamaForMultiTaskConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  hidden_act: gelu
+  hidden_size: 384
+  initializer_range: 0.02
+  layer_norm_eps: 1.0e-12
+  pad_token_id: 0
+  flex_attention: true
+  use_cache: true
+  attention: flex
+  checkpoint: null
+
+track_clearml:
+  project_name: bmfm-targets/scconcept_ablation
+  task_name: scconcept_ablation_contrastive
+  continue_last_task: false
+
+n_cells_per_batch: 64

@@ -1,0 +1,141 @@
+seed:
+  seed_value: 1234
+
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: protein_coding
+  prepend_tokens: null
+
+data_module:
+  _target_: bmfm_targets.training.data_module.DataModule
+  _partial_: true
+  num_workers: 8
+  mlm: true
+  shuffle: true
+  max_length: 1024
+  padding: longest
+  sequence_order: random
+  sequence_dropout_factor: 0.2
+  batch_size: 8
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  transform_datasets: false
+  pad_zero_expression_strategy:
+    strategy: batch_wise
+    interleave_zero_ratio: 0.9
+    expressed_sample_ratio: 0.2
+  masking_strategy:
+    _target_: bmfm_targets.training.masking.strategy.WCEDMasker
+    _partial_: true
+    sample_transforms_kwargs:
+      median_normalization: false
+      log_normalize_transform: true
+  dataset_kwargs:
+    processed_data_source:
+      train: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_h5ad/train.h5ad
+      dev: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_h5ad/dev.h5ad
+      test: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_h5ad/test.h5ad
+    expose_zeros: all
+
+label_columns:
+  - _target_: bmfm_targets.config.LabelColumnInfo
+    label_column_name: cell_type_ontology_term_id
+    label_ontology: celltypeont
+    decode_from: 0
+
+fields:
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: genes
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: expressions
+    is_masked: true
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: scale_adapt
+      n_sin_basis: 48
+      basis_scale: 0.01
+      trainable: false
+      zero_as_special_token: true
+    decode_modes:
+      wced:
+        vocab_field: genes
+        logit_outputs:
+          - mse
+          - is_zero_bce
+
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/${track_clearml.task_name}
+  max_epochs: 10
+  limit_train_batches: null
+  limit_val_batches: 96
+  precision: 16-mixed
+  val_check_interval: 0.2
+  gradient_clip_val: 0.5
+  accelerator: gpu
+  max_steps: -1
+  tf32_mode: medium
+  accumulate_grad_batches: 1
+  freeze_layers: false
+  resume_training_from_ckpt: false
+
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 1000
+  weight_decay: 0.1
+  learning_rate: 1.0e-4
+  betas:
+    - 0.9
+    - 0.99
+  epsilon: 1.0e-08
+  lr_decay_steps: null
+  losses:
+    - field_name: expressions
+      name: mse
+      ignore_zero: true
+      wced_target: all_genes
+      weight: 1.0
+    - field_name: expressions
+      name: is_zero_bce
+      wced_target: all_genes
+      weight: 1.0
+    - field_name: expressions
+      name: mse
+      ignore_zero: true
+      wced_target: input_genes
+      weight: 0.0
+    - field_name: expressions
+      name: is_zero_bce
+      wced_target: input_genes
+      weight: 0.0
+    - field_name: expressions
+      name: mse
+      ignore_zero: true
+      wced_target: non_input_genes
+      weight: 0.0
+    - field_name: expressions
+      name: is_zero_bce
+      wced_target: non_input_genes
+      weight: 0.0
+    - label_column_name: cell_type_ontology_term_id
+      name: hce
+
+model:
+  _target_: bmfm_targets.models.predictive.llama.LlamaForMultiTaskConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  hidden_act: gelu
+  hidden_size: 384
+  initializer_range: 0.02
+  layer_norm_eps: 1.0e-12
+  pad_token_id: 0
+  flex_attention: true
+  use_cache: true
+  attention: flex
+  checkpoint: null
+
+track_clearml:
+  project_name: bmfm-targets/scconcept_ablation
+  task_name: scconcept_ablation_wced
+  continue_last_task: false

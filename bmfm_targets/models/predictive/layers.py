@@ -436,7 +436,10 @@ class ContrastiveHead(nn.Module):
         else:
             x = pooled_output if pooled_output is not None else hidden_states[:, 0, :]
         z = self.projection(x)
-        return z, self.logit_scale
+        # Clamp the (log) scale so the effective multiplier never exceeds 100,
+        # matching CLIP. Prevents the temperature runaway (observed growing
+        # unbounded to ~65+ and inflating the contrastive loss).
+        return z, self.logit_scale.clamp(max=math.log(100.0))
 
 
 def make_field_decoder(

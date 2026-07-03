@@ -1338,42 +1338,58 @@ class ContrastiveDataModule(DataModule):
 
         return super().get_trainer_callbacks() + [ContrastiveMetricsCallback()]
 
-    def train_dataloader(self):
+    def _obs_conditions(self, dataset) -> "pd.Series":
         import pandas as pd
+
+        # The RNA dataset stores its obs DataFrame as `metadata`
+        # (= processed_data.obs), positionally aligned to __getitem__ order when
+        # limit_samples is None. There is no `.h5ad` attribute; reading one here
+        # previously made this method silently fall back to a single group,
+        # disabling condition grouping and running a different experiment than
+        # configured. We now fail loudly instead.
+        obs = getattr(dataset, "metadata", None)
+        if obs is None:
+            raise ValueError(
+                "ContrastiveDataModule needs the dataset's obs DataFrame (exposed "
+                "as `metadata`) to build condition-homogeneous batches for "
+                f"condition_columns={self._condition_columns}, but the dataset "
+                f"{type(dataset).__name__!r} exposes no `metadata`. Refusing to "
+                "silently fall back to ungrouped (random) batching."
+            )
+        missing = [c for c in self._condition_columns if c not in obs.columns]
+        if missing:
+            raise ValueError(
+                f"ContrastiveDataModule: condition_columns {missing} not found in "
+                "the dataset obs. Grouped contrastive batching requires these "
+                "column(s); refusing to silently fall back to ungrouped (random) "
+                f"batching, which would be a different experiment. "
+                f"Available obs columns: {sorted(obs.columns)}"
+            )
+        parts = [
+            obs[col].astype(str).reset_index(drop=True)
+            for col in self._condition_columns
+        ]
+        return (
+            parts[0]
+            if len(parts) == 1
+            else pd.Series(
+                ["_".join(row) for row in zip(*[p.values for p in parts])]
+            )
+        )
+
+    def _contrastive_dataloader(self, dataset, collate_fn):
         from torch.utils.data import DataLoader
 
         from bmfm_targets.datasets.paired_view_collator import _PairedViewCollator
         from bmfm_targets.datasets.samplers import ConditionHomogeneousBatchSampler
 
-        dataset = self.train_dataset
-        # Build per-sample condition string from obs columns
-        obs = dataset.h5ad.obs if hasattr(dataset, "h5ad") else None
-        if obs is not None:
-            parts = []
-            for col in self._condition_columns:
-                if col in obs.columns:
-                    parts.append(obs[col].astype(str).reset_index(drop=True))
-            if parts:
-                obs_conditions = (
-                    parts[0]
-                    if len(parts) == 1
-                    else pd.Series(
-                        ["_".join(row) for row in zip(*[p.values for p in parts])]
-                    )
-                )
-            else:
-                obs_conditions = pd.Series(["all"] * len(dataset))
-        else:
-            obs_conditions = pd.Series(["all"] * len(dataset))
-
         sampler = ConditionHomogeneousBatchSampler(
-            obs_conditions,
+            self._obs_conditions(dataset),
             batch_size=self._n_cells_per_batch,
             num_batches=len(dataset) // self._n_cells_per_batch,
             replacement=False,
         )
-        paired_collate = _PairedViewCollator(self.collate_fn, **self._contrastive_panel)
-
+        paired_collate = _PairedViewCollator(collate_fn, **self._contrastive_panel)
         return DataLoader(
             dataset,
             batch_sampler=sampler,
@@ -1382,3 +1398,9 @@ class ContrastiveDataModule(DataModule):
             persistent_workers=self.num_workers > 0,
             pin_memory=True,
         )
+
+    def train_dataloader(self):
+        return self._contrastive_dataloader(self.train_dataset, self.collate_fn)
+
+    def val_dataloader(self):
+        return self._contrastive_dataloader(self.dev_dataset, self.val_collate_fn())

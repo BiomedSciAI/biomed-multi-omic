@@ -11,10 +11,6 @@ import pytorch_lightning as pl
 import scanpy as sc
 import transformers
 from clearml.logger import Logger
-from czbenchmarks.tasks import (
-    MetadataLabelPredictionTask,
-    MetadataLabelPredictionTaskInput,
-)
 from lightning_utilities.core.rank_zero import rank_zero_only
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.utilities import types as pl_types
@@ -494,6 +490,8 @@ class CziBenchmarkCallback(pl.Callback):
             )
 
     def execute_czi_cell_type_classification_benchmark(self, adata_with_embeddings):
+        from czbenchmarks.tasks import MetadataLabelPredictionTask, MetadataLabelPredictionTaskInput
+
         label_prediction_task = MetadataLabelPredictionTask()
 
         # take ground-truth labels from the dataset

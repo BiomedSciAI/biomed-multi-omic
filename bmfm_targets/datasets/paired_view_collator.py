@@ -35,7 +35,41 @@ class _PairedViewCollator:
                 f"got {panel_size_sampling!r}"
             )
         self._panel_size_sampling = panel_size_sampling
-        self._rng = np.random.default_rng(seed)
+        self._seed = seed
+        self._rng = None
+
+    @property
+    def rng(self) -> np.random.Generator:
+        """
+        Per-worker RNG, created lazily inside each dataloader worker.
+
+        The collator is pickled to every worker; if the RNG were built in
+        ``__init__`` all workers (and the main process) would replay the *same*
+        panel-split / dropout sequence. Reseeding from ``worker_info.seed`` (as
+        the reference collator does) decorrelates the views produced by
+        different workers.
+        """
+        if self._rng is None:
+            seed = self._seed
+            try:
+                from torch.utils.data import get_worker_info
+
+                info = get_worker_info()
+                if info is not None:
+                    seed = info.seed
+            except Exception:
+                pass
+            self._rng = np.random.default_rng(seed)
+        return self._rng
+
+    def _apply_feature_dropout(self, idx: np.ndarray) -> np.ndarray:
+        """Independently drop a fraction of a view's genes (keeping >= 4)."""
+        if self._feature_dropout <= 0 or len(idx) <= 4:
+            return idx
+        keep = self.rng.random(len(idx)) >= self._feature_dropout
+        if int(keep.sum()) < 4:
+            return idx
+        return idx[keep]
 
     def _sample_panel_size(self, n: int) -> int:
         """
@@ -50,9 +84,9 @@ class _PairedViewCollator:
         if lo == hi:
             return lo
         if self._panel_size_sampling == "log_uniform":
-            size = int(np.exp2(self._rng.uniform(np.log2(lo), np.log2(hi))))
+            size = int(np.exp2(self.rng.uniform(np.log2(lo), np.log2(hi))))
         else:
-            size = int(self._rng.uniform(lo, hi))
+            size = int(self.rng.uniform(lo, hi))
         return int(np.clip(size, lo, hi))
 
     def _make_views(
@@ -75,18 +109,23 @@ class _PairedViewCollator:
         n = len(all_indices)
 
         # Shuffle and split
-        perm = self._rng.permutation(n)
+        perm = self.rng.permutation(n)
         size_a = self._sample_panel_size(n)
         size_a = max(4, min(size_a, n - 4))  # keep at least 4 genes per view
 
-        if self._rng.random() < self._overlap_prob:
+        if self.rng.random() < self._overlap_prob:
             # overlapping: both views sample independently
-            idx_a = self._rng.choice(n, size=size_a, replace=False)
-            idx_b = self._rng.choice(n, size=n - size_a, replace=False)
+            idx_a = self.rng.choice(n, size=size_a, replace=False)
+            idx_b = self.rng.choice(n, size=n - size_a, replace=False)
         else:
             # disjoint: split the permutation
             idx_a = np.sort(perm[:size_a])
             idx_b = np.sort(perm[size_a:])
+
+        # Independent per-view feature dropout, mirroring the reference's
+        # per-view feature selection with a max drop rate.
+        idx_a = self._apply_feature_dropout(idx_a)
+        idx_b = self._apply_feature_dropout(idx_b)
 
         def subset_mfi(idx):
             new_data = {}
