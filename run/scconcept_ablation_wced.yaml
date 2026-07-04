@@ -15,7 +15,11 @@ data_module:
   max_length: 1024
   padding: longest
   sequence_order: random
-  sequence_dropout_factor: 0.2
+  # NB: vanilla WCED baseline set `sequence_dropout_ratio` (a dead key swallowed by
+  # DataModule **kwargs) so it ran NO sequence dropout. Using the real key
+  # `sequence_dropout_factor` here turned on dropout_random over ~19k genes
+  # (expose_zeros: all), which was O(n^2) and the entire 7x slowdown. Removed to
+  # match vanilla. Re-add `sequence_dropout_factor: 0.2` if the augmentation is wanted.
   batch_size: 64
   limit_genes: protein_coding
   log_normalize_transform: true

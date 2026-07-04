@@ -474,9 +474,11 @@ def dropout_random(
     """
     assert 0 <= dropout_ratio < 1
     sequence_len = len(next(iter(mfi.data.values())))
-    dropout_indices = [
+    # set (not list) so the membership test below is O(1); with expose_zeros=all
+    # this runs over ~19k genes and a list scan makes the comprehension O(n^2).
+    dropout_indices = {
         i for i in range(sequence_len) if dropout_ratio > random.random()
-    ]
+    }
     data_after_dropout = {}
     for field, values in mfi.data.items():
         data_after_dropout[field] = [
