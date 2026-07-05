@@ -631,7 +631,11 @@ def selective_dropout(
 
 
 def limit_fields_to_token_list(
-    mfi: MultiFieldInstance, token_list: list, field_name: str = "genes"
+    mfi: MultiFieldInstance,
+    token_list: list,
+    field_name: str = "genes",
+    *args,
+    **kwargs,
 ) -> MultiFieldInstance:
     """
     Subset the field names (by default: genes) to the token list given. This transformation is intended to
@@ -643,17 +647,22 @@ def limit_fields_to_token_list(
         token_list (list): list of tokens to include in the mfi
         field_name (str, optional): The field name of the MultiFieldInstance (mfi) that you want to limit.
             Defaults to "genes".
+        *args: Unused positional arguments (composition tolerance).
+        **kwargs: Additional keyword arguments threaded through composed transforms.
+            - input_token_panel (list | None): if present and not None, a per-example
+              dynamic panel that overrides the static ``token_list``.
 
     Returns:
     -------
         MultiFieldInstance: MultiFieldInstance (mfi) with the `field_name` subset applied.
     """
-    subset_mfi = {
-        f: [i for i in mfi[field_name] if i in token_list]
-        if f == field_name
-        else mfi[f]
-        for f in mfi.keys()
-    }
+    panel = kwargs.get("input_token_panel", None)
+    allowed = set(panel) if panel is not None else set(token_list)
+    # Keep the positions whose gene is in the allowed set and subset EVERY field at
+    # those positions so genes/expressions (and any other field) stay aligned. Set
+    # membership keeps this O(n) (spec §3.1).
+    keep_indices = [i for i, tok in enumerate(mfi[field_name]) if tok in allowed]
+    subset_mfi = {f: [mfi[f][i] for i in keep_indices] for f in mfi.keys()}
     return MultiFieldInstance(data=subset_mfi, metadata=mfi.metadata)
 
 
@@ -701,7 +710,9 @@ def pad_zero_expressed_genes(
     )
 
 
-def _random_pad_zero_expressed_genes(mfi: MultiFieldInstance, max_length: int):
+def _random_pad_zero_expressed_genes(
+    mfi: MultiFieldInstance, max_length: int, **kwargs
+):
     data_to_keep, zero_indices, keep_indices = {}, [], []
 
     for i, expression in enumerate(mfi.data["expressions"]):
@@ -725,6 +736,7 @@ def _batchwise_pad_zero_expressed_genes(
     expressed_sample_ratio: float | None = None,
     interleave_zero_ratio: float | None = None,
     granularity: int = 10,
+    **kwargs,
 ):
     genes = np.array(mfi.data["genes"])
     expressions = np.array(mfi.data["expressions"])
@@ -1170,6 +1182,7 @@ def transform_inputs(
     renoise,
     selective_dropout_weights,
     limit_input_tokens,
+    input_token_panels: list | None = None,
 ):
     fields_to_downcast = [
         f.field_name
@@ -1206,8 +1219,21 @@ def transform_inputs(
             expressed_genes_in_batch = get_genes_expressed_in_batch(examples)
         else:
             expressed_genes_in_batch = {}
+        if input_token_panels is None:
+            return [
+                combined_func(x, expressed_genes_in_batch=expressed_genes_in_batch)
+                for x in examples
+            ]
+        assert len(input_token_panels) == len(examples), (
+            "input_token_panels must be aligned positionally to examples "
+            f"(got {len(input_token_panels)} panels for {len(examples)} examples)"
+        )
         return [
-            combined_func(x, expressed_genes_in_batch=expressed_genes_in_batch)
-            for x in examples
+            combined_func(
+                x,
+                expressed_genes_in_batch=expressed_genes_in_batch,
+                input_token_panel=input_token_panels[i],
+            )
+            for i, x in enumerate(examples)
         ]
     return examples

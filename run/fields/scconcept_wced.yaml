@@ -1,0 +1,18 @@
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: genes
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: expressions
+  is_masked: true
+  tokenization_strategy: continuous_value_encoder
+  encoder_kwargs:
+    kind: scale_adapt
+    n_sin_basis: 48
+    basis_scale: 0.01
+    trainable: false
+    zero_as_special_token: true
+  decode_modes:
+    wced:
+      vocab_field: genes
+      logit_outputs:
+        - mse
+        - is_zero_bce

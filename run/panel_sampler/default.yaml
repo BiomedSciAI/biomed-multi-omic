@@ -1,0 +1,13 @@
+# scConcept per-batch panel sampler (spec §3.4). These keys are forwarded verbatim
+# as PanelSampler(**contrastive_panel) via the data_module's
+# `contrastive_panel: ${panel_sampler}` interpolation, so they MUST match the
+# PanelSampler constructor (bmfm_targets/training/panels.py).
+#
+# Pool = get_genes_expressed_in_batch (single-dataset batch = its expressed
+# universe). Two DISJOINT panels per step; sizes log-uniform with a hard floor of
+# 400 genes, clamped to pool size. Random-panel mode only for v1 (the 14 predesigned
+# spatial panels are deferred, spec §8).
+panel_size_floor: 400            # paper minimum (spec §1 / §3.4)
+panel_size_sampling: log_uniform # biases toward smaller/sparser targeted panels
+overlap_prob: 0.0                # disjoint split: panel1=pool[:k], panel2=pool[k:k+m]
+seed: null                       # per-worker RNG reseeds from worker_info.seed

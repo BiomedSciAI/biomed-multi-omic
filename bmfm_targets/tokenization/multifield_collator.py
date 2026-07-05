@@ -256,6 +256,7 @@ class MultiFieldCollator:
             list[MultiFieldInstance]
             | tuple[list[MultiFieldInstance], list[MultiFieldInstance]]
         ),
+        input_token_panels: list | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Creates a batch of inputs and labels for sequence labelling.
@@ -275,7 +276,11 @@ class MultiFieldCollator:
         from bmfm_targets.training.sample_transforms import transform_inputs
 
         if isinstance(examples[0], MultiFieldInstance):
-            examples = transform_inputs(examples, **self._transform_inputs_kwargs)
+            examples = transform_inputs(
+                examples,
+                **self._transform_inputs_kwargs,
+                input_token_panels=input_token_panels,
+            )
         else:
             examples, examples_pair = list(map(list, zip(*examples)))
             examples = transform_inputs(examples, **self._transform_inputs_kwargs)

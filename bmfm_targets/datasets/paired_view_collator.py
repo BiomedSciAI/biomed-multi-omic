@@ -1,156 +1,58 @@
-"""Module-level picklable collator that generates two gene-panel views of each cell."""
-from __future__ import annotations
+"""Module-level picklable collator that panel-splits each mini-batch (spec §3.5).
 
-import numpy as np
+``PanelSplitCollator`` samples one ``(panel1, panel2)`` pair per batch from a
+``PanelSampler`` over the batch's cells, then hands the **full cells** to the base
+``MultiFieldCollator`` while threading the per-view panel as ``input_token_panels``.
+The panel therefore limits only the **input** transform; the masker's label source
+(``batch["mfi"]``, pre-transform) stays the whole cell so WCED ``non_input_genes``
+labels cover the entire held-out transcriptome (spec §2.1).
+"""
+from __future__ import annotations
 
 from bmfm_targets.tokenization.multifield_instance import MultiFieldInstance
 
 
-class _PairedViewCollator:
+class PanelSplitCollator:
     """
-    Wraps a base collator to produce block-layout paired views for contrastive pretraining.
+    Wrap a base collator to panel-split a single-dataset mini-batch.
 
-    Input: N MultiFieldInstance examples (one condition, from ConditionHomogeneousBatchSampler).
-    Output: 2N examples in block layout [viewA_0..viewA_{N-1}, viewB_0..viewB_{N-1}].
+    Once per ``__call__``: sample ``(panel1, panel2)`` from ``panel_sampler`` over the
+    batch's cells, pass the FULL cells (never pre-subset) to ``base_collate`` and
+    thread per-cell ``input_token_panels`` so only the input transform is
+    panel-limited.
+
+    n_views=2 (contrastive / both): emit block layout
+    ``[A_0..A_{N-1}, B_0..B_{N-1}]`` (2N full cells) with panels
+    ``[panel1]*N + [panel2]*N`` — preserves the ``ContrastiveObjective(both_batch=True)``
+    ``za=z[:N] / zb=z[N:]`` split.
+
+    n_views=1 (wced): emit N full cells with panels ``[panel1]*N``.
     """
 
-    def __init__(
-        self,
-        base_collate,
-        min_frac: float = 0.25,
-        max_frac: float = 0.75,
-        overlap_prob: float = 0.0,
-        feature_dropout: float = 0.1,
-        panel_size_sampling: str = "log_uniform",
-        seed: int | None = None,
-    ):
+    def __init__(self, base_collate, panel_sampler, n_views: int = 2):
+        if n_views not in (1, 2):
+            raise ValueError(f"n_views must be 1 or 2, got {n_views!r}")
         self._base_collate = base_collate
-        self._min_frac = min_frac
-        self._max_frac = max_frac
-        self._overlap_prob = overlap_prob
-        self._feature_dropout = feature_dropout
-        if panel_size_sampling not in ("log_uniform", "uniform"):
-            raise ValueError(
-                f"panel_size_sampling must be 'log_uniform' or 'uniform', "
-                f"got {panel_size_sampling!r}"
-            )
-        self._panel_size_sampling = panel_size_sampling
-        self._seed = seed
-        self._rng = None
-
-    @property
-    def rng(self) -> np.random.Generator:
-        """
-        Per-worker RNG, created lazily inside each dataloader worker.
-
-        The collator is pickled to every worker; if the RNG were built in
-        ``__init__`` all workers (and the main process) would replay the *same*
-        panel-split / dropout sequence. Reseeding from ``worker_info.seed`` (as
-        the reference collator does) decorrelates the views produced by
-        different workers.
-        """
-        if self._rng is None:
-            seed = self._seed
-            try:
-                from torch.utils.data import get_worker_info
-
-                info = get_worker_info()
-                if info is not None:
-                    seed = info.seed
-            except Exception:
-                pass
-            self._rng = np.random.default_rng(seed)
-        return self._rng
-
-    def _apply_feature_dropout(self, idx: np.ndarray) -> np.ndarray:
-        """Independently drop a fraction of a view's genes (keeping >= 4)."""
-        if self._feature_dropout <= 0 or len(idx) <= 4:
-            return idx
-        keep = self.rng.random(len(idx)) >= self._feature_dropout
-        if int(keep.sum()) < 4:
-            return idx
-        return idx[keep]
-
-    def _sample_panel_size(self, n: int) -> int:
-        """
-        Sample view-A panel size in [min_frac*n, max_frac*n].
-
-        ``log_uniform`` mirrors the reference ``collate.log_int_samping``, which
-        samples the size log-uniformly (biasing toward smaller, sparser panels
-        like real targeted assays); ``uniform`` samples it linearly.
-        """
-        lo = max(1, int(self._min_frac * n))
-        hi = max(lo, int(self._max_frac * n))
-        if lo == hi:
-            return lo
-        if self._panel_size_sampling == "log_uniform":
-            size = int(np.exp2(self.rng.uniform(np.log2(lo), np.log2(hi))))
-        else:
-            size = int(self.rng.uniform(lo, hi))
-        return int(np.clip(size, lo, hi))
-
-    def _make_views(
-        self, mfi: MultiFieldInstance
-    ) -> tuple[MultiFieldInstance, MultiFieldInstance]:
-        """Split one cell's genes into two disjoint (or overlapping) views."""
-        # Get gene list from the first array field
-        field_keys = list(mfi.data.keys())
-        # Find the gene/token field (typically 'genes' or first field)
-        gene_field = None
-        for k in field_keys:
-            val = mfi.data[k]
-            if hasattr(val, "__len__") and len(val) > 0:
-                gene_field = k
-                break
-        if gene_field is None:
-            return mfi, mfi
-
-        all_indices = np.arange(len(mfi.data[gene_field]))
-        n = len(all_indices)
-
-        # Shuffle and split
-        perm = self.rng.permutation(n)
-        size_a = self._sample_panel_size(n)
-        size_a = max(4, min(size_a, n - 4))  # keep at least 4 genes per view
-
-        if self.rng.random() < self._overlap_prob:
-            # overlapping: both views sample independently
-            idx_a = self.rng.choice(n, size=size_a, replace=False)
-            idx_b = self.rng.choice(n, size=n - size_a, replace=False)
-        else:
-            # disjoint: split the permutation
-            idx_a = np.sort(perm[:size_a])
-            idx_b = np.sort(perm[size_a:])
-
-        # Independent per-view feature dropout, mirroring the reference's
-        # per-view feature selection with a max drop rate.
-        idx_a = self._apply_feature_dropout(idx_a)
-        idx_b = self._apply_feature_dropout(idx_b)
-
-        def subset_mfi(idx):
-            new_data = {}
-            for k, v in mfi.data.items():
-                if isinstance(v, list | tuple):
-                    new_data[k] = [v[i] for i in idx]
-                else:
-                    try:
-                        new_data[k] = v[idx]
-                    except (IndexError, TypeError):
-                        new_data[k] = v
-            return MultiFieldInstance(data=new_data, metadata=mfi.metadata)
-
-        return subset_mfi(idx_a), subset_mfi(idx_b)
+        self._panel_sampler = panel_sampler
+        self._n_views = n_views
 
     def __call__(self, examples: list) -> dict:
-        views_a = []
-        views_b = []
-        for ex in examples:
-            if isinstance(ex, MultiFieldInstance):
-                va, vb = self._make_views(ex)
-            else:
-                va, vb = ex, ex
-            views_a.append(va)
-            views_b.append(vb)
-        # Block layout: all A views then all B views
-        all_views = views_a + views_b
-        return self._base_collate(all_views)
+        mfis = [e for e in examples if isinstance(e, MultiFieldInstance)]
+        if len(mfis) != len(examples):
+            # Some entries are not MultiFieldInstance (already collated?) —
+            # fall back to the base collator, matching the old passthrough.
+            return self._base_collate(examples)
+
+        panel1, panel2 = self._panel_sampler.sample_panels(mfis)
+        n = len(mfis)
+        if self._n_views == 2:
+            all_cells = mfis + mfis  # SAME full cells twice; panels differ
+            panels = [panel1] * n + [panel2] * n
+        else:
+            all_cells = mfis
+            panels = [panel1] * n
+        return self._base_collate(all_cells, input_token_panels=panels)
+
+
+# Backward-compatible alias for any external importers of the old name.
+_PairedViewCollator = PanelSplitCollator

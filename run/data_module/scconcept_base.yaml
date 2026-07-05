@@ -1,0 +1,43 @@
+# Shared scConcept panel-split data pipeline (spec §2.1, §5). All three arms target
+# ContrastiveDataModule; the arms differ only in `mlm`, `n_views` and
+# `use_condition_sampler` (overridden in each thin top config).
+_target_: bmfm_targets.training.data_module.ContrastiveDataModule
+_partial_: true
+num_workers: 16
+shuffle: true
+max_length: 1024                 # L cap (paper L=1000; existing arms used 1024)
+sequence_order: sorted           # rank-encode: sort_by expressions desc (spec §3.7)
+padding: longest
+limit_genes: protein_coding
+log_normalize_transform: true
+transform_datasets: false
+batch_size: ${n_cells_per_batch}
+n_cells_per_batch: ${n_cells_per_batch}
+# --- panel machinery (ContrastiveDataModule real params) ---
+n_views: 2                       # arms override: wced=1
+use_condition_sampler: true      # arms override: wced=false (plain shuffle, spec §6)
+condition_columns:
+  - dataset_id                   # single-dataset negatives (paper-faithful)
+contrastive_panel: ${panel_sampler}   # forwarded as PanelSampler(**...) (spec §3.4)
+# --- INPUT view = paper-faithful nonzero-only (spec §2.2/§3.3) ---
+# expose_zeros:all at the dataset; the input transform drops zeros via the
+# use_expressed_only branch (expressed_sample_ratio: 1.0 -> always expressed-only),
+# then panel-limit + sorted + truncate to L.
+pad_zero_expression_strategy:
+  strategy: batch_wise
+  expressed_sample_ratio: 1.0
+# --- WCED masker label transform (whole cell, KEEPS zeros; NO pad-zero step) ---
+# Used by the wced + both arms. NOTE: data_module.py attaches a WCEDMasker whenever
+# masking_strategy IS one, IGNORING `mlm` — so the contrastive arm overrides this to
+# `null` (see scconcept_ablation_contrastive.yaml) to avoid building unused labels.
+masking_strategy:
+  _target_: bmfm_targets.training.masking.strategy.WCEDMasker
+  _partial_: true
+  sample_transforms_kwargs:
+    median_normalization: false
+    log_normalize_transform: true
+# --- dataset access (UNIFIED: single processed.h5ad + split column) ---
+dataset_kwargs:
+  processed_data_source: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_h5ad/processed.h5ad
+  split_column_name: split
+  expose_zeros: all              # real zeros in the mfi for whole-cell WCED labels

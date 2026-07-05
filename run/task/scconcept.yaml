@@ -1,0 +1,15 @@
+_target_: bmfm_targets.config.TrainingTaskConfig
+default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/${track_clearml.task_name}
+max_epochs: 11
+limit_train_batches: null
+limit_val_batches: 20
+precision: 16-mixed
+val_check_interval: 0.2
+gradient_clip_val: 0.5
+accelerator: gpu
+max_steps: -1
+tf32_mode: medium
+accumulate_grad_batches: 1
+freeze_layers: false
+resume_training_from_ckpt: false
+num_sanity_val_steps: 2      # shared; fixes wced drift (was absent in wced)

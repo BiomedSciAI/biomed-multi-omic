@@ -1325,12 +1325,16 @@ class ContrastiveDataModule(DataModule):
         condition_columns: list[str] | None = None,
         n_cells_per_batch: int = 128,
         contrastive_panel: dict | None = None,
+        n_views: int = 2,
+        use_condition_sampler: bool = True,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self._condition_columns = condition_columns or ["celltype"]
         self._n_cells_per_batch = n_cells_per_batch
         self._contrastive_panel = contrastive_panel or {}
+        self._n_views = n_views
+        self._use_condition_sampler = use_condition_sampler
 
     def get_trainer_callbacks(self) -> list:
         """Surface contrastive recall/scale diagnostics on top of any base callbacks."""
@@ -1380,20 +1384,41 @@ class ContrastiveDataModule(DataModule):
     def _contrastive_dataloader(self, dataset, collate_fn):
         from torch.utils.data import DataLoader
 
-        from bmfm_targets.datasets.paired_view_collator import _PairedViewCollator
-        from bmfm_targets.datasets.samplers import ConditionHomogeneousBatchSampler
+        from bmfm_targets.datasets.paired_view_collator import PanelSplitCollator
+        from bmfm_targets.training.panels import PanelSampler
 
-        sampler = ConditionHomogeneousBatchSampler(
-            self._obs_conditions(dataset),
-            batch_size=self._n_cells_per_batch,
-            num_batches=len(dataset) // self._n_cells_per_batch,
-            replacement=False,
+        panel_sampler = PanelSampler(**self._contrastive_panel)
+        panel_collate = PanelSplitCollator(
+            collate_fn, panel_sampler, n_views=self._n_views
         )
-        paired_collate = _PairedViewCollator(collate_fn, **self._contrastive_panel)
+
+        if self._use_condition_sampler:
+            from bmfm_targets.datasets.samplers import (
+                ConditionHomogeneousBatchSampler,
+            )
+
+            sampler = ConditionHomogeneousBatchSampler(
+                self._obs_conditions(dataset),
+                batch_size=self._n_cells_per_batch,
+                num_batches=len(dataset) // self._n_cells_per_batch,
+                replacement=False,
+            )
+            return DataLoader(
+                dataset,
+                batch_sampler=sampler,
+                collate_fn=panel_collate,
+                num_workers=self.num_workers,
+                persistent_workers=self.num_workers > 0,
+                pin_memory=True,
+            )
+
+        # PLAIN SHUFFLE (wced arm, spec §6) — no condition grouping.
         return DataLoader(
             dataset,
-            batch_sampler=sampler,
-            collate_fn=paired_collate,
+            batch_size=self._n_cells_per_batch,
+            shuffle=True,
+            drop_last=True,
+            collate_fn=panel_collate,
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=True,

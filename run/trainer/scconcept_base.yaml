@@ -1,0 +1,10 @@
+_target_: bmfm_targets.config.TrainerConfig
+warmup_steps: 1000
+weight_decay: 0.1
+learning_rate: 1.0e-4
+betas:
+  - 0.9
+  - 0.99
+epsilon: 1.0e-08
+lr_decay_steps: null
+# losses are the per-arm ablation axis; added in each thin config's _self_.trainer.losses
