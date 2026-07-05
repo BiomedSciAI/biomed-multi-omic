@@ -995,4 +995,6 @@ class ContrastiveMetricsCallback(pl.Callback):
     def on_validation_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
-        self._log(pl_module, "val")
+        # Log under "validation/" (not "val/") to keep the scConcept contrastive
+        # diagnostics out of the shared "val/" tensorboard namespace.
+        self._log(pl_module, "validation")
