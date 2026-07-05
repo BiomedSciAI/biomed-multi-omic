@@ -20,7 +20,7 @@ from bmfm_targets.config import FieldInfo
 from bmfm_targets.datasets.paired_view_collator import PanelSplitCollator
 from bmfm_targets.tokenization import MultiFieldCollator, MultiFieldInstance
 from bmfm_targets.training.masking.strategy import WCEDMasker
-from bmfm_targets.training.panels import PanelSampler
+from bmfm_targets.training.panels import PanelSampler, PerCellViewSplitter
 
 from .helpers import load_test_tokenizer
 
@@ -305,6 +305,103 @@ def test_wced_panel_split_target_zeros_and_split():
     assert all_lbl[vocab["token5"]].item() == 2.0
     assert all_lbl[vocab["token2"]].item() == 0.0
     assert all_lbl[vocab["token6"]].item() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Per-cell view splitter (non-trivial contrastive): disjoint nonzero halves
+# ---------------------------------------------------------------------------
+def test_per_cell_splitter_disjoint_nonzero():
+    """Each cell's nonzero genes split into two disjoint views; zeros excluded."""
+    genes = [f"g{i}" for i in range(40)]
+    # ~half expressed, half zero
+    exprs = [float(i % 2) * (i + 1) for i in range(40)]  # zeros at even i
+    cell = _cell(genes, exprs)
+    nz = _nonzero_genes(cell)
+    splitter = PerCellViewSplitter(
+        min_frac=0.25, max_frac=0.75, feature_dropout=0.0,
+        panel_size_sampling="uniform", seed=3,
+    )
+    for _ in range(20):
+        a, b = splitter.split(cell)
+        assert a.isdisjoint(b)          # two views share no gene
+        assert (a | b) <= nz            # only ever the cell's NONZERO genes
+        assert a and b                  # both non-empty
+        assert len(a) + len(b) <= len(nz)
+
+
+def test_per_cell_splitter_independent_across_cells():
+    """Different cells get independent splits (no shared basis)."""
+    genes = [f"g{i}" for i in range(40)]
+    c1 = _cell(genes, [1.0] * 40, "c1")
+    c2 = _cell(genes, [1.0] * 40, "c2")
+    sp = PerCellViewSplitter(feature_dropout=0.0, seed=1)
+    a1, _ = sp.split(c1)
+    a2, _ = sp.split(c2)
+    # With independent random splits over the same gene set, the two cells' view-A
+    # gene sets should differ (astronomically unlikely to coincide for n=40).
+    assert a1 != a2
+
+
+def test_per_cell_collator_threads_percell_panels_on_whole_cells():
+    """PanelSplitCollator + per-cell splitter: block layout [A..,B..], WHOLE cells passed
+    to the base collator (not pre-subset -> whole-cell WCED label), and per-cell disjoint
+    panels threaded as input_token_panels. Uses a fake base collator to assert the
+    threading directly (independent of tokenization)."""
+    genes = [f"g{i}" for i in range(24)]
+    cells = [
+        _cell(genes, [float((i * 7 + c) % 5) for i in range(24)], f"c{c}")
+        for c in range(4)
+    ]  # ~19-20 nonzero genes each -> real (non-degenerate) split
+    n = len(cells)
+    splitter = PerCellViewSplitter(
+        min_frac=0.25, max_frac=0.75, feature_dropout=0.0,
+        panel_size_sampling="uniform", seed=0,
+    )
+
+    captured = {}
+
+    def fake_base(examples, input_token_panels=None):
+        captured["examples"] = examples
+        captured["panels"] = input_token_panels
+        return {"n": len(examples)}
+
+    PanelSplitCollator(fake_base, splitter, n_views=2)(cells)
+
+    assert len(captured["examples"]) == 2 * n  # block layout [A_0..,B_0..]
+    # whole cells passed through unchanged (same objects, not subset)
+    for i in range(n):
+        assert captured["examples"][i] is cells[i]
+        assert captured["examples"][n + i] is cells[i]
+    # per-cell panels: view A vs view B disjoint, both drawn only from that cell's nonzero
+    panels = captured["panels"]
+    assert len(panels) == 2 * n
+    for i in range(n):
+        a, b = panels[i], panels[n + i]
+        assert a.isdisjoint(b)
+        assert (a | b) <= _nonzero_genes(cells[i])
+        assert a and b
+
+
+def test_transform_inputs_limits_to_threaded_panel():
+    """The threaded input_token_panel actually restricts the input genes (the coupling
+    that was silently broken when limit_input_tokens was unset)."""
+    from bmfm_targets.training.sample_transforms import transform_inputs
+
+    fields = _input_view_fields()
+    cell = _cell([f"g{i}" for i in range(12)], [float(i + 1) for i in range(12)])
+    panel = {"g0", "g2", "g4", "g6"}
+    out = transform_inputs(
+        [cell], fields, label_columns=[], sequence_order="sorted",
+        log_normalize_transform=False, median_normalization=False, rda_transform=None,
+        pad_zero_expression_strategy={"strategy": "batch_wise", "expressed_sample_ratio": 1.0},
+        max_length=64, sequence_dropout_factor=None, map_orthologs=None, renoise=None,
+        selective_dropout_weights=None,
+        limit_input_tokens=[f"g{i}" for i in range(12)],  # truthy -> transform present
+        input_token_panels=[panel],
+    )
+    got = set(out[0]["genes"])
+    assert got <= panel, got                 # limited to the panel
+    assert len(out[0]["genes"]) == len(out[0]["expressions"])  # fields stay aligned
 
 
 if __name__ == "__main__":

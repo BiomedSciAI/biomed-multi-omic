@@ -5,7 +5,7 @@ defaults:
   - trainer: scconcept_base
   - data_module: scconcept_base
   - fields: scconcept_both
-  - panel_sampler: default
+  - panel_sampler: per_cell
   - _self_
 
 seed:

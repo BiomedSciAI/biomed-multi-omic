@@ -6,14 +6,20 @@ _partial_: true
 num_workers: 16
 shuffle: true
 max_length: 1024                 # L cap (paper L=1000; existing arms used 1024)
-sequence_order: sorted           # rank-encode: sort_by expressions desc (spec §3.7)
+sequence_order: random           # matches the working July-3 runs; sorting isn't needed
+                                 # (ruled out as a factor) and per-cell views don't rank-encode
 padding: longest
 limit_genes: protein_coding
 log_normalize_transform: true
 transform_datasets: false
 batch_size: ${n_cells_per_batch}
 n_cells_per_batch: ${n_cells_per_batch}
-# --- panel machinery (ContrastiveDataModule real params) ---
+# --- view construction (ContrastiveDataModule real params) ---
+# per_cell = independent random split of each cell's nonzero genes into two views
+# (no shared basis -> non-trivial contrastive task; val recall climbs from chance).
+# Batch-level shared panels ("batch") were trivially solvable at our scale — see the
+# panel-split diagnosis. contrastive_panel below feeds the chosen splitter/sampler.
+view_split_mode: per_cell
 n_views: 2                       # arms override: wced=1
 use_condition_sampler: true      # arms override: wced=false (plain shuffle, spec §6)
 condition_columns:

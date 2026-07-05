@@ -5,7 +5,7 @@ defaults:
   - trainer: scconcept_base
   - data_module: scconcept_base
   - fields: scconcept_contrastive
-  - panel_sampler: default
+  - panel_sampler: per_cell
   - _self_
 
 seed:
@@ -23,6 +23,10 @@ data_module:
   masking_strategy: null
   n_views: 2
   use_condition_sampler: true
+  # No WCED label here, so real zeros aren't needed → expose_zeros null keeps the
+  # dataloader fast (no ~19k densify), matching the working July-3 contrastive run.
+  dataset_kwargs:
+    expose_zeros: null
 
 trainer:
   losses:

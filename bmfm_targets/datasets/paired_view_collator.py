@@ -27,13 +27,25 @@ class PanelSplitCollator:
     ``za=z[:N] / zb=z[N:]`` split.
 
     n_views=1 (wced): emit N full cells with panels ``[panel1]*N``.
+
+    ``view_source`` may be either:
+    - a BATCH-level sampler with ``sample_panels(examples) -> (panel1, panel2)`` — one
+      shared panel pair applied to every cell (paper-faithful; but a shared gene basis
+      makes the contrastive task trivially solvable at our data scale); or
+    - a PER-CELL splitter with ``split(mfi) -> (viewA_genes, viewB_genes)`` — each cell
+      independently split into two views, so there is NO shared basis and the encoder
+      must learn real co-expression (val recall climbs from chance, the desired
+      non-trivial objective). Detected by the presence of a ``split`` method.
+
+    Either way the FULL cells are passed to the base collator (never pre-subset), so
+    ``batch["mfi"]`` stays whole-cell for the WCED masker's whole-cell label.
     """
 
-    def __init__(self, base_collate, panel_sampler, n_views: int = 2):
+    def __init__(self, base_collate, view_source, n_views: int = 2):
         if n_views not in (1, 2):
             raise ValueError(f"n_views must be 1 or 2, got {n_views!r}")
         self._base_collate = base_collate
-        self._panel_sampler = panel_sampler
+        self._view_source = view_source
         self._n_views = n_views
 
     def __call__(self, examples: list) -> dict:
@@ -43,14 +55,24 @@ class PanelSplitCollator:
             # fall back to the base collator, matching the old passthrough.
             return self._base_collate(examples)
 
-        panel1, panel2 = self._panel_sampler.sample_panels(mfis)
         n = len(mfis)
+        if hasattr(self._view_source, "split"):
+            # Per-cell: independent (viewA, viewB) split for every cell (no shared basis).
+            splits = [self._view_source.split(m) for m in mfis]
+            a_panels = [s[0] for s in splits]
+            b_panels = [s[1] for s in splits]
+        else:
+            # Batch-level: one shared (panel1, panel2) applied to all cells.
+            panel1, panel2 = self._view_source.sample_panels(mfis)
+            a_panels = [panel1] * n
+            b_panels = [panel2] * n
+
         if self._n_views == 2:
-            all_cells = mfis + mfis  # SAME full cells twice; panels differ
-            panels = [panel1] * n + [panel2] * n
+            all_cells = mfis + mfis  # SAME full cells twice; per-view panels differ
+            panels = a_panels + b_panels
         else:
             all_cells = mfis
-            panels = [panel1] * n
+            panels = a_panels
         return self._base_collate(all_cells, input_token_panels=panels)
 
 

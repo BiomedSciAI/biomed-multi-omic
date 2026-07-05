@@ -144,3 +144,95 @@ class PanelSampler:
             panel2 = pool[self.rng.choice(P, size=m, replace=False)]
 
         return set(panel1.tolist()), set(panel2.tolist())
+
+
+class PerCellViewSplitter:
+    """
+    Split EACH cell's own nonzero genes into two disjoint random views.
+
+    This restores the pre-refactor ``_PairedViewCollator._make_views`` semantics that
+    produced a *non-trivial* contrastive task (val recall climbing from chance to
+    ~0.70), in contrast to batch-level shared panels which the model solves trivially
+    (a fixed gene basis across the batch is an easy shortcut; the objective becomes
+    vacuous). Because each cell gets an INDEPENDENT random split there is no shared
+    basis, so the encoder must learn genuine co-expression to align view A with view B.
+
+    Unlike the old collator it returns gene SETS (per cell) to be threaded as
+    ``input_token_panels`` rather than pre-subsetting the mfi, so ``batch["mfi"]``
+    stays whole-cell and the WCED masker's whole-cell label / ``is_zero_bce``
+    calibration is preserved (used by the ``both`` arm).
+
+    Parameters
+    ----------
+    min_frac, max_frac : float
+        View-A size is drawn in ``[min_frac, max_frac] * n_nonzero``; view B is the
+        complement. Mirrors the reference collator (0.25 / 0.75).
+    feature_dropout : float
+        Fraction of each view's genes independently dropped (augmentation; keeps
+        >= 4). ``0`` disables.
+    panel_size_sampling : str
+        ``"log_uniform"`` (default, biases toward smaller view A) or ``"uniform"``.
+    seed : int | None
+        Base seed; per-worker RNG reseeds from ``worker_info.seed`` (see ``rng``).
+    """
+
+    def __init__(
+        self,
+        min_frac: float = 0.25,
+        max_frac: float = 0.75,
+        feature_dropout: float = 0.1,
+        panel_size_sampling: str = "log_uniform",
+        seed: int | None = None,
+    ):
+        if panel_size_sampling not in ("log_uniform", "uniform"):
+            raise ValueError(
+                f"panel_size_sampling must be 'log_uniform' or 'uniform', "
+                f"got {panel_size_sampling!r}"
+            )
+        self._min_frac = min_frac
+        self._max_frac = max_frac
+        self._feature_dropout = feature_dropout
+        self._panel_size_sampling = panel_size_sampling
+        self._seed = seed
+        self._rng = None
+
+    # Reuse the same lazy per-worker RNG contract as PanelSampler.
+    rng = PanelSampler.rng
+
+    def _sample_size(self, n: int) -> int:
+        lo = max(1, int(self._min_frac * n))
+        hi = max(lo, int(self._max_frac * n))
+        if lo >= hi:
+            return lo
+        if self._panel_size_sampling == "log_uniform":
+            size = int(np.exp2(self.rng.uniform(np.log2(lo), np.log2(hi))))
+        else:
+            size = int(self.rng.uniform(lo, hi))
+        return int(np.clip(size, lo, hi))
+
+    def _dropout(self, idx: np.ndarray) -> np.ndarray:
+        if self._feature_dropout <= 0 or len(idx) <= 4:
+            return idx
+        keep = self.rng.random(len(idx)) >= self._feature_dropout
+        if int(keep.sum()) < 4:
+            return idx
+        return idx[keep]
+
+    def split(self, mfi) -> tuple[set, set]:
+        """Return ``(viewA_genes, viewB_genes)`` — disjoint sets of the cell's nonzero genes."""
+        genes = mfi["genes"]
+        exprs = mfi["expressions"]
+        nz = [g for g, e in zip(genes, exprs) if float(e) != 0.0]
+        n = len(nz)
+        if n < 8:
+            # Too few nonzero genes to split into two informative views; use all in
+            # both (rare, pathological cell). Contrastive loss skips tiny batches anyway.
+            s = set(nz)
+            return s, s
+        nz = np.array(nz, dtype=object)
+        perm = self.rng.permutation(n)
+        size_a = self._sample_size(n)
+        size_a = max(4, min(size_a, n - 4))  # keep >= 4 genes per view
+        idx_a = self._dropout(perm[:size_a])
+        idx_b = self._dropout(perm[size_a:])
+        return set(nz[idx_a].tolist()), set(nz[idx_b].tolist())

@@ -1,0 +1,17 @@
+# Per-cell view splitter (PerCellViewSplitter) — restores the pre-refactor, non-trivial
+# contrastive task. Each cell's NONZERO genes are split into two disjoint random views
+# (view A = a min_frac..max_frac fraction, view B = the complement). Because every cell
+# is split independently there is NO shared gene basis across the batch, so the encoder
+# must learn real co-expression to align the two views — val recall climbs from chance
+# (~0.05 -> ~0.70) instead of the batch-level shared-panel shortcut that the model solves
+# trivially (recall pinned high from step ~50 = a vacuous objective).
+#
+# Forwarded verbatim as PerCellViewSplitter(**contrastive_panel) via the data_module's
+# `contrastive_panel: ${panel_sampler}` interpolation — keys MUST match that constructor
+# (bmfm_targets/training/panels.py). Mirrors the reference collator (min_frac 0.25 /
+# max_frac 0.75, feature_dropout 0.1) that produced the working July-3 runs.
+min_frac: 0.25
+max_frac: 0.75
+feature_dropout: 0.1              # per-view gene dropout augmentation (keeps >= 4)
+panel_size_sampling: log_uniform  # view-A size log-uniform in [min_frac,max_frac]*n_nonzero
+seed: null                        # per-worker RNG reseeds from worker_info.seed

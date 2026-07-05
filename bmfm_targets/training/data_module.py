@@ -799,7 +799,19 @@ class DataModule(pl.LightningDataModule):
             label_ontology=self.label_ontology_artifacts.label_ontology
             if self.label_ontology_artifacts
             else None,
+            limit_input_tokens=self._collator_limit_input_tokens(),
         )
+
+    def _collator_limit_input_tokens(self):
+        """Static token list for ``limit_fields_to_token_list`` (None = transform absent).
+
+        Base DataModule does not limit inputs. Subclasses that thread a *dynamic*
+        per-example ``input_token_panel`` (ContrastiveDataModule) must return a
+        truthy superset here so the limit transform is present in the composed
+        chain — otherwise the threaded panel has no consumer and is silently
+        ignored (views would be the whole cell -> identical -> trivial recall).
+        """
+        return None
 
 
 class PerturbationDataModule(DataModule):
@@ -1327,6 +1339,7 @@ class ContrastiveDataModule(DataModule):
         contrastive_panel: dict | None = None,
         n_views: int = 2,
         use_condition_sampler: bool = True,
+        view_split_mode: str = "per_cell",
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -1335,6 +1348,24 @@ class ContrastiveDataModule(DataModule):
         self._contrastive_panel = contrastive_panel or {}
         self._n_views = n_views
         self._use_condition_sampler = use_condition_sampler
+        # "per_cell": independent random split of each cell's nonzero genes (no shared
+        #   gene basis -> non-trivial contrastive task; val recall climbs from chance).
+        # "batch": one shared (panel1,panel2) per minibatch (paper-faithful, but the
+        #   shared basis makes the task trivially solvable at our data scale).
+        if view_split_mode not in ("per_cell", "batch"):
+            raise ValueError(
+                f"view_split_mode must be 'per_cell' or 'batch', got {view_split_mode!r}"
+            )
+        self._view_split_mode = view_split_mode
+
+    def _collator_limit_input_tokens(self):
+        """All gene tokens — a no-op superset that puts ``limit_fields_to_token_list``
+        in the transform chain so the per-example ``input_token_panels`` threaded by
+        ``PanelSplitCollator`` actually restrict each view. Without this the panel is
+        silently dropped and both views are the whole cell (trivial contrastive task)."""
+        vocab = self.tokenizer.get_field_vocab("genes")
+        specials = set(getattr(self.tokenizer, "all_special_tokens", []) or [])
+        return [tok for tok in vocab if tok not in specials]
 
     def get_trainer_callbacks(self) -> list:
         """Surface contrastive recall/scale diagnostics on top of any base callbacks."""
@@ -1385,11 +1416,14 @@ class ContrastiveDataModule(DataModule):
         from torch.utils.data import DataLoader
 
         from bmfm_targets.datasets.paired_view_collator import PanelSplitCollator
-        from bmfm_targets.training.panels import PanelSampler
+        from bmfm_targets.training.panels import PanelSampler, PerCellViewSplitter
 
-        panel_sampler = PanelSampler(**self._contrastive_panel)
+        if self._view_split_mode == "per_cell":
+            view_source = PerCellViewSplitter(**self._contrastive_panel)
+        else:
+            view_source = PanelSampler(**self._contrastive_panel)
         panel_collate = PanelSplitCollator(
-            collate_fn, panel_sampler, n_views=self._n_views
+            collate_fn, view_source, n_views=self._n_views
         )
 
         if self._use_condition_sampler:
