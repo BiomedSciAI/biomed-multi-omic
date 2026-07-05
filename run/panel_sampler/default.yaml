@@ -8,6 +8,15 @@
 # 400 genes, clamped to pool size. Random-panel mode only for v1 (the 14 predesigned
 # spatial panels are deferred, spec §8).
 panel_size_floor: 400            # paper minimum (spec §1 / §3.4)
+# Cap panel size so views stay PARTIAL. The paper draws sizes up to the full
+# transcriptome, but at B=64 (63 negatives) large panels make each view a
+# near-complete cell profile -> the two views become trivially matchable and
+# contrastive val recall saturates at ~1.0 in the first check. Diagnosed with a
+# PCA co-expression matcher: ceil=None -> recall 0.24; ceil=768 -> 0.10, matching
+# the old per-cell design (0.098) that showed a realistic climb to ~0.70.
+# Revisit if n_cells_per_batch is raised toward the paper's B=512 (more negatives
+# would tolerate larger panels). floor 400 <= size <= 768 (mean ~540).
+panel_size_ceil: 768
 panel_size_sampling: log_uniform # biases toward smaller/sparser targeted panels
 overlap_prob: 0.0                # disjoint split: panel1=pool[:k], panel2=pool[k:k+m]
 seed: null                       # per-worker RNG reseeds from worker_info.seed

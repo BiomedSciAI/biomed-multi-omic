@@ -29,6 +29,14 @@ class PanelSampler:
     panel_size_floor : int
         Minimum panel size (paper's 400-gene threshold). When the pool is large
         enough (``P >= 2 * floor``) both panels are at least this size.
+    panel_size_ceil : int | None
+        Maximum panel size. The paper draws panel sizes up to the full
+        transcriptome, but at small batch sizes (few negatives) large panels make
+        each view a near-complete cell profile, so the two views become trivially
+        matchable and contrastive recall saturates. Capping the panel size keeps
+        views PARTIAL and restores a non-trivial matching task. ``None`` = no cap
+        (paper-faithful, up to pool size). See the panel-size diagnosis in
+        docs/scconcept_paper_faithful_spec.md.
     panel_size_sampling : str
         ``"log_uniform"`` (default) or ``"uniform"`` size sampling.
     overlap_prob : float
@@ -42,6 +50,7 @@ class PanelSampler:
     def __init__(
         self,
         panel_size_floor: int = 400,
+        panel_size_ceil: int | None = None,
         panel_size_sampling: str = "log_uniform",
         overlap_prob: float = 0.0,
         seed: int | None = None,
@@ -51,7 +60,13 @@ class PanelSampler:
                 f"panel_size_sampling must be 'log_uniform' or 'uniform', "
                 f"got {panel_size_sampling!r}"
             )
+        if panel_size_ceil is not None and panel_size_ceil < panel_size_floor:
+            raise ValueError(
+                f"panel_size_ceil ({panel_size_ceil}) must be >= "
+                f"panel_size_floor ({panel_size_floor})"
+            )
         self._floor = panel_size_floor
+        self._ceil = panel_size_ceil
         self._panel_size_sampling = panel_size_sampling
         self._overlap_prob = overlap_prob
         self._seed = seed
@@ -105,10 +120,14 @@ class PanelSampler:
         pool = np.array(sorted(get_genes_expressed_in_batch(examples)), dtype=object)
         P = len(pool)
         floor = self._floor
+        # Upper bound per panel: leave room for the other panel's floor, and honor
+        # the optional ceil that keeps views partial (else recall saturates; see
+        # class docstring). ``P`` when no ceil is set (paper-faithful, full pool).
+        cap = P if self._ceil is None else min(self._ceil, P)
 
         if P >= 2 * floor:
-            k = self._sample_size(floor, P - floor)
-            m = self._sample_size(floor, P - k)
+            k = self._sample_size(floor, min(cap, P - floor))
+            m = self._sample_size(floor, min(cap, P - k))
             perm = self.rng.permutation(P)
             panel1 = pool[perm[:k]]
             panel2 = pool[perm[k : k + m]]
