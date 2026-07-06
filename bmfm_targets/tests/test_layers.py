@@ -86,6 +86,38 @@ def test_sc_base_field_decoder_init_with_wced_decoder():
     assert wced_decoder.output_size == 1234
 
 
+def test_wced_decoder_only_projects_the_decode_token():
+    """
+    WCED is whole-cell: it must project only the decode token (index 0).
+
+    Running the vocab-wide projection over the full sequence would materialize a
+    [batch, seq_len, vocab] activation (and gradient) seq_len x larger than needed,
+    which is the dominant memory cost for large gene vocabularies. Only token 0 is
+    ever consumed downstream (WCEDFieldSource.extract_logits), so the head must
+    return a length-1 sequence dim regardless of the input sequence length.
+    """
+    vocab_size = 1234
+    fields = [
+        FieldInfo("genes", vocab_size=vocab_size),
+        FieldInfo(
+            "expressions",
+            decode_modes={"wced": {"vocab_field": "genes", "logit_outputs": ["mse"]}},
+        ),
+    ]
+    model_config = SCBertConfig(fields=fields, hidden_size=32)
+    decoder = layers.SCBaseFieldDecoder(model_config)
+
+    batch, seq_len = 2, 17
+    hidden_states = torch.randn(batch, seq_len, model_config.hidden_size)
+    field_logits = decoder(hidden_states)
+
+    wced_logits = field_logits["expressions_wced"]
+    # single logit output -> shape is [batch, 1, vocab], not [batch, seq_len, vocab]
+    assert wced_logits.shape == (batch, 1, vocab_size)
+    # the downstream extraction (result[:, 0, :]) must still work
+    assert wced_logits[:, 0, :].shape == (batch, vocab_size)
+
+
 @pytest.mark.parametrize("decode_from", [0, 1, 2, 3])
 def test_label_decoder_can_decode_from_custom_sequence_position(decode_from):
     from bmfm_targets.config import LabelColumnInfo

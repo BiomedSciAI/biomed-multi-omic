@@ -19,9 +19,10 @@ from .objectives import (
     IsZeroFocalObjective,
     MAEObjective,
     MSEObjective,
+    PopulationOTObjective,
     TokenValueObjective,
 )
-from .sources import FieldSource, LabelSource, WCEDFieldSource
+from .sources import FieldSource, LabelSource, WCEDFieldSource, WCEDPopulationSource
 from .task import LossTask
 
 
@@ -142,13 +143,21 @@ def _create_field_loss(
     # Create appropriate objective
     objective = _create_objective(loss_name, loss_config)
 
-    # Use WCEDFieldSource for WCED losses, FieldSource otherwise
-    if wced_target is not None:
+    # population_ot uses WCEDPopulationSource (population-level OT target).
+    # Other WCED losses use WCEDFieldSource.
+    # Regular field losses use FieldSource.
+    if loss_name == "population_ot":
+        source = WCEDPopulationSource(
+            field_name=field_name,
+            wced_target=wced_target or "all_genes",
+            population_key=loss_config.get("population_key", "chip_population"),
+            wced_output=loss_config.get("wced_output", "mse"),
+        )
+    elif wced_target is not None:
         source = WCEDFieldSource(
             field_name=field_name,
             wced_target=wced_target,
         )
-
     else:
         source = FieldSource(
             field_name=field_name,
@@ -200,6 +209,13 @@ def _create_objective(loss_name: str, loss_config: dict):
         return BCEWithLogitsObjective()
     elif loss_name == "hce":
         return HCEObjective()
+    elif loss_name == "population_ot":
+        return PopulationOTObjective(
+            eps=loss_config.get("eps", 1.0),
+            n_iters=loss_config.get("n_iters", 100),
+            cost=loss_config.get("cost", "euclidean"),
+            link_function=loss_config.get("link_function"),
+        )
     else:
         raise ValueError(f"Unknown loss name: {loss_name}")
 

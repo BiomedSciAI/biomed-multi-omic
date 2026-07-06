@@ -12,6 +12,7 @@ import torch
 
 from bmfm_targets.tokenization.multifield_tokenizer import MultiFieldTokenizer
 from bmfm_targets.training import metrics
+from bmfm_targets.training.losses.ot.sinkhorn import sinkhorn_cost
 
 from .base import Objective
 
@@ -617,6 +618,137 @@ class HCEObjective(Objective):
     def name(self) -> str:
         """Return objective name."""
         return "hce"
+
+
+class PopulationOTObjective(Objective):
+    """
+    Population optimal-transport objective using debiased Sinkhorn divergence.
+
+    Computes SD(pred, target) = OT(pred, target) - 0.5*OT(pred, pred) - 0.5*OT(target, target)
+    between a predicted whole-cell expression cloud ``pred`` of shape ``[B, V]`` and a fixed
+    reference population ``target`` of shape ``[M, V]`` (M need not equal B).
+
+    OT(target, target) is cached per target population (keyed on a device-stable content
+    signature — shape, device, and value reductions — so the cache survives Lightning
+    creating a new tensor object each step after the batch is moved to GPU) and is only
+    computed once per unique target population across training steps.
+
+    Returns ``None`` — so ``calculate_losses`` will skip this task — when ``B < 2`` or
+    ``M < 2``, since Sinkhorn requires at least two points per cloud.
+    """
+
+    def __init__(
+        self,
+        eps: float = 1.0,
+        n_iters: int = 100,
+        cost: str = "euclidean",
+        link_function: str | None = None,
+    ):
+        """
+        Initialize PopulationOTObjective.
+
+        Args:
+        ----
+            eps: Sinkhorn entropic regularization strength (default: 1.0).
+            n_iters: Number of Sinkhorn iterations (default: 100).
+            cost: Pairwise cost function — ``"euclidean"`` or ``"sqeuclidean"``
+                (default: ``"euclidean"``).
+            link_function: Optional transform applied to ``pred`` before computing
+                the OT cost (e.g. ``"exp"``).  Default ``None`` means identity.
+
+        """
+        self.eps = eps
+        self.n_iters = n_iters
+        self.cost = cost
+        self.link_function = link_function
+        # Cache OT(Y,Y) keyed on a device-stable content signature so the cache
+        # survives Lightning moving the batch to GPU each step (which creates a
+        # new Python object and would defeat an id-based key).
+        self._yy_cache: dict[tuple, torch.Tensor] = {}
+
+    def bind(
+        self, output_size: int, tokenizer: MultiFieldTokenizer | None = None
+    ) -> None:
+        """No-op: OT objective does not depend on a fixed output size."""
+        pass
+
+    def compute(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor | None:
+        """
+        Compute debiased Sinkhorn divergence between pred and target clouds.
+
+        Args:
+        ----
+            pred: Predicted expression cloud, shape ``[B, V]``.
+            target: Reference population, shape ``[M, V]``.
+
+        Returns:
+        -------
+            Scalar Sinkhorn divergence, or ``None`` if B < 2 or M < 2.
+
+        """
+        if pred.shape[0] < 2 or target.shape[0] < 2:
+            return None
+
+        if self.link_function == "exp":
+            pred = torch.exp(pred)
+
+        # Cache OT(target, target) — constant across training steps.
+        # Key on a device-stable content signature rather than id() so the cache
+        # survives Lightning creating a new tensor object each step after the
+        # batch is moved to GPU.
+        cache_key = (
+            tuple(target.shape),
+            str(target.device),
+            float(target.sum().item()),
+            float((target * target).sum().item()),
+        )
+        if cache_key not in self._yy_cache:
+            self._yy_cache[cache_key] = sinkhorn_cost(
+                target, target, eps=self.eps, n_iters=self.n_iters, cost=self.cost
+            )
+        ot_yy = self._yy_cache[cache_key]
+
+        ot_xy = sinkhorn_cost(
+            pred, target, eps=self.eps, n_iters=self.n_iters, cost=self.cost
+        )
+        ot_xx = sinkhorn_cost(
+            pred, pred, eps=self.eps, n_iters=self.n_iters, cost=self.cost
+        )
+
+        return ot_xy - 0.5 * ot_xx - 0.5 * ot_yy
+
+    def get_predictions(self, logits: torch.Tensor) -> torch.Tensor:
+        """Return logits as-is (OT is a population-level metric)."""
+        if self.link_function == "exp":
+            return torch.exp(logits)
+        return logits
+
+    def default_metrics(self) -> list[dict]:
+        """No per-sample metrics for a population-level OT objective."""
+        return []
+
+    @property
+    def contributes_sample_metrics(self) -> bool:
+        """
+        Population OT is a batch-level loss with no per-sample alignment.
+
+        Returning ``False`` excludes this objective from ``update_metrics``,
+        ``initialize_metrics``, and ``get_prediction_active_keys`` so that its
+        ``[B, V]`` predicted cloud is never fed into the per-sample metric path
+        and does not overwrite the WCED MSE metrics under the shared
+        ``metric_key``.
+        """
+        return False
+
+    @property
+    def decoder_suffix(self) -> str:
+        """Return decoder suffix (WCED sources ignore this; regression convention used)."""
+        return "_regression"
+
+    @property
+    def name(self) -> str:
+        """Return objective name."""
+        return "population_ot"
 
 
 # Made with Bob

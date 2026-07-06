@@ -1,0 +1,6 @@
+defaults:
+ - base_seq_labeling
+
+# _target_: bmfm_targets.training.data_module.DataModule
+_target_: bmfm_targets.datasets.scRNA2ChIP.ConcatDataModule
+perturbation_column_name: data_type

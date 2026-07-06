@@ -1,0 +1,33 @@
+defaults:
+  - data_module: scrna2chip
+  - task: predict
+  - _self_
+
+seed:
+  seed_value: 1234
+
+data_module:
+  max_length: 1024
+  batch_size: 1
+  dataset_kwargs:
+    processed_data_source: ${input_file}
+    label_dict_path: ${working_dir}/labels.json
+    new_field: label_expressions
+  limit_genes: protein_coding #could be null, protein_coding, or tokenizer
+  transform_datasets: false
+  # collation_strategy: multitask
+  log_normalize_transform: true
+
+task:
+  checkpoint: ${checkpoint}
+  output_embeddings: true
+  output_predictions: true
+  default_root_dir: ${working_dir}
+
+accelerator: mps
+input_file: null
+working_dir: /tmp
+checkpoint: null
+batch_column_name: sample
+counts_column_name: ncounts
+target_column_name: celltype

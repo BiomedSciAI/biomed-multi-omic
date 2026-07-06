@@ -1,0 +1,21 @@
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "genes"
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "expressions"
+    is_input: true
+    tokenization_strategy: continuous_value_encoder
+    encoder_kwargs:
+      kind: mlp_with_special_token_embedding
+      zero_as_special_token: true
+  # - _target_: bmfm_targets.config.FieldInfo
+  #  field_name: "perturbations"
+  - _target_: bmfm_targets.config.FieldInfo
+    field_name: "label_expressions"
+    is_input: false
+    tokenization_strategy: continuous_value_encoder
+    decode_modes:
+      wced:
+        vocab_field: genes
+        logit_outputs:
+          - mse
+          # - is_zero_bce

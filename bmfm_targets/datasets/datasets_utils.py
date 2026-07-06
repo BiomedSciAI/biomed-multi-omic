@@ -739,50 +739,70 @@ def guess_if_raw(x: np.ndarray, threshold=4):
 def make_group_means(
     ad: sc.AnnData,
     perturbation_column_name: str,
-    split_column_name: str,
+    split_column_name: str | None = None,
     exp_before_mean: bool = False,
     *,
     train_split_label: str = "train",
     control_label: str = "Control",
+    avg_row_label: str | None = "Average_Perturbation_Train",
 ) -> sc.AnnData:
     """
-    Compute per-perturbation pseudobulk means and append a train-average row.
+    Compute per-perturbation pseudobulk means and optionally append a train-average row.
 
     Aggregates single-cell expression data by perturbation group, producing
-    one pseudobulk per perturbation plus an "Average_Perturbation_Train" row
-    representing the mean of all non-control training perturbations.
+    one pseudobulk per perturbation. By default, also appends an
+    "Average_Perturbation_Train" row representing the mean of all non-control
+    training perturbations.
 
     Parameters
     ----------
     ad : sc.AnnData
-        Input single-cell data. Must contain `perturbation_column_name` and
-        `split_column_name` in `.obs`.
+        Input single-cell data. Must contain `perturbation_column_name` in `.obs`.
+        Must also contain `split_column_name` when `avg_row_label` is not None.
     perturbation_column_name : str
         Column in `.obs` defining perturbation groups (e.g., "target_gene").
-    split_column_name : str
+    split_column_name : str or None, default None
         Column in `.obs` defining dataset split (e.g., "train", "test").
+        Required when `avg_row_label` is not None; unused otherwise.
     exp_before_mean : bool, default False
         If True, compute unbiased means for log1p-normalized data via
         log1p(mean(expm1(X))). Use when `.X` is log1p-transformed.
     train_split_label : str, default "train"
         Label identifying training split in `.obs[split_column_name]`.
+        Used only when `avg_row_label` is not None.
     control_label : str, default "Control"
         Perturbation label to exclude from train average computation.
+        Used only when `avg_row_label` is not None.
+    avg_row_label : str or None, default "Average_Perturbation_Train"
+        Label for the synthetic train-average row appended to the output.
+        When None, the synthetic row is omitted and output contains exactly
+        one row per unique value of `perturbation_column_name`.
 
     Returns
     -------
     sc.AnnData
-        Rows are per-perturbation pseudobulks plus final "Average_Perturbation_Train"
-        row (if training data exists). `.var` and `.uns` copied from input.
+        Rows are per-perturbation pseudobulks. When `avg_row_label` is not None,
+        a final synthetic train-average row is appended (if training data exists).
+        `.var` and `.uns` copied from input.
+
+    Raises
+    ------
+    ValueError
+        If `avg_row_label` is not None but `split_column_name` is None.
 
     Examples
     --------
-    >>> # Standard usage with raw counts
+    >>> # Standard usage with raw counts (includes synthetic average row)
     >>> agg = make_group_means(adata, "target_gene", "split")
+
+    >>> # Without synthetic average row (one row per group only)
+    >>> agg = make_group_means(adata, "target_gene", avg_row_label=None)
 
     >>> # With log1p-normalized data (unbiased means)
     >>> agg = make_group_means(adata, "target_gene", "split", exp_before_mean=True)
     """
+    if avg_row_label is not None and split_column_name is None:
+        raise ValueError("split_column_name required when avg_row_label is set")
 
     def _mean(X):
         """Compute mean with optional log-bias correction."""
@@ -809,6 +829,64 @@ def make_group_means(
         uns=dict(ad.uns.items()),
     )
 
+    if avg_row_label is None:
+        return agg
+
+    return _append_train_average_row(
+        agg,
+        ad,
+        perturbation_column_name,
+        split_column_name,
+        train_split_label,
+        control_label,
+        avg_row_label,
+        X_means,
+        group_names,
+    )
+
+
+def _append_train_average_row(
+    agg: sc.AnnData,
+    ad: sc.AnnData,
+    perturbation_column_name: str,
+    split_column_name: str,
+    train_split_label: str,
+    control_label: str,
+    avg_row_label: str,
+    X_means: np.ndarray,
+    group_names: list,
+) -> sc.AnnData:
+    """
+    Compute and append a train-average synthetic row to pseudobulk AnnData.
+
+    Parameters
+    ----------
+    agg : sc.AnnData
+        Pseudobulk AnnData with one row per group (output of make_group_means
+        before appending the average row).
+    ad : sc.AnnData
+        Original single-cell data used to identify train perturbations.
+    perturbation_column_name : str
+        Column in `.obs` defining perturbation groups.
+    split_column_name : str
+        Column in `.obs` defining dataset split.
+    train_split_label : str
+        Label identifying training split in `.obs[split_column_name]`.
+    control_label : str
+        Perturbation label to exclude from train average computation.
+    avg_row_label : str
+        Label for the synthetic train-average row.
+    X_means : np.ndarray
+        Pre-computed per-group mean matrix (rows correspond to group_names).
+    group_names : list
+        Ordered list of group names matching rows of X_means.
+
+    Returns
+    -------
+    sc.AnnData
+        `agg` with an additional synthetic train-average row appended.
+        Returns `agg` unchanged if no training perturbations are found.
+    """
     # Identify train perturbations (excluding control)
     train_perts = ad.obs.loc[
         (ad.obs[split_column_name] == train_split_label)
@@ -825,7 +903,7 @@ def make_group_means(
 
     avg_row = sc.AnnData(
         X=ss.csr_matrix(avg_vec),
-        obs=pd.DataFrame(index=pd.Index(["Average_Perturbation_Train"])),
+        obs=pd.DataFrame(index=pd.Index([avg_row_label])),
         var=agg.var.copy(deep=True),
     )
 

@@ -1,0 +1,79 @@
+defaults:
+  - data_module: scrna2chip
+  - tokenizer: all_genes
+  - fields: scrna2chip_wced
+  - trainer: scrna2chip
+  - task: train
+  - model: llama
+  - _self_
+
+# scRNA → ChIP population-OT training (OT-only, no per-gene reconstruction loss).
+#
+# Each mini-batch contains scRNA cells from a single tissue (homogeneous batching).
+# The Sinkhorn divergence is computed between the WCED-decoded gene predictions
+# [B, vocab_size] and the held-out ChIP population for that tissue [M, vocab_size].
+#
+# Loss composition: a single `population_ot` loss entry drives training.
+# OT weighting is controlled by the per-loss `weight:` field.
+#
+# For OT + WCED reconstruction simultaneously, use scrna2chip_ot_wced_train.yaml.
+
+seed:
+  seed_value: 1234
+
+model:
+  checkpoint: ${checkpoint}
+
+data_module:
+  num_workers: 4
+  data_dir: ${my_data_dir}
+  processed_name: ${my_data_filename}_processed
+  transform_kwargs:
+    split_column_name: tissue_split
+    source_h5ad_file_name: ${my_data_filename}
+    transforms: []
+  dataset_kwargs:
+    new_field: label_expressions
+    split_column_name: tissue_split
+  transform_datasets: true
+  log_normalize_transform: false
+
+  batch_size: 16
+  max_length: 1024
+  limit_genes: protein_coding
+  sequence_order: random
+
+  use_ot_batching: true
+  celltype_column: tissue_label
+
+  collation_strategy: sequence_labeling
+  # No sequence_label_extractor: WCED labels not needed for OT-only training.
+
+trainer:
+  learning_rate: 1.0e-5
+  batch_prediction_behavior: "dump"
+  losses:
+    - field_name: label_expressions
+      name: population_ot
+      wced_target: all_genes
+      population_key: chip_population
+      eps: 1.0
+      n_iters: 100
+      cost: euclidean
+      link_function: null
+      weight: 1.0
+
+label_columns: []
+
+track_clearml:
+  project_name: bmfm
+  task_name: scRNA2ChIP_OT_train
+
+working_dir: /tmp
+accelerator: gpu
+my_data_dir: null
+my_data_filename: null
+val_check_interval: 0.2
+max_epochs: 10
+checkpoints_every_n_train_steps: 1000
+checkpoint: null

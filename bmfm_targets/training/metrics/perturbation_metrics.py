@@ -19,6 +19,68 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import pairwise_distances as pwd
 
 
+def _core_metrics(predicted: pd.Series, gt: pd.Series) -> dict:
+    """
+    Compute core aggregated PCC and MAE between predictions and ground truth.
+
+    Args:
+    ----
+        predicted (pd.Series): Predicted expression values.
+        gt (pd.Series): Ground-truth expression values.
+
+    Returns:
+    -------
+        dict: ``{"agg_pcc": float, "agg_mae": float}``
+    """
+    return {
+        "agg_pcc": pearsonr(predicted, gt)[0],
+        "agg_mae": mean_absolute_error(gt, predicted),
+    }
+
+
+def _baseline_metrics(control: pd.Series, gt: pd.Series, predicted: pd.Series) -> dict:
+    """
+    Compute baseline and delta metrics using unperturbed control expressions.
+
+    Args:
+    ----
+        control (pd.Series): Unperturbed (control / input) expression values.
+        gt (pd.Series): Ground-truth (label) expression values.
+        predicted (pd.Series): Predicted expression values.
+
+    Returns:
+    -------
+        dict: ``baseline_agg_pcc``, ``baseline_agg_mae``, ``delta_agg_pcc``.
+    """
+    predicted_delta = predicted - control
+    gt_delta = gt - control
+    return {
+        "baseline_agg_pcc": pearsonr(control, gt)[0],
+        "baseline_agg_mae": mean_absolute_error(gt, control),
+        "delta_agg_pcc": pearsonr(predicted_delta, gt_delta)[0],
+    }
+
+
+def _delta_metrics(baseline: pd.Series, gt: pd.Series) -> dict:
+    """
+    Compute PCC and MAE against the average-perturbation (train) baseline.
+
+    Args:
+    ----
+        baseline (pd.Series): Average-perturbation baseline expression values.
+        gt (pd.Series): Ground-truth (label) expression values.
+
+    Returns:
+    -------
+        dict: ``baseline_agg_pcc_from_avg_perturbation``,
+            ``baseline_agg_mae_from_avg_perturbation``.
+    """
+    return {
+        "baseline_agg_pcc_from_avg_perturbation": pearsonr(baseline, gt)[0],
+        "baseline_agg_mae_from_avg_perturbation": mean_absolute_error(gt, baseline),
+    }
+
+
 def prepare_args_for_discrimination_score(group_expressions: pd.DataFrame):
     """
     Prepare arguments for discrimination score calculation.
@@ -152,53 +214,56 @@ def get_aggregated_perturbation_metrics(grouped_predictions: pd.DataFrame):
     Includes calculation of delta expressions, which are the differences between the
     perturbed samples and the control mean expressions.
 
+    Core metrics (``agg_pcc``, ``agg_mae``) are always computed.  Baseline and
+    delta metrics are only included when the required columns are present in
+    *grouped_predictions*, so callers that lack ``input_expressions`` or
+    ``baseline_expressions`` (e.g. ChIP tissue predictions) never raise.
+
     Parameters
     ----------
     grouped_predictions : pd.DataFrame
-        Observed expressions with rows as genes and columns including
-        'predicted_expressions', 'label_expressions', and "input_expressions".
-        Already averaged across samples with the same perturbation (pseudobulk).
+        Observed expressions with rows as genes and columns including at minimum
+        ``predicted_expressions`` and ``label_expressions``.  May also contain
+        ``input_expressions`` and/or ``baseline_expressions`` for the full
+        perturbation metric set.  Already averaged across samples with the same
+        condition (pseudobulk).
 
     Returns
     -------
     dict
-        {
-            "agg_pcc": correlation(predicted, gt),
-            "delta_agg_pcc": correlation(predicted_delta, gt_delta),
-            "baseline_agg_pcc": correlation(control, gt),
-        }
+        Always contains ``agg_pcc`` and ``agg_mae``.
+        Contains ``baseline_agg_pcc``, ``baseline_agg_mae``, ``delta_agg_pcc``
+        only when ``input_expressions`` is present.
+        Contains ``baseline_agg_pcc_from_avg_perturbation`` and
+        ``baseline_agg_mae_from_avg_perturbation`` only when
+        ``baseline_expressions`` is present.
     """
-    deltas = grouped_predictions.subtract(
-        grouped_predictions["input_expressions"], axis=0
-    ).drop(columns=["input_expressions"])
-
+    cols = grouped_predictions.columns
     predicted = grouped_predictions["predicted_expressions"]
-    control = grouped_predictions["input_expressions"]
     gt = grouped_predictions["label_expressions"]
 
-    predicted_delta = deltas["predicted_expressions"]
-    gt_delta = deltas["label_expressions"]
+    result: dict = _core_metrics(predicted, gt)
 
-    baseline = grouped_predictions["baseline_expressions"]
+    if "input_expressions" in cols:
+        control = grouped_predictions["input_expressions"]
+        result |= _baseline_metrics(control, gt, predicted)
 
-    return {
-        "agg_pcc": pearsonr(predicted, gt)[0],
-        "baseline_agg_pcc": pearsonr(control, gt)[0],
-        "baseline_agg_pcc_from_avg_perturbation": pearsonr(baseline, gt)[0],
-        # delta metrics (baseline not possible)
-        "delta_agg_pcc": pearsonr(predicted_delta, gt_delta)[0],
-        # mae metrics
-        "agg_mae": mean_absolute_error(gt, predicted),
-        "baseline_agg_mae": mean_absolute_error(gt, control),
-        "baseline_agg_mae_from_avg_perturbation": mean_absolute_error(gt, baseline),
-    }
+    if "baseline_expressions" in cols:
+        baseline = grouped_predictions["baseline_expressions"]
+        result |= _delta_metrics(baseline, gt)
+
+    return result
 
 
 def get_grouped_predictions(
-    preds_df: pd.DataFrame, grouped_ground_truth: pd.DataFrame
+    preds_df: pd.DataFrame,
+    grouped_ground_truth: pd.DataFrame,
+    *,
+    group_column: str = "perturbed_genes",
+    feature_column: str = "input_genes",
 ) -> pd.DataFrame:
     """
-    Group predictions by perturbed genes, filling in missing predictions with baseline.
+    Group predictions by condition, filling in missing predictions with baseline.
 
     Baseline is either the "Average_Perturbation_Train" or "Control" column from
     the grouped_ground_truth DataFrame.
@@ -207,45 +272,61 @@ def get_grouped_predictions(
     ----
         preds_df (pd.DataFrame): DataFrame containing predicted expressions for all
           genes and samples.
-        grouped_ground_truth (pd.DataFrame): DataFrame containing mean ground truth expressions
-            for each of the perturbations, the whole train set, and the control.
-            The values in the column corresponding to each perturbation are treated
-            as the ground truth for that perturbation.
-            We also use the "Average_Perturbation_Train" or "Control" column from this
-            dataframe to fill in our best guess prediction for genes that were not
-            predicted.
+        grouped_ground_truth (pd.DataFrame): DataFrame containing mean ground truth
+            expressions for each of the conditions, the whole train set, and the
+            control.  The values in the column corresponding to each condition are
+            treated as the ground truth for that condition.
+            We also use the "Average_Perturbation_Train" or "Control" column from
+            this dataframe to fill in our best guess prediction for genes that were
+            not predicted.
+        group_column (str): Column in *preds_df* that identifies the condition/group
+            axis of the MultiIndex (e.g. ``"perturbed_genes"``, ``"tissue_label"``).
+            Defaults to ``"perturbed_genes"`` to preserve existing behavior.
+        feature_column (str): Column in *preds_df* that identifies the feature axis
+            of the MultiIndex (e.g. ``"input_genes"``).
+            Defaults to ``"input_genes"`` to preserve existing behavior.
 
     Returns:
     -------
-        pd.DataFrame: A DataFrame with a MultiIndex of (perturbed_genes, input_genes)
+        pd.DataFrame: A DataFrame with a MultiIndex of (group_column, feature_column)
         and columns for 'predicted_expressions' and 'label_expressions'.
         Also included are "input_expressions" and "baseline_expressions" for downstream
         metric calculation.
 
     """
-    # Extract unique perturbed genes from the set of predictinos
-    perts = preds_df["perturbed_genes"].unique()
+    # Extract unique group identifiers from the predictions
+    perts = preds_df[group_column].unique()
     # use genes in grouped_ground_truth will be to create grouped predictions
     genes = grouped_ground_truth.index
 
-    # Determine baseline (Average_Perturbation_Train or Control)
-    if "Average_Perturbation_Train" in grouped_ground_truth.columns:
+    # Determine baseline (Average_Perturbation_Train or Control or None)
+    has_apt = "Average_Perturbation_Train" in grouped_ground_truth.columns
+    has_control = "Control" in grouped_ground_truth.columns
+    if has_apt:
         baseline = grouped_ground_truth["Average_Perturbation_Train"]
-    else:
+    elif has_control:
         baseline = grouped_ground_truth["Control"]
         logging.warning(
             "Average_Perturbation_Train not found, using Control as baseline"
         )
+    else:
+        baseline = None
 
     # Initialize group_averages DataFrame
-    # Use np.tile to repeat the baseline array for each perturbation
-    initial_data = {
-        "predicted_expressions": np.tile(baseline.to_numpy(), len(perts)),
-        "input_expressions": np.tile(
+    # Use np.tile to repeat the baseline array for each perturbation when available.
+    # When no baseline exists (e.g. ChIP tissue case), initialize with zeros so that
+    # actual predictions overwrite the placeholder completely.
+    n_total = len(perts) * len(genes)
+    initial_data: dict = {}
+    if baseline is not None:
+        initial_data["predicted_expressions"] = np.tile(baseline.to_numpy(), len(perts))
+        initial_data["baseline_expressions"] = np.tile(baseline.to_numpy(), len(perts))
+    else:
+        initial_data["predicted_expressions"] = np.zeros(n_total)
+    if has_control:
+        initial_data["input_expressions"] = np.tile(
             grouped_ground_truth["Control"].to_numpy(), len(perts)
-        ),
-        "baseline_expressions": np.tile(baseline.to_numpy(), len(perts)),
-    }
+        )
     if all(pert in grouped_ground_truth.columns for pert in perts):
         initial_data["label_expressions"] = np.hstack(
             [grouped_ground_truth[pert].to_numpy() for pert in perts]
@@ -257,13 +338,13 @@ def get_grouped_predictions(
         )
     group_averages = pd.DataFrame(
         index=pd.MultiIndex.from_product(
-            [perts, genes], names=["perturbed_genes", "input_genes"]
+            [perts, genes], names=[group_column, feature_column]
         ),
         data=initial_data,
     )
     if "predicted_expressions" in preds_df.columns:
         # Compute mean predictions for each group
-        mean_preds = preds_df.groupby(["perturbed_genes", "input_genes"])[
+        mean_preds = preds_df.groupby([group_column, feature_column])[
             "predicted_expressions"
         ].mean()
 
@@ -271,7 +352,7 @@ def get_grouped_predictions(
         group_averages.loc[mean_preds.index, "predicted_expressions"] = mean_preds
 
     elif "predicted_delta_baseline_expressions" in preds_df.columns:
-        mean_predicted_delta = preds_df.groupby(["perturbed_genes", "input_genes"])[
+        mean_predicted_delta = preds_df.groupby([group_column, feature_column])[
             "predicted_delta_baseline_expressions"
         ].mean()
 

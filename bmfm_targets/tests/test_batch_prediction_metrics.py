@@ -313,3 +313,96 @@ def test_filling_predictions_to_anndata(
             adata[sample_id, row["input_genes"]].X.data[0]
             == row["predicted_expressions"]
         )
+
+
+class TestGeneralizedMetrics:
+    """Tests for WP-C: configurable group_column/feature_column and optional baseline."""
+
+    @pytest.fixture()
+    def minimal_grouped_df(self):
+        """Grouped DataFrame with only predicted + label (no input/baseline columns)."""
+        rng = np.random.default_rng(42)
+        n = 10
+        predicted = rng.normal(0.0, 1.0, n)
+        label = predicted + rng.normal(0.0, 0.1, n)
+        return pd.DataFrame(
+            {"predicted_expressions": predicted, "label_expressions": label},
+            index=[f"gene{i}" for i in range(n)],
+        )
+
+    @pytest.fixture()
+    def tissue_preds_df(self):
+        """preds_df keyed by tissue_label/input_genes for custom-identifier test."""
+        return pd.DataFrame(
+            {
+                "tissue_label": ["T cell", "T cell", "B cell", "B cell"],
+                "input_genes": ["gene1", "gene2", "gene1", "gene2"],
+                "predicted_expressions": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+
+    @pytest.fixture()
+    def tissue_ground_truth(self):
+        """Ground truth keyed by tissue label columns (plus Control for baseline)."""
+        return pd.DataFrame(
+            {
+                "T cell": [1.0, 2.0],
+                "B cell": [3.0, 4.0],
+                "Control": [0.5, 1.5],
+            },
+            index=["gene1", "gene2"],
+        )
+
+    @pytest.fixture()
+    def pert_preds_df(self):
+        """preds_df keyed by perturbed_genes/input_genes (standard backward-compat)."""
+        return pd.DataFrame(
+            {
+                "perturbed_genes": ["geneA", "geneA", "geneB", "geneB"],
+                "input_genes": ["gene1", "gene2", "gene1", "gene2"],
+                "predicted_expressions": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+
+    @pytest.fixture()
+    def pert_ground_truth(self):
+        """Grouped ground truth with perturbation columns."""
+        return pd.DataFrame(
+            {
+                "geneA": [1.0, 2.0],
+                "geneB": [3.0, 4.0],
+                "Control": [0.5, 1.5],
+            },
+            index=["gene1", "gene2"],
+        )
+
+    def test_aggregated_metrics_core_only_no_baseline(self, minimal_grouped_df):
+        """Core metrics are returned; no baseline/delta keys when those columns absent."""
+        result = perturbation_metrics.get_aggregated_perturbation_metrics(
+            minimal_grouped_df
+        )
+        assert "agg_pcc" in result
+        assert "agg_mae" in result
+        assert "baseline_agg_pcc" not in result
+        assert "baseline_agg_mae" not in result
+        assert "baseline_agg_pcc_from_avg_perturbation" not in result
+        assert "baseline_agg_mae_from_avg_perturbation" not in result
+        assert "delta_agg_pcc" not in result
+
+    def test_grouped_predictions_custom_identifier(
+        self, tissue_preds_df, tissue_ground_truth
+    ):
+        """group_column='tissue_label' → MultiIndex level names are (tissue_label, input_genes)."""
+        result = perturbation_metrics.get_grouped_predictions(
+            tissue_preds_df, tissue_ground_truth, group_column="tissue_label"
+        )
+        assert list(result.index.names) == ["tissue_label", "input_genes"]
+
+    def test_grouped_predictions_default_backward_compat(
+        self, pert_preds_df, pert_ground_truth
+    ):
+        """Omitting group_column preserves the default (perturbed_genes, input_genes) names."""
+        result = perturbation_metrics.get_grouped_predictions(
+            pert_preds_df, pert_ground_truth
+        )
+        assert list(result.index.names) == ["perturbed_genes", "input_genes"]
