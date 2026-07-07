@@ -1,0 +1,20 @@
+[
+    {
+        "label_name": "celltype",
+        "label_values": {
+            "astrocyte of the cerebral cortex": 0,
+            "cerebral cortex endothelial cell": 1,
+            "cerebral cortex glial cell": 2,
+            "cortical interneuron": 3,
+            "cortical layer 2-3 excitatory neuron": 4,
+            "cortical layer 4 excitatory neuron": 5,
+            "cortical layer 5-6 excitatory neuron": 6,
+            "excitatory neuron": 7,
+            "microglial cell": 8,
+            "oligodendrocyte": 9,
+            "oligodendrocyte precursor cell": 10,
+            "phagocyte": 11,
+            "pyramidal neuron": 12
+        }
+    }
+]

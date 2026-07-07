@@ -1,0 +1,28 @@
+[
+    {
+        "label_name": "celltype",
+        "label_values": {
+            "Macro_C1QC": 0,
+            "Macro_FN1": 1,
+            "Macro_GPNMB": 2,
+            "Macro_IL1B": 3,
+            "Macro_INHBA": 4,
+            "Macro_ISG15": 5,
+            "Macro_LYVE1": 6,
+            "Macro_NLRP3": 7,
+            "Macro_SPP1": 8,
+            "Mono_CD14": 9,
+            "Mono_CD16": 10,
+            "cDC1_CLEC9A": 11,
+            "cDC2_CD1A": 12,
+            "cDC2_CD1C": 13,
+            "cDC2_CXCL9": 14,
+            "cDC2_CXCR4hi": 15,
+            "cDC2_FCN1": 16,
+            "cDC2_IL1B": 17,
+            "cDC2_ISG15": 18,
+            "cDC3_LAMP3": 19,
+            "pDC_LILRA4": 20
+        }
+    }
+]
