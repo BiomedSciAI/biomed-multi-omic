@@ -184,3 +184,77 @@ bsub -J <cfg> -o /u/dmichael/.lsf/cluster/%J.out -e /u/dmichael/.lsf/cluster/%J.
   -R 'select[ngpus>=1] span[hosts=1]' -M 128G -gpu 'num=1:mode=exclusive_process' \
   "/proj/bmfm/users/dmichael/envs/biomedmultiomic/bin/bmfm-targets-run -cd /u/dmichael/biomed-multi-omic/run -cn <cfg>"
 ```
+
+---
+
+# Session 4 (2026-07-06/07): zero-shot benchmark of the final 3-arm checkpoints
+
+## Goal
+
+Answer the Session 3 open item — evaluate the final checkpoints on downstream tasks —
+using the full 12-dataset zero-shot benchmark suite (`bmfm_targets/evaluation/benchmark_configs/`),
+not the earlier July-3 preliminary runs.
+
+## Which checkpoints
+
+Identified via the three ClearML task IDs the user linked (project
+`bmfm-targets/scconcept_ablation`, all `completed`):
+
+| Arm | ClearML task ID | jobid tag | Checkpoint used |
+|---|---|---|---|
+| contrastive | `893c90f188d245f78f393e2ab8c02208` | 10027 | `.../scconcept_ablation_contrastive/last-v2.ckpt` |
+| wced | `b6e62211ec124725840f84b82f5e62f3` | 10028 | `.../scconcept_ablation_wced/last.ckpt` |
+| both | `fca4575028b44e9191117879074a5dfb` | 10029 | `.../scconcept_ablation_both/last-v2.ckpt` |
+
+All under `/proj/bmfm/users/dmichael/training_runs/`. Used `last`/`last-v2` (not the
+val_loss-best checkpoints) per the Session 3 checkpoint-selection gotcha — `logit_scale`
+confounds `val_loss` for the contrastive/both arms.
+
+## benchmark_run.sh fixes (committed)
+
+- `bmfm-targets-scbert` → `bmfm-targets-run` (this repo's console script; the old name
+  is the inner-source binary — see `.claude/environment.md`).
+- Active `datasets` array had been left on the 2-dataset fine-tune subset
+  (`multiple_sclerosis`, `myeloid`) from a prior session; restored the full 12-dataset
+  zero-shot list as default (`covid_19 heart_atlas immune_all_human lung_atlas pbmc_10k
+  cell_lines dc human_pbmc immune_atlas pancrm multiple_sclerosis myeloid`).
+
+Launched with `--do_zs=true --do_ft=false` for all three checkpoints → 36 LSF jobs
+(12 datasets × 3 arms), zero-shot only (`task=predict`, `~model ~tokenizer
+~trainer.losses ~fields` — reconstructed from the checkpoint).
+
+## Two environment gaps found and fixed (both in `biomedmultiomic` env, not code bugs)
+
+1. **`ModuleNotFoundError: czbenchmarks` / `scib`** — `CziBenchmarkCallback` /
+   `BatchIntegrationCallback` (`training/callbacks.py`) lazily import `czbenchmarks` and
+   `scib.metrics`; neither was installed in `biomedmultiomic` (only in the inner-source
+   `conda_targets` env). Fix: `pip install -e ".[benchmarking]"` — pyproject.toml already
+   declares this extra (`scib`, `scib-metrics`, `cz-benchmarks` from the
+   `sivanravidos/cz-benchmarks` fork). Confirmed end-to-end afterward (job 10433 DONE).
+   **Gotcha:** installing while jobs are already running doesn't help them — the fix has
+   to land before each job's Python process reaches the lazy import, and NFS propagation
+   to compute nodes lags the login node by a couple of minutes, so several jobs raced the
+   install and had to be resubmitted.
+2. **`corrupted size vs. prev_size` (glibc heap corruption, core dump)** — hit only on
+   the larger atlas datasets (`immune_all_human`, `immune_atlas`, etc.) in the
+   sklearn-based `SGDCallback`/benchmark path. Classic OpenBLAS-thread-count bug: the
+   node has far more cores visible than the job's LSF request (`-n 8`), and OpenBLAS's
+   thread-metadata workaround ("precompiled NUM_THREADS exceeded") is fragile under
+   that mismatch. Fix: cap threads to match the allocation via
+   `bsub -env 'all, OPENBLAS_NUM_THREADS=8, OMP_NUM_THREADS=8, MKL_NUM_THREADS=8'`.
+
+## Outcome
+
+All 36 (arm × dataset) combinations completed successfully after retries (some
+datasets needed a second or third submission due to the two issues above, not because
+of anything dataset- or checkpoint-specific). Results are in ClearML under
+`bmfm-targets/evaluate/scconcept_{contrastive,wced,both}/20260706-*_scconcept_ablation_zs`.
+
+## Open items
+
+- Pull the `CziBenchmarkCallback`/`SGDCallback`/`BatchIntegrationCallback` metrics from
+  ClearML across the three arms and compare — this is the actual answer to "does
+  scConcept backbone beat WCED on standard tasks" (Session 2 open question #1).
+- Consider committing `OPENBLAS_NUM_THREADS`/`OMP_NUM_THREADS`/`MKL_NUM_THREADS` into
+  `benchmark_run.sh`'s `PREFIX_CMD` directly so future runs don't need to rediscover the
+  malloc-corruption fix.
