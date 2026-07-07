@@ -21,7 +21,7 @@ set -euo pipefail
 #   --tag=RUN_TAG              Tag for ClearML project naming (default: "")
 #   --do_zs=true|false         Run zero-shot evaluation (default: true)
 #   --do_ft=true|false         Run fine-tuning (default: false)
-#   --extra_args=STRING        Additional bmfm-targets-scbert arguments
+#   --extra_args=STRING        Additional bmfm-targets-run arguments
 #   --help                     Display help message
 #
 # EXAMPLES:
@@ -76,7 +76,7 @@ for arg in "$@"; do
       echo "  --tag=RUN_TAG"
       echo "  --do_zs=true|false (default: true)"
       echo "  --do_ft=true|false (default: false)"
-      echo "  --extra_args=STRING (additional bmfm-targets-scbert arguments)"
+      echo "  --extra_args=STRING (additional bmfm-targets-run arguments)"
       exit 0
       ;;
     *)
@@ -110,11 +110,11 @@ case "$DO_FT" in
 esac
 
 # use these 12 for zerohot
-# declare -a datasets=("covid_19" "heart_atlas" "immune_all_human" "lung_atlas"  "pbmc_10k" "cell_lines" "dc" "human_pbmc" "immune_atlas" "pancrm" "multiple_sclerosis"  "myeloid") # "mce" "mhsp")
+declare -a datasets=("covid_19" "heart_atlas" "immune_all_human" "lung_atlas"  "pbmc_10k" "cell_lines" "dc" "human_pbmc" "immune_atlas" "pancrm" "multiple_sclerosis"  "myeloid") # "mce" "mhsp")
 # "multiple_sclerosis" "myeloid" "zheng68k" "pancreascross" "hbones") # remove those which are not in the 12-zeroshot benchmarking datasets
 
 # use these 2 for fine-tune
-declare -a datasets=("multiple_sclerosis"  "myeloid") #
+# declare -a datasets=("multiple_sclerosis"  "myeloid") #
 
 # mouse only
 #declare -a datasets=("mca" "mhsp") #
@@ -128,7 +128,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 # set PREFIX_CMD to "echo " and the commands will be printed (check that the bash vars are correct or to dump to a file for future running)
 # set PREFIX_CMD to "jbsub -q x86_6h -cores 8+1 -mem 16g" or similar to submit on CCC
 # set PREFIX_CMD to a session-manager-ccc call with the command as a variable to be parsed
-# set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-scbert print the resolved yaml without running the code
+# set SUFFIX_CMD to "--cfg job --resolve" to have the bmfm-targets-run print the resolved yaml without running the code
 # PREFIX_CMD="jbsub -q x86_6h -cores 8+1 -mem 16g"
 # run on v100
 # PREFIX_CMD="bsub -J benchmark_job -R \"rusage[ngpus=1,cpu=8,mem=16GB]\" -gpu num=1:mode=exclusive_process:gmodel=TeslaV100_SXM2_32GB -o $HOME/.lsf/cluster/%J.out -e $HOME/.lsf/cluster/%J.err"
@@ -188,10 +188,10 @@ if [ "$DO_FT" = "true" ]; then
     echo "Running fine-tuning for all datasets..."
     for DATASET in "${datasets[@]}"; do
         #use this for tag in project name
-        "${PREFIX_CMD[@]}" bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET task=train track_clearml.task_name=${DATASET}_ft project_name_tag="${TIMESTAMP}${RUN_TAG}" "${MODEL_SPECIFIC_ARGS[@]}"  $EXTRA_ARGS $SUFFIX_CMD ;
+        "${PREFIX_CMD[@]}" bmfm-targets-run -cd $SCRIPT_DIR -cn config data_module=$DATASET task=train track_clearml.task_name=${DATASET}_ft project_name_tag="${TIMESTAMP}${RUN_TAG}" "${MODEL_SPECIFIC_ARGS[@]}"  $EXTRA_ARGS $SUFFIX_CMD ;
 
         # use this for tag in task name
-        #"${PREFIX_CMD[@]}" bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET task=train track_clearml.task_name=${DATASET}_ft_${TIMESTAMP}${RUN_TAG}  "${MODEL_SPECIFIC_ARGS[@]}"  $EXTRA_ARGS $SUFFIX_CMD ;
+        #"${PREFIX_CMD[@]}" bmfm-targets-run -cd $SCRIPT_DIR -cn config data_module=$DATASET task=train track_clearml.task_name=${DATASET}_ft_${TIMESTAMP}${RUN_TAG}  "${MODEL_SPECIFIC_ARGS[@]}"  $EXTRA_ARGS $SUFFIX_CMD ;
     done
 fi
 
@@ -199,7 +199,7 @@ fi
 if [ "$DO_ZS" = "true" ]; then
     echo "Running zero-shot prediction for all datasets..."
     for DATASET in "${datasets[@]}"; do
-        "${PREFIX_CMD[@]}" bmfm-targets-scbert -cd $SCRIPT_DIR -cn config data_module=$DATASET task=predict ~model ~tokenizer ~trainer.losses ~fields track_clearml.task_name=${DATASET}_zero_shot ++task.output_predictions=False  project_name_tag="${TIMESTAMP}${RUN_TAG}" "${MODEL_SPECIFIC_ARGS[@]}" $EXTRA_ARGS $SUFFIX_CMD ;
+        "${PREFIX_CMD[@]}" bmfm-targets-run -cd $SCRIPT_DIR -cn config data_module=$DATASET task=predict ~model ~tokenizer ~trainer.losses ~fields track_clearml.task_name=${DATASET}_zero_shot ++task.output_predictions=False  project_name_tag="${TIMESTAMP}${RUN_TAG}" "${MODEL_SPECIFIC_ARGS[@]}" $EXTRA_ARGS $SUFFIX_CMD ;
     done
 fi
 
