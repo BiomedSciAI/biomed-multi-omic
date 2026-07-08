@@ -4,7 +4,7 @@ Model: ibm-research/biomed.rna.llama.47m.wced.multitask.v1.
 
 Pipeline:
     h5ad → preprocess.py (log-norm, gene filtering, cell-level padding)
-         → list[dict] per cell, each with gene_ids / expr_values / attention_mask
+         → list[dict] per cell, each with gene_ids / expr_values / attention_mask / pooling_method_id
          → vLLM (one request per cell)
          → BiomedRnaMultiModalProcessor.apply()  [per-request, CPU]
          → vLLM batches requests via MultiModalKwargsItems
@@ -34,13 +34,32 @@ Batching and padding:
     batching requests from different users together, guaranteeing that forward()
     always receives a uniform Tensor[batch, seq_len]. The tradeoff is reduced
     throughput under concurrent load.
+
+Pooling:
+    bmfm-rna supports various pooling methods: first_token, pooling_layer or specific
+    CLS token id (see bmfm_targets/inference.py for details).
+    Per-request pooling methods are encoded as integer IDs and carried through
+    vLLM's multimodal kwargs pipeline (pooling_method_id field).  Pooling is done
+    inside forward() so BiomedRnaPooler is a simple pass-through. Pooling must be
+    inside forward since bmfm-rna pooling requires the attention mask and the full
+    bmfbm ModelOutpu. A vLLM Pooler receives only the flat hidden_states tensor and
+    has no access to BMFM model internals.
+
+Note:
+----
+    - vllm plugin supports only a single pooling type. List of pooling types which is
+    supported by the bmfm-rna native inference script is not supported.
+
 """
 
+import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence, Set
+from pathlib import Path
 
 import torch
 import torch.nn as nn
+from huggingface_hub import snapshot_download
 from transformers import BatchFeature
 
 from bmfm_targets.models.predictive.layers import get_embeddings_from_outputs
@@ -75,7 +94,13 @@ from vllm.multimodal.processing import (
 from vllm.sequence import IntermediateTensors
 from vllm.tasks import PoolingTask
 from vllm.v1.pool.metadata import PoolingMetadata
-from vllm_biomed_rna_plugin.constants import RNA_FIELDS_CONFIG, RNA_PAD_TOKEN_ID
+from vllm_biomed_rna_plugin.constants import (
+    POOLING_METHOD_DEFAULT_ID,
+    POOLING_METHOD_IDS,
+    POOLING_METHOD_NAMES,
+    RNA_FIELDS_CONFIG,
+    RNA_PAD_TOKEN_ID,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +110,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class EmbeddingIdentityPooler(Pooler):
+class BiomedRnaPooler(Pooler):
     """
-    Formats already-pooled BMFM embeddings for vLLM's embedding API.
+    Pass-through pooler for BiomedRNA.
 
-    forward() receives [batch, 1, hidden_size] (pooled by the model),
-    squeezes the sequence dimension, and returns a list of 1-D tensors
-    as required by vLLM's pooling protocol.
-
-    TODO: Move pooling out of BiomedRnaForSequenceEmbedding.forward() into
-    here, return unpooled [batch, seq_len, hidden_size] from the model, and
-    support multiple pooling strategies (first_token, mean, max).
+    Pooling is performed inside BiomedRnaForSequenceEmbedding.forward() using the
+    per-request pooling_method_id carried through the mm_kwargs pipeline.
+    forward() returns already-pooled embeddings as [batch, 1, hidden_size], so
+    this pooler simply unwraps the single token dimension and returns the list.
     """
 
     def get_supported_tasks(self) -> Set[PoolingTask]:
@@ -103,12 +125,11 @@ class EmbeddingIdentityPooler(Pooler):
 
     def forward(
         self,
-        hidden_states: torch.Tensor,  # [batch, 1, hidden_size]
+        hidden_states: torch.Tensor,  # [batch, 1, hidden_size] — already pooled
         pooling_metadata: PoolingMetadata,
     ) -> list[torch.Tensor]:
-        # squeeze sequence dim → [batch, hidden_size], split into per-sample list
-        embeddings = hidden_states.squeeze(1)
-        return [embeddings[i] for i in range(embeddings.shape[0])]
+        # hidden_states[:, 0, :] → [batch, hidden_size]; unbind → list[hidden_size]
+        return list(hidden_states[:, 0, :].unbind(0))
 
 
 # ---------------------------------------------------------------------------
@@ -164,24 +185,60 @@ class RnaProcessorItems(DictEmbeddingItems):
                     f"attention_mask={attention_mask.shape[0]}"
                 )
 
+            # Encode the pooling method as a scalar int tensor so it travels
+            # through the mm_kwargs pipeline alongside gene_ids / expr_values.
+            # (see constants.py for encoding scheme).
+            raw_method = item.get("pooling_method")
+            if raw_method is None:
+                method_id = POOLING_METHOD_DEFAULT_ID
+            elif isinstance(raw_method, int):
+                if raw_method < 0:
+                    raise ValueError(
+                        f"Integer pooling_method must be >= 0 (token position); "
+                        f"got {raw_method}. Negative values are reserved for named methods."
+                    )
+                method_id = raw_method  # token-position int passes through
+            else:
+                if raw_method not in POOLING_METHOD_IDS:
+                    logger.warning(
+                        "Unknown pooling_method %r — falling back to model default. "
+                        "Valid names: %s",
+                        raw_method,
+                        list(POOLING_METHOD_IDS),
+                    )
+                method_id = POOLING_METHOD_IDS.get(
+                    raw_method, POOLING_METHOD_DEFAULT_ID
+                )
+
             validated.append(
                 {
                     "gene_ids": gene_ids,
                     "expr_values": expr_values,
                     "attention_mask": attention_mask,
+                    "pooling_method_id": torch.tensor([method_id], dtype=torch.long),
                 }
             )
 
         # DictEmbeddingItems stores fields as lists (one tensor per item)
         combined = {
             field: [item[field] for item in validated]
-            for field in ("gene_ids", "expr_values", "attention_mask")
+            for field in (
+                "gene_ids",
+                "expr_values",
+                "attention_mask",
+                "pooling_method_id",
+            )
         }
 
         super().__init__(
             data=combined,
             modality="rna",
-            required_fields={"gene_ids", "expr_values", "attention_mask"},
+            required_fields={
+                "gene_ids",
+                "expr_values",
+                "attention_mask",
+                "pooling_method_id",
+            },
             fields_factory=lambda _: RNA_FIELDS_CONFIG.copy(),
         )
 
@@ -295,6 +352,9 @@ class BiomedRnaDummyInputsBuilder(BaseDummyInputsBuilder):
                 "gene_ids": gene_ids,
                 "expr_values": expr_values,
                 "attention_mask": torch.ones(seq_len, dtype=torch.bool),
+                "pooling_method_id": torch.tensor(
+                    [POOLING_METHOD_DEFAULT_ID], dtype=torch.long
+                ),
             }
         }
 
@@ -367,7 +427,12 @@ class BiomedRnaMultiModalProcessor(BaseMultiModalProcessor):
             mm_processed_data = BatchFeature(
                 {
                     k: _unwrap_field(passthrough_data, k).unsqueeze(0)
-                    for k in ("gene_ids", "expr_values", "attention_mask")
+                    for k in (
+                        "gene_ids",
+                        "expr_values",
+                        "attention_mask",
+                        "pooling_method_id",
+                    )
                 },
                 tensor_type="pt",
             )
@@ -436,20 +501,31 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
             return None  # RNA has no prompt placeholder tokens
         raise ValueError(f"Unsupported modality: {modality!r}")
 
-    # def get_data_key(self) -> str:
-    #     return "rna"
     def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         biomed_rna_config: LlamaForMultiTaskConfig = vllm_config.model_config.hf_config
 
-        self.pooling_method = getattr(
-            biomed_rna_config, "pooling_method", "first_token"
+        # name_or_path may be a HF repo ID (not a local path); resolve the
+        # local cache directory so the file read always succeeds.
+        _model_dir = biomed_rna_config.name_or_path
+        if not Path(_model_dir).is_dir():
+            _model_dir = snapshot_download(_model_dir)
+        meta = Path(_model_dir) / "checkpoint_metadata.json"
+        default_pooling_method = (
+            json.loads(meta.read_text())
+            .get("hyper_parameters", {})
+            .get("trainer_config", {})
+            .get("pooling_method", "first_token")
+        )
+        # Default pooling method encoded as an int ID for forward() dispatch.
+        self.default_pooling_method_id: int = POOLING_METHOD_IDS.get(
+            default_pooling_method, POOLING_METHOD_DEFAULT_ID
         )
         self.hidden_size = biomed_rna_config.hidden_size
         self.model = LlamaForMultiTaskModelNoCheckpoint(biomed_rna_config)
         self.model.eval()
 
-        self.pooler = EmbeddingIdentityPooler()
+        self.pooler = BiomedRnaPooler()
         logger.info("BiomedRNA model initialized.")
 
     @staticmethod
@@ -521,6 +597,40 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
 
         return gene_ids_out, expr_out, mask_out
 
+    def _pool_batch(
+        self,
+        output,  # full BMFM ModelOutput — passed to get_embeddings_from_outputs
+        attention_mask: torch.Tensor,  # [batch, seq_len]
+        method_ids: list[int],
+    ) -> torch.Tensor:
+        """
+        Apply per-request pooling and return [batch, hidden_size].
+
+        Delegates to get_embeddings_from_outputs() (single source of truth in bmfm_targets).
+        method_ids are decoded back to string/int method names via POOLING_METHOD_NAMES.
+        """
+
+        def _decode(mid: int) -> str | int:
+            # Negative IDs map to named methods; non-negative are literal token positions.
+            return POOLING_METHOD_NAMES.get(mid, mid)
+
+        # Fast path: all requests share the same method → one batched call.
+        if len(set(method_ids)) == 1:
+            return get_embeddings_from_outputs(
+                output, attention_mask, pooling_method=_decode(method_ids[0])
+            )
+
+        # Mixed methods: call once per unique method, slice out the right row.
+        results: list[torch.Tensor] = []
+        cache: dict[int, torch.Tensor] = {}
+        for i, mid in enumerate(method_ids):
+            if mid not in cache:
+                cache[mid] = get_embeddings_from_outputs(
+                    output, attention_mask, pooling_method=_decode(mid)
+                )
+            results.append(cache[mid][i])
+        return torch.stack(results)
+
     def forward(
         self,
         input_ids: torch.Tensor | None = None,
@@ -533,10 +643,14 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
         """
         Generate cell embeddings from RNA expression data.
 
-        Receives gene_ids, expr_values, attention_mask from mm_kwargs (batched by vLLM).
-        Handles two cases:
+        Receives gene_ids, expr_values, attention_mask, pooling_method_id from
+        mm_kwargs (batched by vLLM).  Handles two cases:
           - Tensor[batch, seq_len]: all cells same length → fast path, no padding
           - list[Tensor[seq_len_i]]: variable lengths → pad to max length in batch
+
+        Pooling is applied here using the per-request pooling_method_id so that
+        BiomedRnaPooler is a simple pass-through.  See module docstring for why
+        pooling cannot be deferred to the pooler via PoolingParams.
 
         BMFM input format: torch.stack([gene_ids.float(), expr_values], dim=1)
         → Tensor[batch, 2, seq_len]. gene_ids.float() is required by BMFM, not a bug.
@@ -544,6 +658,9 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
         gene_ids = kwargs["gene_ids"]
         expr_values = kwargs["expr_values"]
         attention_mask = kwargs["attention_mask"]
+        # pooling_method_id: Tensor[batch, 1] (always stacked — shape is uniform)
+        # Fall back to the model default if the field is somehow absent.
+        method_ids_tensor = kwargs.get("pooling_method_id")
 
         if isinstance(gene_ids, list):
             # Rare: concurrent users with different seq_len from different preprocessing runs
@@ -551,6 +668,13 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
                 gene_ids, expr_values, attention_mask
             )
         # else: Tensor[batch, seq_len] — common case, no work needed
+
+        if method_ids_tensor is None or isinstance(method_ids_tensor, list):
+            # Fallback: use the model default for every request in the batch
+            batch_size = gene_ids.shape[0]
+            method_ids = [self.default_pooling_method_id] * batch_size
+        else:
+            method_ids = method_ids_tensor.squeeze(-1).tolist()
 
         # gene_ids.float() is required by BMFM input format
         bmfm_input = torch.stack(
@@ -563,15 +687,13 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
             output_hidden_states=True,
         )
 
-        embeddings = get_embeddings_from_outputs(
-            output,
-            attention_mask,
-            pooling_method=self.pooling_method,
-        )
+        # Apply per-request pooling via get_embeddings_from_outputs (single source of truth).
+        # Result is [batch, hidden_size]; return [batch, 1, hidden_size] — vLLM expects ≥1
+        # token in the sequence dim, which BiomedRnaPooler then unwraps.
+        pooled = self._pool_batch(output, attention_mask.float(), method_ids)
+        return pooled.unsqueeze(1)  # [batch, 1, hidden_size]
 
-        return embeddings.unsqueeze(1)  # [batch, 1, hidden_size]
-
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):  # noqa: E303
         """Load weights from a safetensors checkpoint into the biomed-rna model."""
         param_targets = dict(self.model.named_parameters())
         buffer_targets = dict(self.model.named_buffers())

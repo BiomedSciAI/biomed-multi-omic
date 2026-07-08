@@ -10,11 +10,9 @@ from typing import Any
 
 import torch
 
-from vllm.config import VllmConfig
 from vllm.inputs import PromptType
 from vllm.outputs import PoolingOutput, PoolingRequestOutput
 from vllm.plugins.io_processors.interface import IOProcessor
-from vllm.renderers import BaseRenderer
 
 
 class RnaPrompt(dict[str, Any]):
@@ -34,38 +32,42 @@ class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
     IO processor for BiomedRNA multi-modal data.
 
     Converts between HTTP JSON format and vLLM's internal format:
-    - Input: JSON with gene_ids, expr_values, attention_mask
+    - Input: JSON with gene_ids, expr_values, attention_mask, optional pooling_method
     - Output: JSON with embedding vector
+
+    Supports per-request pooling method override via the "pooling_method" field
+    in the request payload. Available methods: "first_token", "mean_pooling",
+    "pooling_layer", or an integer token position.
+
+    The pooling_method is forwarded to the model through the multimodal data dict
+    (as "pooling_method" in the "rna" dict) rather than via PoolingParams.extra_kwargs.
+    RnaProcessorItems in biomed_rna.py encodes it as a pooling_method_id integer
+    tensor that vLLM batches through the standard mm_kwargs pipeline into forward().
+    PoolingParams.extra_kwargs cannot be used because it is only visible inside the
+    pooler, which runs after forward() — too late to influence which pooling is applied.
+    See agents.md § "Why pooling_method travels via mm_kwargs" for a full explanation.
     """
 
-    def __init__(self, vllm_config: VllmConfig, renderer: BaseRenderer):
-        """
-        Initialize the IO processor.
-
-        Args:
-        ----
-            vllm_config: vLLM configuration object
-            renderer: Renderer object for formatting output
-        """
-        super().__init__(vllm_config, renderer)
-
     def merge_pooling_params(self, params=None):
-        """
-        Override to set task to 'embed' instead of 'plugin'.
-
-        The pooling endpoint only supports 'embed' task.
-        """
+        """Override to set task to 'embed'. pooling_method is carried via mm_kwargs."""
         from vllm import PoolingParams
 
-        return params or PoolingParams(task="embed")
+        if params is None:
+            return PoolingParams(task="embed")
+        return params
 
     def parse_data(self, data: object) -> RnaPrompt:
         """
         Parse incoming request data.
 
+        Extracts RNA data fields and optional pooling_method override.
+        pooling_method (if present) is kept in the RnaPrompt dict so that
+        pre_process() can forward it into multi_modal_data["rna"], where
+        RnaProcessorItems will encode it as a pooling_method_id tensor.
+
         Args:
         ----
-            data: Raw request data (dict with RNA data)
+            data: Raw request data (dict with RNA data and optional pooling_method)
 
         Returns:
         -------
@@ -86,7 +88,8 @@ class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
 
         Args:
         ----
-            prompt: RnaPrompt containing gene_ids, expr_values, attention_mask
+            prompt: RnaPrompt containing gene_ids, expr_values, attention_mask,
+                    and optionally pooling_method
             request_id: Optional request ID
 
         Returns:
@@ -130,16 +133,19 @@ class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
         if gene_ids_tensor.ndim != 1:
             raise ValueError(f"Expected 1D tensors, got {gene_ids_tensor.ndim}D")
 
-        # Return vLLM-compatible format
+        rna_data: dict[str, Any] = {
+            "gene_ids": gene_ids_tensor,
+            "expr_values": expr_values_tensor,
+            "attention_mask": attention_mask_tensor,
+        }
+        # Forward pooling_method into the rna dict so RnaProcessorItems can encode
+        # it as a pooling_method_id tensor through the mm_kwargs pipeline.
+        if "pooling_method" in prompt:
+            rna_data["pooling_method"] = prompt["pooling_method"]
+
         return {
             "prompt_token_ids": [1],
-            "multi_modal_data": {
-                "rna": {
-                    "gene_ids": gene_ids_tensor,
-                    "expr_values": expr_values_tensor,
-                    "attention_mask": attention_mask_tensor,
-                }
-            },
+            "multi_modal_data": {"rna": rna_data},
         }
 
     def post_process(

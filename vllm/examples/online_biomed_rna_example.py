@@ -34,6 +34,7 @@ The IO processor plugin handles serialization/deserialization between
 HTTP JSON and vLLM's internal multi-modal format.
 """
 
+import argparse
 import os
 from pathlib import Path
 
@@ -50,12 +51,17 @@ ZHENG_SMALL_H5AD_PATH = Path(__file__).parent / "resources" / "zheng68k.h5ad"
 MODEL_REPO = WCED_MULTITASK_MODEL
 
 
-def main():
+def main(pooling_method: str | None = None):
     """
     Demonstrate online embedding generation using vLLM server with IO processor plugin.
 
     Uses the /pooling endpoint with custom RNA data format handled by the
     biomed_rna IO processor plugin.
+
+    Args:
+    ----
+        pooling_method: Optional pooling method override. Options:
+            "first_token", "mean_pooling", "pooling_layer", or int position.
     """
     # Server configuration
     server_host = os.environ.get("VLLM_SERVER_HOST", "localhost")
@@ -71,6 +77,8 @@ def main():
     print("BiomedRNA Online Embedding Generation (IO Processor Plugin)")
     print("=" * 80)
     print(f"Loading data from: {ZHENG_SMALL_H5AD_PATH}")
+    if pooling_method:
+        print(f"Pooling method: {pooling_method}")
 
     # Load a small subset of cells for demonstration
     num_cells = 10
@@ -109,6 +117,9 @@ def main():
                 "attention_mask": rna_data["attention_mask"].tolist(),
             },
         }
+        # Add pooling_method to the data payload if specified
+        if pooling_method is not None:
+            payload["data"]["pooling_method"] = pooling_method
         # send to vllm
         try:
             response = requests.post(server_url, json=payload, timeout=60)
@@ -158,4 +169,18 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Generate cell embeddings via vLLM server."
+    )
+    parser.add_argument(
+        "--pooling-method",
+        type=str,
+        default=None,
+        help=(
+            "Pooling method for embedding extraction. Options: "
+            "first_token, mean_pooling, pooling_layer, or an integer position. "
+            "Default: use model's config setting."
+        ),
+    )
+    args = parser.parse_args()
+    main(pooling_method=args.pooling_method)
