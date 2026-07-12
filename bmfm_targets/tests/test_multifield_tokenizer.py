@@ -54,6 +54,38 @@ def test_tokenizer_loaded_subtokenizers(test_tokenizer: MultiFieldTokenizer):
         )
 
 
+def test_load_subtokenizer_merges_special_token_files(
+    test_tokenizer: MultiFieldTokenizer, tmp_path
+):
+    """
+    Special tokens from both config files are merged, not either-or.
+
+    A key present in only one file must survive; on a conflicting key,
+    special_tokens_map.json (the more specific source) wins.
+    """
+    import json
+    import shutil
+
+    field_dir = tmp_path / "genes"
+    field_dir.mkdir()
+    shutil.copy(TEST_TOKENIZER_ROOT / "genes" / "tokenizer.json", field_dir)
+    (field_dir / "tokenizer_config.json").write_text(
+        json.dumps({"bos_token": "[MYBOS]", "unk_token": "[CFG_UNK]"})
+    )
+    (field_dir / "special_tokens_map.json").write_text(
+        json.dumps({"eos_token": "[MYEOS]", "unk_token": "[MAP_UNK]"})
+    )
+
+    test_tokenizer.load_subtokenizer(
+        "genes", field_to_tokenizer_map={"genes": str(field_dir)}
+    )
+    tok = test_tokenizer.tokenizers["genes"]
+
+    assert tok.bos_token == "[MYBOS]"  # only in tokenizer_config.json
+    assert tok.eos_token == "[MYEOS]"  # only in special_tokens_map.json
+    assert tok.unk_token == "[MAP_UNK]"  # conflict -> special_tokens_map.json wins
+
+
 # def test_create_save_and_load_via_panglao_data_module(
 #     pl_data_module_panglao_dynamic_binning,
 # ):

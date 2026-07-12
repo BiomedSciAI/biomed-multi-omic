@@ -306,16 +306,18 @@ class MultiFieldTokenizer:
                 "bos_token",
                 "eos_token",
             }
-            for candidate in ["special_tokens_map.json", "tokenizer_config.json"]:
+            # Merge both files rather than stopping at the first. A key may live in
+            # only one of them; when both define a key, special_tokens_map.json wins
+            # (the more specific source), so read tokenizer_config.json first and let
+            # special_tokens_map.json overwrite.
+            special_tokens = {}
+            for candidate in ["tokenizer_config.json", "special_tokens_map.json"]:
                 f = Path(path) / candidate
                 if f.is_file():
                     cfg = json.loads(f.read_text())
-                    special_tokens = {
-                        k: v for k, v in cfg.items() if k in _SPECIAL_TOKEN_KEYS
-                    }
-                    break
-            else:
-                special_tokens = {}
+                    special_tokens.update(
+                        {k: v for k, v in cfg.items() if k in _SPECIAL_TOKEN_KEYS}
+                    )
             # entries may be plain strings or serialised AddedToken dicts; reduce to the
             # token content so they are valid kwargs (list-valued additional_special_tokens
             # are handled by _register_added_special_tokens below).
