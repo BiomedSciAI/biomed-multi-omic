@@ -360,11 +360,8 @@ class BatchIntegrationCallback(pl.Callback):
     def _generate_metrics_table(self, adata_emb: sc.AnnData) -> pd.DataFrame:
         """Compute scIB metrics for model embeddings."""
         import scib.metrics as scm
-        from sklearn.metrics import (
-            adjusted_rand_score,
-            normalized_mutual_info_score,
-            silhouette_score,
-        )
+
+        from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
 
         batch_col, label_col = self.batch_column_name, self.target_column_name
         sc.pp.neighbors(adata_emb, use_rep=MODEL_EMBED_KEY)
@@ -376,25 +373,7 @@ class BatchIntegrationCallback(pl.Callback):
         results = {}
 
         if single_batch:
-            cluster_key = "__tmp_scib_cluster"
-            sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
-            clusters = adata_emb.obs[cluster_key].to_numpy()
-            labels = adata_emb.obs[label_col].to_numpy()
-            X = adata_emb.obsm[MODEL_EMBED_KEY]
-
-            mask = pd.notna(labels)
-            clusters, labels, X = clusters[mask], labels[mask], X[mask]
-
-            results["NMI_cluster/label"] = normalized_mutual_info_score(
-                labels, clusters
-            )
-            results["ARI_cluster/label"] = adjusted_rand_score(labels, clusters)
-            vc = pd.Series(labels).value_counts()
-            results["ASW_label"] = (
-                float(silhouette_score(X, labels))
-                if (vc.size > 1 and vc.min() >= 2)
-                else np.nan
-            )
+            results = single_batch_bio_metrics(adata_emb, MODEL_EMBED_KEY, label_col)
         else:
             results_df = scm.metrics(
                 adata_emb,

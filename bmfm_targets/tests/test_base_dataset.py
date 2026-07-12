@@ -394,3 +394,44 @@ def test_perturbation_dataset_respects_expose_zeros(
             / mfi.seq_length
         )
         assert zero_ratio == 0
+
+
+def _tiny_split_adata(n_obs: int, tag: str):
+    """A minimal AnnData standing in for a pre-split file (all cells one split)."""
+    X = rand(n_obs, 6, density=0.5, format="csr")
+    adata = sc.AnnData(X)
+    adata.obs_names = [f"{tag}{i}" for i in range(n_obs)]
+    adata.var_names = [f"gene{j}" for j in range(6)]
+    adata.obs["origin"] = tag
+    return adata
+
+
+def test_data_module_per_split_processed_data_source(
+    pl_data_module_zheng68k_seq_cls, tmp_path
+):
+    """A per-split ``processed_data_source`` mapping loads a different file per split."""
+    train_path = tmp_path / "train.h5ad"
+    dev_path = tmp_path / "val.h5ad"
+    _tiny_split_adata(n_obs=8, tag="train").write_h5ad(train_path)
+    _tiny_split_adata(n_obs=3, tag="dev").write_h5ad(dev_path)
+
+    data_module = DataModule(
+        tokenizer=pl_data_module_zheng68k_seq_cls.tokenizer,
+        fields=pl_data_module_zheng68k_seq_cls.fields,
+        dataset_kwargs={
+            "processed_data_source": {
+                "train": str(train_path),
+                "dev": str(dev_path),
+            }
+        },
+        transform_datasets=False,
+        limit_genes=None,
+        batch_size=1,
+        max_length=32,
+    )
+    data_module.setup("fit")
+
+    assert data_module.train_dataset.processed_data.n_obs == 8
+    assert data_module.dev_dataset.processed_data.n_obs == 3
+    assert set(data_module.train_dataset.metadata["origin"]) == {"train"}
+    assert set(data_module.dev_dataset.metadata["origin"]) == {"dev"}

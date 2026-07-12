@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Cell ontology graph data is externally licensed and must not be shipped/tracked.
+# It is provided separately for internal development; metadata.yaml stays tracked.
+bmfm_targets/datasets/label_ontology/_*/ontology.graphml
+
 # C extensions
 *.so
 
