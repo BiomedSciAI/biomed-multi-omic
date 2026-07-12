@@ -16,6 +16,7 @@ def create_rna_vllm_input(
     gene_ids: torch.Tensor,
     expr_values: torch.Tensor,
     attention_mask: torch.Tensor,
+    pooling_method: str | int | None = None,
 ) -> dict:
     """
     Create a single vLLM RNA input dict.
@@ -25,27 +26,32 @@ def create_rna_vllm_input(
         gene_ids: Gene IDs tensor [seq_len]
         expr_values: Expression values tensor [seq_len]
         attention_mask: Attention mask tensor [seq_len]
+        pooling_method: Optional pooling method override. Options:
+            "first_token", "mean_pooling", "pooling_layer", or int position.
+            None uses the model's checkpoint default.
 
     Returns:
     -------
         dict: vLLM-compatible input dict with RNA multi-modal data
     """
     seq_len = gene_ids.shape[0]
+    rna_data: dict = {
+        "gene_ids": gene_ids,
+        "expr_values": expr_values,
+        "attention_mask": attention_mask,
+    }
+    if pooling_method is not None:
+        rna_data["pooling_method"] = pooling_method
     return {
         "prompt_token_ids": [0] * seq_len,  # Match sequence length
-        "multi_modal_data": {
-            "rna": {
-                "gene_ids": gene_ids,
-                "expr_values": expr_values,
-                "attention_mask": attention_mask,
-            }
-        },
+        "multi_modal_data": {"rna": rna_data},
     }
 
 
 def _convert_datamodule_batch_to_vllm_format(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
+    pooling_method: str | int | None = None,
 ) -> list[dict]:
     """
     Convert DataModule batch output to vLLM multi-modal format.
@@ -61,6 +67,7 @@ def _convert_datamodule_batch_to_vllm_format(
             - input_ids[:, 0, :] are gene IDs
             - input_ids[:, 1, :] are expression values
         attention_mask: Tensor of shape [batch_size, seq_len]
+        pooling_method: Optional pooling method override forwarded to each cell dict.
 
     Returns:
     -------
@@ -72,7 +79,9 @@ def _convert_datamodule_batch_to_vllm_format(
         expr_values = input_ids[i, 1, :]  # [seq_len]
         attn_mask = attention_mask[i, :]  # [seq_len]
 
-        inputs.append(create_rna_vllm_input(gene_ids, expr_values, attn_mask))
+        inputs.append(
+            create_rna_vllm_input(gene_ids, expr_values, attn_mask, pooling_method)
+        )
 
     return inputs
 
@@ -85,6 +94,7 @@ def preprocess_anndata(
     log_normalize_transform: bool = True,
     batch_size: int | None = None,
     model_repo: str = WCED_MULTITASK_MODEL,
+    pooling_method: str | int | None = None,
 ) -> list[dict]:
     """
     Preprocess h5ad data using bmfm-targets DataModule and create a list of RNA multi modal objects.
@@ -106,6 +116,9 @@ def preprocess_anndata(
         log_normalize_transform: Apply log normalization (default: True)
         batch_size: Batch size for DataModule (default: all cells)
         model_repo: HuggingFace model repository ID to get fields from (default: WCED_MULTITASK_MODEL)
+        pooling_method: Optional pooling method override for all cells in this batch.
+            Options: "first_token", "mean_pooling", "pooling_layer", or int position.
+            None uses the model's checkpoint default.
 
     Returns:
     -------
@@ -116,7 +129,8 @@ def preprocess_anndata(
                     "rna": {
                         "gene_ids": tensor [seq_len] int32,
                         "expr_values": tensor [seq_len] float32,
-                        "attention_mask": tensor [seq_len] int32
+                        "attention_mask": tensor [seq_len] int32,
+                        "pooling_method": str | int  (optional, omitted if None)
                     }
                 }
             }
@@ -148,5 +162,7 @@ def preprocess_anndata(
     input_ids = batch["input_ids"]  # [batch_size, 2, seq_len]
     attention_mask = batch["attention_mask"]  # [batch_size, seq_len]
 
-    # Convert to vLLM format
-    return _convert_datamodule_batch_to_vllm_format(input_ids, attention_mask)
+    # Convert to vLLM format, forwarding the optional pooling_method into each cell dict
+    return _convert_datamodule_batch_to_vllm_format(
+        input_ids, attention_mask, pooling_method
+    )

@@ -1,15 +1,29 @@
 """Shared pytest fixtures for BiomedRNA tests."""
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
 import torch
 from transformers import AutoConfig
-from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL
+from vllm_biomed_rna_plugin import register_biomed_rna_model
+from vllm_biomed_rna_plugin.utils import MLM_MULTITASK_MODEL, WCED_MULTITASK_MODEL
+
+# Repo root — needed so `from run.migrate_checkpoints_to_multitask import ...`
+# inside bmfm_targets resolves. The editable install maps only the package dirs
+# (bmfm_targets/, vllm_biomed_rna_plugin/) but not the repo root itself.
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 
 def pytest_configure(config):
     """Configure pytest and set environment variables for PyTorch."""
+    # Register the BiomedRNA plugin (AutoConfig "scllama", vLLM ModelRegistry)
+    # Must happen before any fixture calls AutoConfig.from_pretrained().
+    register_biomed_rna_model()
+
     # Disable TorchInductor compilation warnings
     os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
     os.environ["TORCH_COMPILE_DEBUG"] = "0"
@@ -25,13 +39,6 @@ def pytest_configure(config):
 
 # Use the centralized model path from utils
 MODEL_PATH = WCED_MULTITASK_MODEL
-
-__all__ = [
-    "create_dummy_vllm_config",
-    "create_rna_multi_modal_object",
-    "config",
-    "vllm_model",
-]
 
 
 def create_rna_multi_modal_object(
@@ -82,26 +89,44 @@ def config():
     return AutoConfig.from_pretrained(MODEL_PATH)
 
 
-@pytest.fixture(scope="session")
-def vllm_model():
-    """Session-scoped vLLM model - initialized once for all tests."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available - vLLM requires GPU")
+def _make_vllm_fixture(model_repo: str):
+    """Factory for session-scoped vLLM model fixtures."""
 
-    from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
+    @pytest.fixture(scope="session")
+    def make_fixture():
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available - vLLM requires GPU")
 
-    llm = get_vllm_biomed_rna_model(
-        gpu_memory_utilization=0.01,  # Minimal memory for tests
-        disable_log_stats=True,
-        dtype="float32",
-        max_num_seqs=8,  # Support batching
-    )
+        from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 
-    yield llm
+        try:
+            llm = get_vllm_biomed_rna_model(
+                model_repo=model_repo,
+                gpu_memory_utilization=0.01,
+                disable_log_stats=True,
+                dtype="float32",
+                max_num_seqs=8,
+            )
+        except (RuntimeError, Exception) as e:
+            msg = str(e)
+            if (
+                "Device string must not be empty" in msg
+                or "Engine core initialization failed" in msg
+            ):
+                pytest.skip(f"No GPU device available for vLLM: {msg}")
+            raise
 
-    # Cleanup
-    del llm
-    torch.cuda.empty_cache()
+        yield llm
+
+        del llm
+        torch.cuda.empty_cache()
+
+    return make_fixture
+
+
+# Session-scoped fixtures — one per model, loaded once for the entire test session.
+vllm_model = _make_vllm_fixture(WCED_MULTITASK_MODEL)
+vllm_model_mlm = _make_vllm_fixture(MLM_MULTITASK_MODEL)
 
 
 @pytest.fixture()

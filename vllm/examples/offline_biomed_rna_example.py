@@ -5,8 +5,12 @@ Generate cell embeddings from h5ad file using BiomedRNA vLLM plugin.
 Contains two examples:
 1. Single h5ad batch processing
 2. Full file iteration (memory-efficient processing of entire dataset)
+
+Supports runtime pooling method selection via --pooling-method flag.
+Available methods: first_token, mean_pooling, pooling_layer, or an integer position.
 """
 
+import argparse
 import logging
 from pathlib import Path
 
@@ -17,7 +21,7 @@ from vllm_biomed_rna_plugin.preprocess import preprocess_anndata
 from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, load_tokenizer
 
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 ZHENG_SMALL_H5AD_PATH: Path = (
     Path(__file__).parent / "resources" / "zheng68k.h5ad"
@@ -28,6 +32,7 @@ def generate_embedding_for_h5ad_snippet(
     h5ad_path: Path = ZHENG_SMALL_H5AD_PATH,
     num_samples: int = 10,
     max_length: int = 1024,
+    pooling_method: str | None = None,
 ) -> np.ndarray:
     """
     Generate embeddings for a snippet of cells from an h5ad file.
@@ -40,6 +45,9 @@ def generate_embedding_for_h5ad_snippet(
         h5ad_path: Path to h5ad file
         num_samples: Number of cells to process
         max_length: Maximum sequence length for preprocessing
+        pooling_method: Pooling method override. Options:
+            "first_token", "mean_pooling", "pooling_layer", or int position.
+            None uses model's default from config.
 
     Returns:
     -------
@@ -59,6 +67,7 @@ def generate_embedding_for_h5ad_snippet(
         adata,
         tokenizer,
         max_length=max_length,
+        pooling_method=pooling_method,
     )
     print(
         f"Preprocessed: {len(inputs)} cells, "
@@ -66,6 +75,8 @@ def generate_embedding_for_h5ad_snippet(
     )
 
     llm = get_vllm_biomed_rna_model(model_repo)
+    if pooling_method:
+        print(f"Pooling method: {pooling_method}")
     outputs = llm.embed(inputs)
     embeddings = np.array([output.outputs.embedding for output in outputs])
     print(f"Output embedding shape: {embeddings.shape}")
@@ -77,6 +88,7 @@ def generate_embeddings_for_h5ad(
     batch_size: int = 1024,
     max_length: int = 1024,
     limit_cells: int | None = None,
+    pooling_method: str | None = None,
 ) -> np.ndarray:
     """
     Generate embeddings for entire h5ad file using batch iteration.
@@ -89,6 +101,9 @@ def generate_embeddings_for_h5ad(
         batch_size: Number of cells per batch (default: 32)
         max_length: Maximum gene sequence length for preprocessing
         limit_cells: Optional limit on total cells to process (for testing)
+        pooling_method: Pooling method override. Options:
+            "first_token", "mean_pooling", "pooling_layer", or int position.
+            None uses model's default from config.
 
     Returns:
     -------
@@ -103,6 +118,8 @@ def generate_embeddings_for_h5ad(
 
     tokenizer = load_tokenizer(model_repo)
     llm = get_vllm_biomed_rna_model(model_repo)
+    if pooling_method:
+        print(f"Pooling method: {pooling_method}")
 
     # Get total cell count for progress reporting
     adata_info = anndata.read_h5ad(h5ad_path, backed="r")
@@ -119,6 +136,7 @@ def generate_embeddings_for_h5ad(
         batch_size=batch_size,
         max_length=max_length,
         limit_cells=limit_cells,
+        pooling_method=pooling_method,
     ):
         # Generate embeddings for this batch
         outputs = llm.embed(batch)
@@ -143,6 +161,7 @@ def iter_h5ad_batches(
     limit_genes: str = "protein_coding",
     log_normalize_transform: bool = True,
     limit_cells: int | None = None,
+    pooling_method: str | None = None,
 ):
     """
     Stream batches from h5ad file using DataModule preprocessing.
@@ -164,6 +183,9 @@ def iter_h5ad_batches(
         limit_genes: Gene filtering strategy - "protein_coding" or None (default: "protein_coding")
         log_normalize_transform: Apply log normalization (default: True)
         limit_cells: Optional limit on total cells to process (default: None = all cells)
+        pooling_method: Optional pooling method override forwarded to each cell dict.
+            Options: "first_token", "mean_pooling", "pooling_layer", or int position.
+            None uses the model's checkpoint default.
 
     Yields:
     ------
@@ -201,6 +223,7 @@ def iter_h5ad_batches(
             limit_genes=limit_genes,
             log_normalize_transform=log_normalize_transform,
             batch_size=None,  # Process entire chunk at once
+            pooling_method=pooling_method,
         )
 
         yield batch
@@ -211,10 +234,35 @@ def iter_h5ad_batches(
 
 
 if __name__ == "__main__":
+
+    def _pooling_method_type(value: str) -> str | int:
+        """Convert --pooling-method value: integer strings become int, names stay str."""
+        try:
+            return int(value)
+        except ValueError:
+            return value
+
+    parser = argparse.ArgumentParser(
+        description="Generate cell embeddings using BiomedRNA vLLM plugin."
+    )
+    parser.add_argument(
+        "--pooling-method",
+        type=_pooling_method_type,
+        default=None,
+        help=(
+            "Pooling method for embedding extraction. Options: "
+            "first_token, mean_pooling, pooling_layer, or an integer position. "
+            "Default: use model's config setting."
+        ),
+    )
+    args = parser.parse_args()
+
     # Example 1: Quick test with 10 cells
-    embeddings_snippet = generate_embedding_for_h5ad_snippet(num_samples=10)
+    embeddings_snippet = generate_embedding_for_h5ad_snippet(
+        num_samples=10, pooling_method=args.pooling_method
+    )
 
     # Example 2: Process full h5ad file using batch iteration
     embeddings_full = generate_embeddings_for_h5ad(
-        batch_size=32,
+        batch_size=32, pooling_method=args.pooling_method
     )
