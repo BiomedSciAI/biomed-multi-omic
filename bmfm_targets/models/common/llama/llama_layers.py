@@ -214,7 +214,6 @@ class LlamaEncoder(nn.Module):
         inputs_embeds: torch.Tensor | None = None,
         input_aux_tokens: torch.Tensor | None = None,
         attention_bias: torch.Tensor | None = None,
-        head_mask: torch.Tensor | None = None,
         output_hidden_states: bool | None = None,
         output_attentions: bool | None = None,
     ):

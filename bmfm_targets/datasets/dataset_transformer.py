@@ -2,7 +2,7 @@ import logging
 import os
 
 import numpy as np
-from anndata import AnnData, read_h5ad
+from anndata import AnnData, concat, read_h5ad
 from scipy.sparse import csr_matrix
 
 from bmfm_targets.datasets import datasets_utils
@@ -276,7 +276,9 @@ class PerturbationDatasetTransformer:
                     raw_data.X = raw_data.X.tocsr()
             cleaned_datasets.append(self._clean_dataset(raw_data))
 
-        merged_data = AnnData.concatenate(*cleaned_datasets)
+        merged_data = concat(
+            cleaned_datasets, join="inner", label="batch", index_unique="-"
+        )
 
         if self.split_column_name not in raw_data.obs.columns:
             if self.stratification_type == "simulation":
