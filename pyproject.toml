@@ -16,7 +16,7 @@ authors = [
   { name = "Bharath Dandala", email = "bdand@us.ibm.com" },
   { name = "Pablo Meyer", email = "pmeyerr@us.ibm.com" },
 ]
-version = "0.20.0"
+version = "0.21.0"
 readme = "README.md"
 # due to how PEP 440 defines version matching, prefer [incl, excl) definitions like below:
 requires-python = ">=3.10"
