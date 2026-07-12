@@ -135,8 +135,8 @@ def complete_predictions_h5ad(
     predictions_adata.obs = predictions_adata.obs.rename(
         columns={"target_gene": gene_col}
     )  # todo - fix predictions files that are saved with target_gene
-    final_completion = predictions_adata.concatenate(
-        control_adata, join="outer", batch_key=None
+    final_completion = sc.concat(
+        [predictions_adata, control_adata], join="outer", index_unique="-"
     )
 
     print(
