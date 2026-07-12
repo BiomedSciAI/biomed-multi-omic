@@ -12,6 +12,7 @@ from bmfm_targets.models.predictive import (
     scbert,
     scmodernbert,
     scnystromformer,
+    scperformer,
 )
 from bmfm_targets.models.predictive.llama import LlamaForMultiTaskConfig
 from bmfm_targets.models.predictive.scnystromformer.modeling_scnystromformer import (
@@ -1760,3 +1761,153 @@ def test_llama_forward_with_scale_adapt():
         sequence_len,
         1,
     )
+
+
+# ---------------------------------------------------------------------------
+# P0 regression: _init_weights must not clobber weights loaded from checkpoint
+# ---------------------------------------------------------------------------
+
+_SENTINEL = 12345.0
+
+
+def _find_first(model, cls):
+    """Return (name, module) for the first module of type ``cls``."""
+    for name, mod in model.named_modules():
+        if isinstance(mod, cls):
+            return name, mod
+    return None, None
+
+
+def _round_trip(model, tmp_path, from_pretrained_fn):
+    """Poison Linear and LayerNorm weights, save, reload, and return reloaded model."""
+    lin_name, lin = _find_first(model, torch.nn.Linear)
+    ln_name, ln = _find_first(model, torch.nn.LayerNorm)
+    assert lin is not None, "no nn.Linear found in model"
+    assert ln is not None, "no nn.LayerNorm found in model"
+    with torch.no_grad():
+        lin.weight.fill_(_SENTINEL)
+        if ln.weight is not None:
+            ln.weight.fill_(_SENTINEL)
+    model.save_pretrained(str(tmp_path))
+    reloaded = from_pretrained_fn(str(tmp_path))
+    return reloaded, lin_name, ln_name
+
+
+def test_scbert_init_weights_does_not_clobber_checkpoint(tmp_path):
+    """save_pretrained -> from_pretrained must preserve sentinel Linear/LayerNorm weights."""
+    fields = [
+        config.FieldInfo("genes", 100),
+        config.FieldInfo(
+            "expressions", 100, is_masked=True, decode_modes={"token_scores": {}}
+        ),
+    ]
+    model_config = config.SCBertConfig(
+        num_hidden_layers=2, num_attention_heads=2, fields=fields
+    )
+    model = scbert.SCBertForMultiTaskModeling(model_config)
+
+    reloaded, lin_name, ln_name = _round_trip(
+        model, tmp_path, scbert.SCBertForMultiTaskModeling.from_pretrained
+    )
+
+    rlin = dict(reloaded.named_modules())[lin_name]
+    rln = dict(reloaded.named_modules())[ln_name]
+    assert (
+        rlin.weight == _SENTINEL
+    ).all(), f"Linear weight ({lin_name}) was re-initialized by _init_weights during from_pretrained"
+    assert (
+        rln.weight is None or (rln.weight == _SENTINEL).all()
+    ), f"LayerNorm weight ({ln_name}) was re-initialized by _init_weights during from_pretrained"
+
+
+def test_scperformer_init_weights_does_not_clobber_checkpoint(tmp_path):
+    """save_pretrained -> from_pretrained must preserve sentinel Linear/LayerNorm weights."""
+    fields = [
+        config.FieldInfo("genes", 100),
+        config.FieldInfo(
+            "expressions", 100, is_masked=True, decode_modes={"token_scores": {}}
+        ),
+    ]
+    model_config = config.SCPerformerConfig(
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        intermediate_size=64,
+        hidden_size=32,
+        fields=fields,
+    )
+    model = scperformer.SCPerformerForMultiTaskModeling(model_config)
+
+    reloaded, lin_name, ln_name = _round_trip(
+        model, tmp_path, scperformer.SCPerformerForMultiTaskModeling.from_pretrained
+    )
+
+    rlin = dict(reloaded.named_modules())[lin_name]
+    rln = dict(reloaded.named_modules())[ln_name]
+    assert (
+        rlin.weight == _SENTINEL
+    ).all(), f"Linear weight ({lin_name}) was re-initialized by _init_weights during from_pretrained"
+    assert (
+        rln.weight is None or (rln.weight == _SENTINEL).all()
+    ), f"LayerNorm weight ({ln_name}) was re-initialized by _init_weights during from_pretrained"
+
+
+def test_scnystromformer_init_weights_does_not_clobber_checkpoint(tmp_path):
+    """save_pretrained -> from_pretrained must preserve sentinel Linear/LayerNorm weights."""
+    fields = [
+        config.FieldInfo("genes", 100),
+        config.FieldInfo(
+            "expressions", 100, is_masked=True, decode_modes={"token_scores": {}}
+        ),
+    ]
+    model_config = config.SCNystromformerConfig(
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_landmarks=2,
+        fields=fields,
+        max_position_embeddings=16,
+    )
+    model = scnystromformer.SCNystromformerForMultiTaskModeling(model_config)
+
+    reloaded, lin_name, ln_name = _round_trip(
+        model,
+        tmp_path,
+        scnystromformer.SCNystromformerForMultiTaskModeling.from_pretrained,
+    )
+
+    rlin = dict(reloaded.named_modules())[lin_name]
+    rln = dict(reloaded.named_modules())[ln_name]
+    assert (
+        rlin.weight == _SENTINEL
+    ).all(), f"Linear weight ({lin_name}) was re-initialized by _init_weights during from_pretrained"
+    assert (
+        rln.weight is None or (rln.weight == _SENTINEL).all()
+    ), f"LayerNorm weight ({ln_name}) was re-initialized by _init_weights during from_pretrained"
+
+
+def test_scmodernbert_init_weights_does_not_clobber_checkpoint(tmp_path):
+    """save_pretrained -> from_pretrained must preserve sentinel Linear/LayerNorm weights."""
+    fields = [
+        config.FieldInfo("genes", 100),
+        config.FieldInfo(
+            "expressions", 100, is_masked=True, decode_modes={"token_scores": {}}
+        ),
+    ]
+    model_config = config.SCModernBertConfig(
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        fields=fields,
+    )
+    model = scmodernbert.SCModernBertForMultiTaskModeling(model_config)
+
+    reloaded, lin_name, ln_name = _round_trip(
+        model, tmp_path, scmodernbert.SCModernBertForMultiTaskModeling.from_pretrained
+    )
+
+    rlin = dict(reloaded.named_modules())[lin_name]
+    rln = dict(reloaded.named_modules())[ln_name]
+    assert (
+        rlin.weight == _SENTINEL
+    ).all(), f"Linear weight ({lin_name}) was re-initialized by _init_weights during from_pretrained"
+    assert (
+        rln.weight is None or (rln.weight == _SENTINEL).all()
+    ), f"LayerNorm weight ({ln_name}) was re-initialized by _init_weights during from_pretrained"
