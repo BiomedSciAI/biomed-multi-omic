@@ -59,16 +59,17 @@ python examples/online_biomed_rna_example.py --pooling-method mean_pooling
 
 ## Runtime Pooling Methods
 
-Both modes support the same pooling methods as `bmfm_targets.inference()`. Pass via `--pooling-method` (CLI) or `pooling_method` in the request payload:
+Both modes support the same pooling methods as `bmfm_targets.inference()`. List of pooling methods is not supported.
 
 | Method | Description |
 |--------|-------------|
 | `"first_token"` | CLS token at position 0 (model default) |
 | `"mean_pooling"` | Average of all non-CLS tokens |
 | `"pooling_layer"` | Trained pooler layer output |
-| `int` | Token at a specific position |
+| `int` | CLS token at a specific position |
 
-**Online** — add `pooling_method` inside the `data` field:
+
+**Online** payload format:
 
 ```json
 {

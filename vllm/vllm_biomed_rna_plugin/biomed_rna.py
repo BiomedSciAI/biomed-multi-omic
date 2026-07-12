@@ -509,7 +509,9 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
         # local cache directory so the file read always succeeds.
         _model_dir = biomed_rna_config.name_or_path
         if not Path(_model_dir).is_dir():
-            _model_dir = snapshot_download(_model_dir)
+            _model_dir = snapshot_download(
+                _model_dir, allow_patterns=["checkpoint_metadata.json"]
+            )
         meta = Path(_model_dir) / "checkpoint_metadata.json"
         default_pooling_method = (
             json.loads(meta.read_text())
@@ -669,7 +671,7 @@ class BiomedRnaForSequenceEmbedding(nn.Module, IsAttentionFree, SupportsMultiMod
             )
         # else: Tensor[batch, seq_len] — common case, no work needed
 
-        if method_ids_tensor is None or isinstance(method_ids_tensor, list):
+        if method_ids_tensor is None:
             # Fallback: use the model default for every request in the batch
             batch_size = gene_ids.shape[0]
             method_ids = [self.default_pooling_method_id] * batch_size

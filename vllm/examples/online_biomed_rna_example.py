@@ -169,12 +169,20 @@ def main(pooling_method: str | None = None):
 
 
 if __name__ == "__main__":
+
+    def _pooling_method_type(value: str) -> str | int:
+        """Convert --pooling-method value: integer strings become int, names stay str."""
+        try:
+            return int(value)
+        except ValueError:
+            return value
+
     parser = argparse.ArgumentParser(
         description="Generate cell embeddings via vLLM server."
     )
     parser.add_argument(
         "--pooling-method",
-        type=str,
+        type=_pooling_method_type,
         default=None,
         help=(
             "Pooling method for embedding extraction. Options: "
