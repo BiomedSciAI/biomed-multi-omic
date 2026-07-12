@@ -241,7 +241,6 @@ class SCNystromformerAttention(nn.Module):
         super().__init__()
         self.self = SCNystromformerSelfAttention(config)
         self.output = SCSelfOutput(config)
-        self.pruned_heads = set()
 
     def forward(self, hidden_states, attention_mask=None, output_attentions=False):
         self_outputs = self.self(hidden_states, attention_mask, output_attentions)

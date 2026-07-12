@@ -165,7 +165,6 @@ class SCBertCustomAttention(nn.Module):
         super().__init__()
         self.self = self_attention
         self.output = SCSelfOutput(config)
-        self.pruned_heads: set[int] = set()
 
     def forward(
         self,

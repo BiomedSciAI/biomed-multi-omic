@@ -458,7 +458,6 @@ class SCModernBertAttention(nn.Module):
             if config.attention_dropout > 0.0
             else nn.Identity()
         )
-        self.pruned_heads = set()
 
     def forward(
         self,

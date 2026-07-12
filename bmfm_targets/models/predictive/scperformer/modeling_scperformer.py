@@ -258,7 +258,6 @@ class SCPerformerSelfAttention(nn.Module):
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
         self.out = nn.Linear(config.hidden_size, config.hidden_size)
         self.dropout = nn.Dropout(p=config.attention_probs_dropout_prob)
-        self.pruned_heads: set[int] = set()
 
         if self.causal:
             try:
@@ -548,7 +547,6 @@ class SCPerformerAttention(nn.Module):
         super().__init__()
         self.self = SCPerformerSelfAttention(config)
         self.output = SCSelfOutput(config)
-        self.pruned_heads: set[int] = set()
 
     def forward(
         self,
