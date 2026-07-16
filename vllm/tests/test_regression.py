@@ -9,8 +9,6 @@ import numpy as np
 import pytest
 import torch
 
-from bmfm_targets.inference import inference
-
 H5AD_PATH = (
     Path(__file__).resolve().parent.parent / "examples" / "resources" / "zheng68k.h5ad"
 )
@@ -44,6 +42,8 @@ def get_embeddings_direct(
 
     adata = anndata.read_h5ad(h5ad_path)
     adata = adata[:limit_samples]
+
+    from bmfm_targets.inference import inference
 
     adata = inference(
         adata,

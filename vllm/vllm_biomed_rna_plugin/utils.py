@@ -2,10 +2,11 @@
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from bmfm_targets.config.tokenization_config import FieldInfo
-from vllm import LLM
+if TYPE_CHECKING:
+    from bmfm_targets.config.tokenization_config import FieldInfo
+    from vllm import LLM
 
 # Available BiomedRNA model repositories
 WCED_MULTITASK_MODEL = "ibm-research/biomed.rna.llama.47m.wced.multitask.v1.vllm"
@@ -48,7 +49,7 @@ def load_tokenizer(model_repo: str):
     return bmfm_load_tokenizer(model_dir)
 
 
-def get_fields(model_repo: str) -> list[FieldInfo]:
+def get_fields(model_repo: str) -> "list[FieldInfo]":
     """
     Load model fields from HuggingFace model repository config.json.
 
@@ -61,6 +62,8 @@ def get_fields(model_repo: str) -> list[FieldInfo]:
         Model fields configuration parsed as FieldInfo objects
     """
     from huggingface_hub import snapshot_download
+
+    from bmfm_targets.config.tokenization_config import FieldInfo
 
     # Download config.json from HuggingFace
     model_path = Path(snapshot_download(model_repo, allow_patterns=["config.json"]))
@@ -75,7 +78,7 @@ def get_fields(model_repo: str) -> list[FieldInfo]:
 def get_vllm_biomed_rna_model(
     model_repo: str = WCED_MULTITASK_MODEL,
     **kwargs: Any,
-) -> LLM:
+) -> "LLM":
     """
     Get a vLLM instance configured for BiomedRNA model from HuggingFace.
 
@@ -133,5 +136,7 @@ def get_vllm_biomed_rna_model(
 
     # User kwargs override defaults
     final_params = {**default_params, **kwargs}
+
+    from vllm import LLM
 
     return LLM(**final_params)

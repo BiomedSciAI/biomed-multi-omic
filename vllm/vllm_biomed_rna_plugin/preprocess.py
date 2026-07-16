@@ -8,7 +8,6 @@ Uses bmfm-targets tokenizer and data module.
 
 import torch
 
-from bmfm_targets.training.data_module import DataModule
 from vllm_biomed_rna_plugin.utils import WCED_MULTITASK_MODEL, get_fields
 
 
@@ -123,6 +122,8 @@ def preprocess_anndata(
     """
     if batch_size is None:
         batch_size = adata.n_obs
+
+    from bmfm_targets.training.data_module import DataModule
 
     fields = get_fields(model_repo)
 

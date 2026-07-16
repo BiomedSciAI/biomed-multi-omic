@@ -4,11 +4,6 @@
 
 import torch
 
-# IMPORTANT: Import model class to trigger registration
-from vllm_biomed_rna_plugin.biomed_rna import (
-    BiomedRnaForSequenceEmbedding,  # noqa: F401
-)
-
 # Fixtures are in conftest.py and automatically available
 
 

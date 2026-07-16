@@ -15,6 +15,8 @@ Start the server first:
         --gpu-memory-utilization 0.1 \
         --io-processor-plugin biomed_rna \
         --enable-mm-embeds \
+        --max-model-len 512 \
+        --max-num-batched-tokens 512 \
          > vllm_server.log 2>&1 &
 
 Note: Do NOT use --skip-tokenizer-init. While the biomed_rna IO processor doesn't
