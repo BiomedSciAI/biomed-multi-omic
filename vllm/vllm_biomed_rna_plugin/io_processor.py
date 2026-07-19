@@ -12,7 +12,7 @@ import torch
 
 from vllm.config import VllmConfig
 from vllm.inputs import PromptType
-from vllm.outputs import PoolingOutput, PoolingRequestOutput
+from vllm.outputs import PoolingRequestOutput
 from vllm.plugins.io_processors.interface import IOProcessor
 from vllm.renderers import BaseRenderer
 
@@ -29,7 +29,7 @@ class RnaOutput(dict[str, Any]):
     pass
 
 
-class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
+class BiomedRnaIOProcessor(IOProcessor):
     """
     IO processor for BiomedRNA multi-modal data.
 
@@ -163,7 +163,7 @@ class BiomedRnaIOProcessor(IOProcessor[RnaPrompt, RnaOutput]):
         if not model_output:
             raise ValueError("No model output available")
 
-        output: PoolingRequestOutput[PoolingOutput] = model_output[0]
+        output = model_output[0]
 
         # Extract embedding from PoolingRequestOutput
         # PoolingRequestOutput.outputs is a PoolingOutput with a 'data' attribute

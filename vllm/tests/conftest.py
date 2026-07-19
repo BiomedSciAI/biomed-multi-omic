@@ -91,10 +91,12 @@ def vllm_model():
     from vllm_biomed_rna_plugin import get_vllm_biomed_rna_model
 
     llm = get_vllm_biomed_rna_model(
-        gpu_memory_utilization=0.01,  # Minimal memory for tests
+        gpu_memory_utilization=0.1,
         disable_log_stats=True,
         dtype="float32",
-        max_num_seqs=8,  # Support batching
+        max_num_seqs=8,
+        max_model_len=512,
+        max_num_batched_tokens=512,  # prevents OOM in flashinfer warmup
     )
 
     yield llm
