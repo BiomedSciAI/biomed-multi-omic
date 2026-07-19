@@ -4,5 +4,5 @@ defaults:
 _target_: bmfm_targets.datasets.dnaseq.DNASeqMPRADataModule
 max_length: 320
 dataset_kwargs:
-  processed_data_source: ${input_directory}/lenti_mpra_regression/${fold}
+  processed_data_source: ${input_directory}/snv_mpra_Tewhey/split_by_pairs
   dataset_name: ${dataset_name} # it should contain both the name and fold
