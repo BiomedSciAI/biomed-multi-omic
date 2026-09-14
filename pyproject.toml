@@ -30,7 +30,7 @@ dependencies = [
   "transformers>=5,<6",
   "omegaconf",
   "hydra-core",
-  "clearml>1.13,<2",
+  "clearml>=2.0.2,<3",
   "rich",
   "torchmetrics",
   "tensorboardX",
