@@ -25,6 +25,7 @@ from bmfm_targets.config.model_config import (
     PerformerKernel,
     SCPerformerConfig,
 )
+from bmfm_targets.models.common.mixins import AttentionMaskMixin
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
@@ -773,7 +774,7 @@ class SCPerformerPooler(nn.Module):
         return pooled_output
 
 
-class SCPerformerPreTrainedModel(PreTrainedModel):
+class SCPerformerPreTrainedModel(AttentionMaskMixin, PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple
     interface for downloading and loading pretrained models.

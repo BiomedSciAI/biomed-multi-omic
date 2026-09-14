@@ -16,6 +16,7 @@ from transformers.pytorch_utils import apply_chunking_to_forward
 from transformers.utils import logging
 
 from bmfm_targets.config import SCNystromformerConfig
+from bmfm_targets.models.common.mixins import AttentionMaskMixin
 from bmfm_targets.models.model_utils import (
     MaskedLMOutputWithEmbeddings,
     SequenceClassifierOutputWithEmbeddings,
@@ -342,7 +343,7 @@ class SCNystromformerEncoder(nn.Module):
         )
 
 
-class SCNystromformerPreTrainedModel(PreTrainedModel):
+class SCNystromformerPreTrainedModel(AttentionMaskMixin, PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
