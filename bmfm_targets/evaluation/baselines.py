@@ -5,6 +5,7 @@ Compute baseline integration embeddings and save to AnnData.
 Usage:
     python run_baselines.py data.h5ad --batch-key batch
     python run_baselines.py data.h5ad --batch-key donor --methods Harmony Scanorama
+    python run_baselines.py data.h5ad --batch-key donor --methods scPRINT
 """
 
 import argparse
@@ -22,7 +23,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-AVAILABLE_METHODS = ["Unintegrated", "Harmony", "Scanorama", "LIGER"]
+AVAILABLE_METHODS = ["Unintegrated", "Harmony", "Scanorama", "LIGER", "scPRINT"]
+
+# HuggingFace checkpoint used for the scPRINT baseline (jkobject/scPRINT repo).
+SCPRINT_DEFAULT_CHECKPOINT = "medium-v1.5.ckpt"
 
 
 def get_pca(adata: AnnData, batch_key: str | None, n_comps: int = 30) -> np.ndarray:
@@ -131,11 +135,105 @@ def compute_liger(adata: AnnData, batch_key: str) -> np.ndarray | None:
         return None
 
 
+def compute_scprint(
+    adata: AnnData,
+    batch_key: str,
+    ckpt_path: str = SCPRINT_DEFAULT_CHECKPOINT,
+    max_len: int = 4000,
+    batch_size: int = 32,
+    num_workers: int = 8,
+) -> np.ndarray | None:
+    """
+    Embed cells with the pretrained scPRINT model (frozen weights, no finetuning).
+
+    Embeddings are extracted as the mean of scPRINT's class tokens (`scprint_emb`),
+    exactly as produced by the published checkpoint.  No classification heads or
+    visualisation steps are run — only the forward pass needed for embeddings.
+
+    Requires the optional ``scprint`` package (``pip install scprint``).
+    The checkpoint ``medium-v1.5.ckpt`` can be downloaded from HuggingFace with::
+
+        hf download jkobject/scPRINT medium-v1.5.ckpt --local-dir .
+
+    Prerequisites for the input AnnData:
+    - ``adata.X`` must contain raw integer counts (or ``layers['counts']`` if X
+      is already normalised — the counts layer is used in that case).
+    - ``var_names`` must be HUGO gene symbols (scPRINT uses ``is_symbol=True``).
+    - ``adata.obs['organism_ontology_term_id']`` must be set
+      (e.g. ``'NCBITaxon:9606'`` for human); added automatically if missing.
+
+    Args:
+    ----
+        adata: Input AnnData (not modified in place).
+        batch_key: Batch column — used only for the shared method signature;
+            scPRINT embeddings are batch-agnostic.
+        ckpt_path: Path to a scPRINT ``.ckpt`` file.
+        max_len: Number of genes per cell passed to the transformer.
+        batch_size: Inference batch size.
+        num_workers: DataLoader workers.
+
+    Returns:
+    -------
+        Float32 array of shape ``(n_cells, embedding_dim)`` or ``None`` on failure.
+    """
+    try:
+        import torch
+        from scprint import scPrint
+        from scprint.tasks import Embedder
+    except ImportError:
+        logger.warning(
+            "scPRINT not installed. Install with: pip install scprint\n"
+            "  and download the checkpoint with:\n"
+            "  hf download jkobject/scPRINT medium-v1.5.ckpt --local-dir ."
+        )
+        return None
+
+    try:
+        adata = adata.copy()
+
+        # scPRINT Preprocessor expects raw counts in X.
+        if "counts" in adata.layers and not guess_if_raw(
+            adata.X.data if hasattr(adata.X, "data") else adata.X
+        ):
+            logger.info("scPRINT: using layers['counts'] as raw count source.")
+            adata.X = adata.layers["counts"]
+
+        if "organism_ontology_term_id" not in adata.obs.columns:
+            logger.info(
+                "scPRINT: 'organism_ontology_term_id' missing — defaulting to human (NCBITaxon:9606)."
+            )
+            adata.obs["organism_ontology_term_id"] = "NCBITaxon:9606"
+
+        model = scPrint.load_from_checkpoint(ckpt_path, precpt_gene_emb=None)
+        model.eval()
+
+        embedder = Embedder(
+            how="most var",  # deterministic HVG selection (Seurat v3)
+            max_len=max_len,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            doclass=False,  # no classifier heads — pure embedding pass
+            doplot=False,  # skip PCA/UMAP/Leiden
+            output_expression="none",
+            dtype=torch.float32,  # float32 avoids MPS/fp16 numerical issues
+        )
+
+        adata, _ = embedder(model, adata, cache=False)
+        emb = adata.obsm["scprint_emb"]
+        logger.info(f"scPRINT: produced embeddings of shape {emb.shape}.")
+        return np.asarray(emb, dtype=np.float32)
+
+    except Exception as e:
+        logger.warning(f"scPRINT failed: {e}")
+        return None
+
+
 METHOD_REGISTRY: dict[str, callable] = {
     "Unintegrated": compute_unintegrated,
     "Harmony": compute_harmony,
     "Scanorama": compute_scanorama,
     "LIGER": compute_liger,
+    "scPRINT": compute_scprint,
 }
 
 
@@ -144,6 +242,7 @@ def run_baselines(
     batch_key: str,
     methods: list[str] | None = None,
     output_path: Path | None = None,  # Reserved for future use
+    scprint_ckpt: str = SCPRINT_DEFAULT_CHECKPOINT,
 ) -> None:
     """Load AnnData, compute baseline embeddings, and save in place."""
     output_path = output_path or adata_path  # Overwrite by default
@@ -165,7 +264,8 @@ def run_baselines(
     for method in methods:
         logger.info(f"Computing {method}...")
         fn = METHOD_REGISTRY[method]
-        result = fn(adata, batch_key)
+        extra = {"ckpt_path": scprint_ckpt} if method == "scPRINT" else {}
+        result = fn(adata, batch_key, **extra)
         if result is not None:
             adata.obsm[method] = result
             logger.info(f"  {method}: stored {result.shape} in obsm['{method}']")
@@ -192,9 +292,19 @@ def main() -> None:
         default=AVAILABLE_METHODS,
         help=f"Methods to run (default: all). Choices: {AVAILABLE_METHODS}",
     )
+    parser.add_argument(
+        "--scprint-ckpt",
+        default=SCPRINT_DEFAULT_CHECKPOINT,
+        help="Path to scPRINT .ckpt file (only used when scPRINT is in --methods).",
+    )
     args = parser.parse_args()
 
-    run_baselines(adata_path=args.input, batch_key=args.batch_key, methods=args.methods)
+    run_baselines(
+        adata_path=args.input,
+        batch_key=args.batch_key,
+        methods=args.methods,
+        scprint_ckpt=args.scprint_ckpt,
+    )
 
 
 if __name__ == "__main__":

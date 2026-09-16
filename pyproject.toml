@@ -66,6 +66,7 @@ baselines=[
   "scanorama",
   "harmony-pytorch",
   "cz-benchmarks",
+  "scprint",
 ]
 notebook = ["cellxgene-ontology-guide", "jupyter", "swatch"]
 vllm = [
