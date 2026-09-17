@@ -110,7 +110,16 @@ $H2/envs/scprint/bin/lamin init --storage $H2/lamindb_scprint --schema bionty
 export HF_HOME=$H2/.cache/huggingface
 $H2/envs/scprint/bin/hf download jkobject/scPRINT medium-v1.5.ckpt \
   --local-dir $H2/scprint_baseline/ckpt
+# large-v1 is the checkpoint to actually benchmark with (see §7): 101.1M params,
+# d_model 512 / nlayers 16, vs medium-v1.5's 18.7M / 256 / 8. Same 44,756-gene
+# vocabulary and same organisms, so the gene-alignment machinery is unchanged.
+$H2/envs/scprint/bin/hf download jkobject/scPRINT large-v1.ckpt \
+  --local-dir $H2/scprint_baseline/ckpt
 ```
+
+Both checkpoints carry a stale absolute `precpt_gene_emb` parquet path, which is why
+`baselines.py` loads with `scPrint.load_from_checkpoint(ckpt_path,
+precpt_gene_emb=None)`.
 
 Reference for correct usage: `scprint/tasks/cell_emb.py` from the scprint 1.6.4
 wheel (`default_benchmark`). A copy was extracted to `/tmp/scpr_probe/ext/` during
@@ -182,10 +191,34 @@ CLI: `--adata-path --batch-col --label-col --output --append --pre-integrated --
 Shebang pins `$H2/envs/targets3-13/bin/python`.
 `EXCLUDED_OBSM_KEYS = {X_pca, X_umap, X_tsne, X_diffmap, X_draw_graph_fr}`.
 
-**Do not** use this repo's `embeddings.py:calculate_batch_integration_metrics` — it
-is built on `scib.metrics` and emits differently-named `avg_bio`/`avg_batch`. The
-manuscript numbers come from `scib_metrics.Benchmarker`. Mixing the two gives
-incomparable values.
+> **CORRECTION (2026-09-17). This section had the convention backwards.** It
+> originally said to use `scib_metrics.Benchmarker` and **not** this repo's
+> `embeddings.py:calculate_batch_integration_metrics`. That is wrong, and it is the
+> reason the first set of results (below) was not comparable to the manuscript.
+>
+> There are three distinct conventions in play:
+>
+> 1. `scib_metrics.benchmark.Benchmarker` — KMeans NMI/ARI; `avg_bio` also folds in
+>    cLISI, `avg_batch` also folds in BRAS/iLISI/kBET/PCR. This produced
+>    `baseline_metrics_all.csv` and the original `scprint_metrics.csv`. It is an
+>    **internal** table and is *not* the convention of the published zero-shot
+>    tables.
+> 2. `bmfm_targets.evaluation.embeddings.calculate_batch_integration_metrics` —
+>    `scib` + Leiden, `avg_bio = mean(NMI, ARI, ASW_label)`,
+>    `avg_batch = mean(graph_conn, ASW_label/batch)`. **This is the Methods /
+>    published-table convention.**
+> 3. The scGPT zero-shot tutorial's `scib_eval` — same two formulas, plus
+>    `weighted = 0.6*avg_bio + 0.4*avg_batch`.
+>
+> (2) and (3) agree to 3 decimals on every dataset scored under both, and (3)
+> reproduces the published scGPT `cell_lines` row exactly (NMI 0.7567, ARI 0.7230,
+> ASW_label 0.6834 → `avg_bio` 0.7210 vs published 0.721; graph_conn 0.9994,
+> ASW_label/batch 0.9020 → `avg_batch` 0.9507 vs published 0.951). So (3) is the
+> like-for-like reference, and convention (1) must not be used for any number that
+> is placed beside a published one.
+>
+> Scorers: `$WORK/score_paper_convention.py` (2) and
+> `$WORK/score_tutorial_convention.py` (3).
 
 `min_max_scale=False` scores each `obsm` embedding independently, which is why
 scoring scPRINT transiently is legitimate: it cannot perturb the already-published
@@ -207,24 +240,38 @@ manuscript table.
 
 - [x] build `$H2/envs/scprint` + `lamin init`
 - [x] download `medium-v1.5.ckpt`
+- [x] download `large-v1.ckpt` (101.1M params — the checkpoint the paper's zero-shot
+      claim actually refers to; `CKPT=` / `PRED_EMB=` in `submit_scprint.sh` select it)
 - [x] smoke-test `compute_scprint` on a ~2k-cell subset of `pbmc_10k`; confirm the
       logged gene-mapping rate is high and the embedding is non-degenerate
 - [x] write `embed_one.py` + `submit_scprint.sh`
 - [x] submit 9 GPU jobs, verify all 9 embeddings exist with the right row counts
-- [x] score all 9 with the inner-source scorer
+- [x] ~~score all 9 with the inner-source scorer~~ — done, but on convention (1);
+      **superseded**, see §6 correction
+- [x] re-embed all 9 with `large-v1` and re-score under conventions (2) and (3)
 - [x] report per-dataset `avg_batch_correction` / `avg_bio_conservation`, the
       3 exclusions, the `immune_atlas` mapping rate, and the
       `perirhinal_cortex`/`lung_atlas` duplication
 
-**Done 2026-09-16.** Results in `$H2/scprint_baseline/scprint_metrics.csv` (9 rows,
-manuscript column order, published table untouched). Per-dataset scorer output in
-`$H2/scprint_baseline/metrics/`, embeddings in `$H2/scprint_baseline/emb/`.
+**Done 2026-09-16, corrected 2026-09-17.**
+
+- Current results: `$WORK/scprint_large_v1_vs_published.csv`, with per-dataset
+  scorer output in `$WORK/metrics_tutorial/` and `$WORK/metrics_paper/`
+  (`*_lg_*` = `large-v1`) and embeddings in `$WORK/emb/` (`*_lg_scprint.h5ad`).
+- Superseded: `$WORK/scprint_metrics.csv` and `$WORK/metrics/` — convention (1) on
+  `medium-v1.5`. Left in place, not cited. The published
+  `baseline_metrics_all.csv` was never written to, and no `original.h5ad` was ever
+  opened for write.
+- All 18 (9 datasets × 2 conventions) `large-v1` scorings completed; conventions
+  (2) and (3) agree on all 18 dataset/embedding pairs to within 5e-4, which is the
+  output precision of the (2) scorer.
 
 Reproduction control passed: the Unintegrated embedding carried in each embedding
-file was scored alongside scPRINT and reproduces the published Unintegrated row on
-all 9 datasets — 17 of 18 values bit-identical, the 18th (`pbmc_10k`
-`avg_batch_correction`) off by 5.1e-4 from iLISI/KBET subsampling. This is what
-licenses comparing the scPRINT rows to the rest of the table.
+file was scored alongside scPRINT. Under convention (1) it reproduced the published
+Unintegrated row on all 9 datasets — 17 of 18 values bit-identical, the 18th
+(`pbmc_10k` `avg_batch_correction`) off by 5.1e-4 from iLISI/KBET subsampling. Under
+convention (3) the `cell_lines` scGPT row is reproduced exactly (see §6). Together
+these license comparing the scPRINT rows to the rest of the table.
 
 Two prerequisites that a naive setup gets silently wrong, both fixed here:
 
@@ -247,7 +294,27 @@ Two prerequisites that a naive setup gets silently wrong, both fixed here:
   fraction of the model's 23,149 human slots carrying data ranges from 4.6%
   (`covid_19`) to 79.8% (`heart_atlas`).
 
-### Results (2026-09-16)
+### Superseded results (2026-09-16) — do not cite
+
+The first run reported the table below and claimed scPRINT "sits mid-pack among the
+zero-shot FMs, beating both geneformer sizes and both UCE variants and losing to
+scGPT". **Both the table and that ranking claim are withdrawn.** Two independent
+mistakes, neither in `baselines.py`:
+
+1. **Wrong metric convention** — scored with `scib_metrics.Benchmarker`
+   (convention (1) in §6), whose `avg_bio`/`avg_batch` are not the published
+   tables' quantities. `cell_lines` `avg_bio` alone moves 0.919 → 0.528 between
+   conventions, so the comparison to the other baselines was meaningless.
+2. **Wrong checkpoint** — used `medium-v1.5` (18.7M params, `d_model` 256), the
+   README quickstart default, against scGPT and Geneformer-316M. The paper's
+   zero-shot claim is explicitly about the *large* model: "we train scPRINT at
+   various scales (from 2M to 100M parameters)" and "contrary to any other method
+   assessed, **our large cell model** can also achieve performances on par with many
+   famous single-cell RNAseq tools ... without the need for fine-tuning".
+   `large-v1` (101.1M, `d_model` 512) is the top of that range.
+
+<details>
+<summary>Withdrawn numbers (convention (1), medium-v1.5)</summary>
 
 | dataset | avg_batch_correction | avg_bio_conservation | avg_total |
 |---|---|---|---|
@@ -261,11 +328,93 @@ Two prerequisites that a naive setup gets silently wrong, both fixed here:
 | pancrm | 0.2332 | 0.5215 | 0.4062 |
 | pbmc_10k | 0.8488 | 0.6286 | 0.7167 |
 
-On the 7 datasets where every FM baseline is present, mean `avg_total`: Harmony
-0.669 > Unintegrated 0.604 > scGPT 0.577 > **scPRINT 0.558** ≈ Scanorama 0.556 ≈
-geneformer-38M 0.556 > transcriptformer 0.553 > geneformer-316M 0.541 > UCE
-0.43–0.44. scPRINT sits mid-pack among the zero-shot FMs, beating both geneformer
-sizes and both UCE variants and losing to scGPT.
+</details>
+
+### Corrected results (2026-09-17)
+
+`large-v1`, `pred_embedding=["cell_type_ontology_term_id"]`, scored with
+convention (3). `weighted = 0.6*avg_bio + 0.4*avg_batch`.
+Source: `$WORK/scprint_large_v1_vs_published.csv`.
+
+| dataset | avg_bio_conservation | avg_batch_correction | weighted | medium-v1.5 weighted | Unintegrated weighted |
+|---|---|---|---|---|---|
+| cell_lines | 0.6652 | 0.9344 | 0.7729 | 0.6990 | 0.8276 |
+| covid_19 | 0.4522 | 0.8502 | 0.6114 | 0.6143 | 0.5698 |
+| heart_atlas | 0.6594 | 0.9359 | 0.7700 | 0.7290 | 0.7967 |
+| human_pbmc | 0.5456 | 0.8217 | 0.6561 | 0.5622 | 0.7342 |
+| immune_all_human | 0.5366 | 0.8890 | 0.6775 | 0.6125 | 0.6867 |
+| immune_atlas | 0.5482 | 0.8271 | 0.6598 | 0.5592 | 0.7317 |
+| lung_atlas | 0.5413 | 0.9015 | 0.6854 | 0.6887 | 0.7614 |
+| pancrm | 0.4985 | 0.7183 | 0.5864 | 0.5354 | 0.6924 |
+| pbmc_10k | 0.7446 | 0.9764 | 0.8373 | 0.7008 | 0.8166 |
+| **MEAN** | **0.5769** | **0.8727** | **0.6952** | **0.6335** | **0.7352** |
+
+The checkpoint swap is worth +0.093 `avg_bio` and +0.061 weighted (0.634 → 0.695),
+and `large-v1` wins on 7 of 9 datasets; `covid_19` and `lung_atlas` are the two
+where `medium-v1.5` is marginally ahead, both within 0.004.
+
+### Ranking against the published zero-shot tables
+
+Means over the same 9 datasets (`dc` excluded — it ships log-normalised only, so it
+is not in our set; the published means in the manuscript **include** `dc` and are
+therefore not directly comparable to a 9-dataset mean). Published values parsed
+programmatically from `notebooks/bmfm_rna_v2/results/zeroshot_tables.txt`:
+
+| method | avg_bio | avg_batch | weighted |
+|---|---|---|---|
+| WCED MULTITASK | 0.624 | 0.907 | **0.738** |
+| MLM MULTITASK | 0.630 | 0.895 | 0.736 |
+| BMFM CONCAT | 0.620 | 0.908 | 0.735 |
+| Unintegrated | 0.637 | 0.883 | 0.735 |
+| scGPT | 0.613 | 0.880 | 0.720 |
+| **scPRINT (large-v1)** | **0.577** | **0.873** | **0.695** |
+
+**scPRINT ranks last**, 0.025 behind scGPT and ~0.04 behind the three BMFM
+variants. It is not the collapse the medium checkpoint implied — it is second-best
+on `pbmc_10k` (0.837, behind only scGPT's 0.859), beats scGPT on `pancrm` (0.586 vs
+0.564), and beats the Unintegrated control on `covid_19` on both axes — but the
+ordering does not change.
+
+Two things to be careful about when writing the R3 response:
+
+- **Unintegrated (0.735) ties or beats every method, including all three BMFM
+  variants.** This is a property of this benchmark under this convention, not a bug,
+  and the published per-dataset tables already show it (scGPT 0.813 vs Unintegrated
+  0.828 on `cell_lines`). If R3 is probing baseline quality, this is exposed.
+- **scPRINT-2 exists** (`cantinilab.github.io/scPRINT-2`, bioRxiv Feb 2026) and
+  lists cell embedding / batch correction as a supported task. If the revision is
+  claiming a comparison against the current scPRINT, that should be acknowledged.
+
+### Usage verified against upstream (2026-09-17)
+
+`compute_scprint` matches `scprint.tasks.cell_emb.default_benchmark`
+argument-for-argument (`how="random expr"`, `max_len=4000`, `doclass=False`,
+`output_expression="none"`, `Preprocessor(use_layer="counts", is_symbol=True,
+force_preprocess=True, skip_validate=True, do_postp=False)`). Also checked against
+the README, the FAQ and the tutorials:
+
+- **Raw counts are correct.** README FAQ: *"scPRINT takes raw count as inputs, so
+  please don't use integrated data. Just give the raw counts to scPRINT and it will
+  take care of the rest."*
+- **Single `cell_type` class token is correct, and is not a shortcut.** scPRINT is
+  trained with *disentangled* per-facet class tokens (cell_type, disease, ethnicity,
+  sex). `medium-v1.5` records exactly this one token as its own `pred_embedding`
+  default; `large-v1` records all four. Averaging all four measurably *hurts* bio
+  conservation (`pbmc_10k` 2k subset: 0.744 with 1 token vs 0.602 with 4), which is
+  what the disentanglement design predicts.
+- **`how="random expr"` / `max_len=4000`** mirror pretraining ("2200 randomly
+  selected expressed genes") and the paper's note that the model "can make
+  predictions on much larger sequences of genes at inference time". Truncation does
+  not bind on `pbmc_10k` (~3.3k genes carry data, under the 4000 cap).
+- **Gene coverage is not the explanation.** It is *anti*-correlated with the bio
+  gap: `covid_19` has the lowest coverage (4.6%) and the smallest gap (0.018),
+  `pbmc_10k` has 14.2% coverage and the largest gap (0.262).
+- Gene index alignment verified 23149/23149 human, no drift; embeddings are
+  512-dim on all 9 (confirming `large-v1`) with no dead dimensions.
+
+Cross-validation: conventions (2) and (3) were run independently on every dataset
+and agree to 3 decimals throughout (e.g. `cell_lines` bio 0.6650 vs 0.6652,
+`pbmc_10k` 0.7450 vs 0.7446).
 
 ### Caveats to state in the revision
 

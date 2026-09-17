@@ -352,7 +352,14 @@ def test_model_loaded_from_checkpoint_and_moved_to_device(raw_counts_adata):
 
 
 def test_default_checkpoint_constant():
-    assert SCPRINT_DEFAULT_CHECKPOINT == "medium-v1.5.ckpt"
+    """
+    The default must stay the *large* checkpoint.
+
+    Benchmarking with medium-v1.5 (the README quickstart default) understates
+    scPRINT by 0.093 avg_bio on the 9 sceval datasets and produced a results table
+    that had to be withdrawn; scPRINT's zero-shot claim is about its large model.
+    """
+    assert SCPRINT_DEFAULT_CHECKPOINT == "large-v1.ckpt"
 
 
 # ---------------------------------------------------------------------------

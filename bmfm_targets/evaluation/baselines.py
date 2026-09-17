@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 AVAILABLE_METHODS = ["Unintegrated", "Harmony", "Scanorama", "LIGER", "scPRINT"]
 
 # HuggingFace checkpoint used for the scPRINT baseline (jkobject/scPRINT repo).
-SCPRINT_DEFAULT_CHECKPOINT = "medium-v1.5.ckpt"
+# large-v1 (101.1M params, d_model 512, nlayers 16) and NOT the medium-v1.5
+# quickstart default (18.7M, 256, 8): scPRINT's zero-shot claim is about "our large
+# cell model", and on the 9 sceval datasets medium-v1.5 scores 0.093 lower on
+# avg_bio conservation (0.484 vs 0.577). See docs/scprint_baseline_run_plan.md §7.
+SCPRINT_DEFAULT_CHECKPOINT = "large-v1.ckpt"
 SCPRINT_HUMAN = "NCBITaxon:9606"
 SCPRINT_MOUSE = "NCBITaxon:10090"
 
@@ -184,7 +188,8 @@ def _scprint_index_drift(
     ``_setup`` prints "Some valid genes are not in the genedf!!!" and carries on, and
     the embedding that comes out is finite, non-zero and non-degenerate, so every
     guard in ``compute_scprint`` passes while the numbers describe noise. For
-    medium-v1.5 on release-114 this silently misindexed 66.4% of human genes.
+    medium-v1.5 on release-114 this silently misindexed 66.4% of human genes; large-v1
+    ships the same gene vocabulary and so is affected identically.
 
     Returns ``{organism: (n_model_genes, n_found_in_ontology, first_bad_position)}``,
     where ``first_bad_position`` is None when the two agree.
@@ -324,7 +329,7 @@ def compute_scprint(
 
         pip install scprint 'lamindb[bionty]'
         lamin init --storage <dir> --schema bionty
-        hf download jkobject/scPRINT medium-v1.5.ckpt --local-dir .
+        hf download jkobject/scPRINT large-v1.ckpt --local-dir .
 
     Input requirements, all of which are checked rather than assumed:
     - raw integer counts in ``X`` or in a layer (log-normalized input is rejected,
@@ -384,7 +389,7 @@ def compute_scprint(
             "scPRINT not installed. Install with: pip install scprint 'lamindb[bionty]'\n"
             "  initialise lamindb:  lamin init --storage <dir> --schema bionty\n"
             "  and download the checkpoint with:\n"
-            "  hf download jkobject/scPRINT medium-v1.5.ckpt --local-dir ."
+            "  hf download jkobject/scPRINT large-v1.ckpt --local-dir ."
         )
         return None
 
@@ -449,7 +454,8 @@ def compute_scprint(
     )
     # That rate is not yet the useful one. The padded var axis spans every gene the
     # ontology knows for this organism, but the checkpoint's own input space is far
-    # smaller (medium-v1.5: 44_756 genes, 23_149 human + 21_607 mouse) and Collator
+    # smaller (44_756 genes, 23_149 human + 21_607 mouse; medium-v1.5 and large-v1
+    # share this vocabulary) and Collator
     # intersects against model.genes. Coverage of *that* set is what decides how
     # much real signal reaches the transformer, so report it explicitly. Since the
     # padded var axis is exactly the organism's ontology genes, intersecting it with
