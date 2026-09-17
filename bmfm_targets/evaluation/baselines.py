@@ -12,13 +12,12 @@ import argparse
 import logging
 import os
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import scanpy as sc
 from anndata import AnnData
-
-from bmfm_targets.datasets.datasets_utils import guess_if_raw
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -35,6 +34,12 @@ SCPRINT_MOUSE = "NCBITaxon:10090"
 
 def get_pca(adata: AnnData, batch_key: str | None, n_comps: int = 30) -> np.ndarray:
     """Compute PCA on (optionally normalized) data with HVG selection."""
+    # Imported lazily: importing bmfm_targets pulls in peft/transformers, which
+    # cannot coexist with the torch 2.2.0 that scprint pins. Keeping this out of
+    # module scope lets the scPRINT baseline run from a dedicated scprint env by
+    # loading this file directly.
+    from bmfm_targets.datasets.datasets_utils import guess_if_raw
+
     adata = adata.copy()
     if guess_if_raw(adata.X.data):
         logger.info("Detected raw counts — applying normalization and log1p.")
@@ -154,6 +159,140 @@ def _counts_source(adata: AnnData) -> str | None:
     return None
 
 
+# Ensembl ID prefix per organism. Needed only to attribute a *retired* gene ID to
+# an organism: such an ID is by definition absent from the ontology, so the ontology
+# cannot be asked which organism it belonged to. scPRINT's checkpoints cover human
+# and mouse only, and compute_scprint checks ``organism in model.organisms``.
+_ENSEMBL_PREFIX = {SCPRINT_HUMAN: "ENSG", SCPRINT_MOUSE: "ENSMUSG"}
+
+
+def _scprint_index_drift(
+    model_genes: Sequence[str], organisms: Sequence[str]
+) -> dict[str, tuple[int, int, int | None]]:
+    """
+    Per organism, where the Collator's gene index starts disagreeing with the model.
+
+    ``Collator`` masks the ontology's genes for an organism with
+    ``index.isin(model.genes)`` and sends ``position_in_mask + start_idx`` as the
+    embedding-table index (``scdataloader/collator.py:288-291``). Both sides are
+    sorted by Ensembl ID, so that is correct only while the masked ontology genes
+    are exactly ``model.genes`` for the organism, position for position.
+
+    A checkpoint's vocabulary is fixed at its training-time Ensembl release, while
+    bionty ships one current release, so IDs retired in between are missing from the
+    ontology. Each missing ID shifts every later gene by one, and **nothing raises**:
+    ``_setup`` prints "Some valid genes are not in the genedf!!!" and carries on, and
+    the embedding that comes out is finite, non-zero and non-degenerate, so every
+    guard in ``compute_scprint`` passes while the numbers describe noise. For
+    medium-v1.5 on release-114 this silently misindexed 66.4% of human genes.
+
+    Returns ``{organism: (n_model_genes, n_found_in_ontology, first_bad_position)}``,
+    where ``first_bad_position`` is None when the two agree.
+    """
+    from scdataloader.utils import load_genes
+
+    mg = [str(g) for g in model_genes]
+    in_model = set(mg)
+    gdf = load_genes(list(organisms))
+    drift = {}
+    for org in organisms:
+        # The model's genes for this organism, in the model's own order ...
+        want = [g for g in mg if g.startswith(_ENSEMBL_PREFIX[org])]
+        # ... versus what the Collator's mask actually selects, in ontology order.
+        got = [str(g) for g in gdf[gdf.organism == org].index if str(g) in in_model]
+        first = next(
+            (i for i in range(min(len(got), len(want))) if got[i] != want[i]), None
+        )
+        if first is None and len(got) != len(want):
+            first = min(len(got), len(want))
+        drift[org] = (len(want), len(got), first)
+    return drift
+
+
+def _register_retired_genes(
+    model_genes: Sequence[str], organisms: Sequence[str]
+) -> int:
+    """
+    Add the checkpoint's retired gene IDs to the ontology so the index lines up.
+
+    Idempotent, and benign in every respect that touches the embedding:
+    ``Preprocessor`` zero-pads the restored genes into the AnnData (no real dataset
+    contains a retired ID), and ``how="random expr"`` samples only from
+    ``np.where(expr > 0)``, so a zero column can never be selected. The restored
+    genes change gene *indexing* only, never model input.
+    """
+    import bionty as bt
+    from scdataloader.utils import load_genes
+
+    gdf = load_genes(list(organisms))
+    added = 0
+    for org in organisms:
+        record = bt.Organism.filter(ontology_id=org).first()
+        if record is None:
+            raise RuntimeError(
+                f"Organism {org} is not in the lamindb ontology; run "
+                f"scdataloader.utils.populate_my_ontology first."
+            )
+        known = {str(g) for g in gdf[gdf.organism == org].index}
+        missing = [
+            g
+            for g in map(str, model_genes)
+            if g.startswith(_ENSEMBL_PREFIX[org]) and g not in known
+        ]
+        for gid in missing:
+            # A retired ID has no current symbol, so reuse the ID. It cannot match
+            # "MT-", "RPS"/"RPL" or "^HB[^(P)]", which is what we want: load_genes
+            # uses those string tests to flag QC markers, and these genes carry no
+            # counts and must not be treated as such.
+            bt.Gene(
+                ensembl_gene_id=gid,
+                symbol=gid,
+                organism=record,
+                description="retired Ensembl ID retained for scPRINT checkpoint "
+                "gene-index alignment",
+            ).save()
+            added += 1
+    return added
+
+
+def _ensure_scprint_gene_alignment(
+    model_genes: Sequence[str], organisms: Sequence[str], fix: bool = True
+) -> None:
+    """Verify the Collator/model gene index agrees, repairing the ontology if asked."""
+    drift = _scprint_index_drift(model_genes, organisms)
+    bad = {o: d for o, d in drift.items() if d[2] is not None}
+    if not bad:
+        return
+
+    detail = "; ".join(
+        f"{o}: model={n_m} ontology={n_o} first misaligned at {first}"
+        for o, (n_m, n_o, first) in bad.items()
+    )
+    if not fix:
+        raise RuntimeError(
+            f"scPRINT gene index is misaligned against the ontology ({detail}). "
+            f"Embedding now would produce plausible-looking noise. Re-run with "
+            f"align_ontology=True to register the checkpoint's retired gene IDs."
+        )
+
+    logger.warning(f"scPRINT: gene index misaligned ({detail}); repairing ontology.")
+    added = _register_retired_genes(model_genes, organisms)
+    still = {
+        o: d
+        for o, d in _scprint_index_drift(model_genes, organisms).items()
+        if d[2] is not None
+    }
+    if still:
+        raise RuntimeError(
+            f"scPRINT gene index is still misaligned after registering {added} "
+            f"retired IDs: {still}. Refusing to embed."
+        )
+    logger.info(
+        f"scPRINT: registered {added} retired gene IDs; Collator indices now match "
+        f"the model embedding table."
+    )
+
+
 def compute_scprint(
     adata: AnnData,
     batch_key: str,
@@ -165,6 +304,10 @@ def compute_scprint(
     how: str = "random expr",
     pred_embedding: tuple[str, ...] = ("cell_type_ontology_term_id",),
     device: str | None = None,
+    min_nnz_genes: int = 0,
+    min_valid_genes_id: int = 1,
+    min_dataset_size: int = 1,
+    align_ontology: bool = True,
 ) -> np.ndarray | None:
     """
     Embed cells with the pretrained scPRINT model (frozen weights, no finetuning).
@@ -203,6 +346,25 @@ def compute_scprint(
         how: Gene-selection strategy passed to ``Embedder``.
         pred_embedding: Class token(s) whose embedding is returned.
         device: Torch device for inference; defaults to cuda when available.
+        min_nnz_genes: Cells with fewer expressed genes are dropped by
+            ``scdataloader.Preprocessor`` (its own default is 200). Defaults to 0
+            here: this is frozen inference on a fixed cell set, and dropping
+            cells would change which cells the reported metrics describe, making
+            them incomparable to other methods scored on the same file.
+        min_valid_genes_id: Minimum genes mapping onto the model vocabulary
+            before ``Preprocessor`` rejects the dataset outright (its own default
+            is 10_000). Defaults to 1 here so that low-gene-count inputs are
+            embedded and their mapping rate reported, rather than raising. Both
+            thresholds are training-data curation gates, not inference
+            requirements; the logged mapping rate is what tells you whether the
+            resulting embedding is trustworthy.
+        min_dataset_size: Minimum cells before ``Preprocessor`` rejects the
+            dataset (its own default is 100).
+        align_ontology: Register the checkpoint's retired Ensembl IDs in the
+            lamindb ontology when the gene index does not line up. On by default
+            because the failure it prevents is silent — see
+            ``_scprint_index_drift``. Set False to raise instead of writing to the
+            ontology; the embedding is then refused, never run misaligned.
 
     Returns:
     -------
@@ -254,24 +416,78 @@ def compute_scprint(
             f"but {organism} was requested."
         )
     model.eval()
+    # Before any GPU work: the gene index must line up, and it is cheap to check.
+    _ensure_scprint_gene_alignment(model.genes, model.organisms, fix=align_ontology)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     # Embedder reads model.device to place batches, so the model must be moved
     # first or the whole forward pass silently runs on CPU.
     model.to(device)
 
     n_genes_before = adata.n_vars
+    n_obs_before = adata.n_obs
     preprocessor = Preprocessor(
         use_layer=None if counts_layer == "X" else counts_layer,
         is_symbol=is_symbol,
         force_preprocess=True,
         skip_validate=True,
         do_postp=False,
+        min_nnz_genes=min_nnz_genes,
+        min_valid_genes_id=min_valid_genes_id,
+        min_dataset_size=min_dataset_size,
     )
     adata = preprocessor(adata)
+    # Preprocessor zero-pads the var axis out to the model's entire vocabulary
+    # (scdataloader/preprocess.py:293-304), so adata.n_vars afterwards is the
+    # vocabulary size -- comparing it to the input gene count reports nonsense
+    # such as "2606% mapped". The padded-in genes are recorded in
+    # uns["unseen_genes"], so the genes that actually matched are the difference.
+    unseen = {str(g) for g in adata.uns.get("unseen_genes", [])}
+    observed = {str(g) for g in adata.var_names} - unseen
     logger.info(
-        f"scPRINT: preprocessor mapped {adata.n_vars}/{n_genes_before} genes "
-        f"({adata.n_vars / n_genes_before:.1%}) onto the model vocabulary."
+        f"scPRINT: {len(observed)}/{n_genes_before} input genes "
+        f"({len(observed) / n_genes_before:.1%}) mapped onto the gene ontology."
     )
+    # That rate is not yet the useful one. The padded var axis spans every gene the
+    # ontology knows for this organism, but the checkpoint's own input space is far
+    # smaller (medium-v1.5: 44_756 genes, 23_149 human + 21_607 mouse) and Collator
+    # intersects against model.genes. Coverage of *that* set is what decides how
+    # much real signal reaches the transformer, so report it explicitly. Since the
+    # padded var axis is exactly the organism's ontology genes, intersecting it with
+    # model.genes yields the model's gene count for this organism specifically.
+    model_genes = {str(g) for g in model.genes}
+    padded = [str(g) for g in adata.var_names]
+    n_model_organism = len(model_genes & set(padded))
+    n_usable = len(model_genes & observed)
+    # The alignment check above ran against the ontology. This asserts the same
+    # invariant on the array actually being handed over, which is what the Collator
+    # will mask: the padded axis must be sorted (its mask is POSITIONAL, so any
+    # other order scrambles genes), and masking it must reproduce a contiguous run
+    # of model.genes.
+    mg_order = [str(g) for g in model.genes]
+    selected = [g for g in padded if g in model_genes]
+    start = mg_order.index(selected[0]) if selected else 0
+    if padded != sorted(padded) or mg_order[start : start + len(selected)] != selected:
+        raise RuntimeError(
+            "scPRINT gene index does not line up with the model's embedding table "
+            "after preprocessing; the embedding would be noise. Check that the "
+            "lamindb ontology matches the checkpoint vocabulary."
+        )
+    if n_model_organism:
+        logger.info(
+            f"scPRINT: {n_usable}/{n_model_organism} "
+            f"({n_usable / n_model_organism:.1%}) of the model's genes for this "
+            f"organism carry data; the rest are zero-filled. This, not the "
+            f"ontology rate above, is the fraction of the model's input that is "
+            f"real -- a low value means the embedding rests on little signal."
+        )
+    # The returned array is positionally matched against the caller's cells, so a
+    # Preprocessor that filters cells would silently misalign every label.
+    if adata.n_obs != n_obs_before:
+        raise RuntimeError(
+            f"scdataloader.Preprocessor changed the cell count "
+            f"({n_obs_before} -> {adata.n_obs}); the returned embedding could no "
+            f"longer be aligned with the input cells."
+        )
 
     embedder = Embedder(
         how=how,
@@ -295,12 +511,17 @@ def compute_scprint(
         finally:
             os.chdir(original_cwd)
 
-    if "scprint" not in embedded.obsm:
+    # The key Embedder writes moved between releases: scprint <=1.6.4 writes
+    # "scprint", >=2.x writes "scprint_emb" (scprint/tasks/cell_emb.py:196).
+    # scprint 2.3.8's own default_benchmark still reads "scprint" and is
+    # therefore broken, so neither spelling can be assumed -- accept either.
+    emb_key = next((k for k in ("scprint_emb", "scprint") if k in embedded.obsm), None)
+    if emb_key is None:
         raise RuntimeError(
-            f"scPRINT produced no 'scprint' embedding; obsm has "
+            f"scPRINT produced no 'scprint_emb'/'scprint' embedding; obsm has "
             f"{sorted(embedded.obsm)}."
         )
-    emb = np.asarray(embedded.obsm["scprint"], dtype=np.float32)
+    emb = np.asarray(embedded.obsm[emb_key], dtype=np.float32)
     if emb.shape[0] != adata.n_obs:
         raise RuntimeError(
             f"scPRINT returned {emb.shape[0]} embeddings for {adata.n_obs} cells."

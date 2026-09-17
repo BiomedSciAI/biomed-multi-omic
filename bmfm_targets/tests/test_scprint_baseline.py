@@ -6,10 +6,14 @@ packages via sys.modules injection.  They verify the integration contract —
 counts validation, gene-identifier preprocessing, device placement, canonical
 Embedder settings, and obsm storage — without requiring a real checkpoint or GPU.
 
-The mocks deliberately reproduce scPRINT's real behaviour: ``Embedder`` writes
-the embedding to ``obsm["scprint"]`` (see ``scprint.tasks.cell_emb``), not to
-``obsm["scprint_emb"]``.  A test suite that invents its own key cannot catch a
-key mismatch in the code under test, so the key used here matters.
+The mocks deliberately reproduce scPRINT's real behaviour rather than inventing
+their own obsm key, since a suite that invents one cannot catch a key mismatch in
+the code under test.  Which key is real depends on the installed version:
+``scprint <= 1.6.4`` writes ``obsm["scprint"]``, ``>= 2.x`` writes
+``obsm["scprint_emb"]`` (``scprint/tasks/cell_emb.py``).  2.3.8's own
+``default_benchmark`` still reads ``"scprint"`` and is therefore broken against
+its own Embedder, so neither spelling can be assumed.  The code accepts either,
+and both are exercised here.
 """
 
 import sys
@@ -27,6 +31,7 @@ from bmfm_targets.evaluation.baselines import (
     SCPRINT_HUMAN,
     SCPRINT_MOUSE,
     _counts_source,
+    _scprint_index_drift,
     compute_scprint,
     run_baselines,
 )
@@ -39,8 +44,10 @@ N_CELLS = 20
 N_GENES = 200
 EMB_DIM = 512
 
-# The key scPRINT itself writes.  Do not change without checking cell_emb.py.
+# The key scPRINT itself writes.  Version-dependent -- see the module docstring.
+# Do not change without checking cell_emb.py in the version you have installed.
 SCPRINT_OBSM_KEY = "scprint"
+SCPRINT_OBSM_KEY_V2 = "scprint_emb"
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -101,12 +108,18 @@ def mock_scprint(
     emb_dim=EMB_DIM,
     organisms=(SCPRINT_HUMAN, SCPRINT_MOUSE),
     obsm_key=SCPRINT_OBSM_KEY,
+    retired_genes=(),
 ):
     """
-    Inject mock scprint/scdataloader modules into sys.modules.
+    Inject mock scprint/scdataloader/bionty modules into sys.modules.
 
     Yields a namespace with the mocked ``scPrint`` class, ``Embedder`` class,
-    ``Preprocessor`` class and the model instance, so tests can inspect calls.
+    ``Preprocessor`` class, the model instance, and ``ontology`` — a dict standing
+    in for the lamindb gene ontology, which ``load_genes`` reads and
+    ``bt.Gene(...).save()`` writes, so the repair path can be exercised end to end.
+
+    ``retired_genes`` names checkpoint genes to withhold from that ontology,
+    reproducing the Ensembl-release drift that misaligns the gene index.
     """
     fake_emb = (
         np.random.default_rng(42).standard_normal((n_cells, emb_dim)).astype(np.float32)
@@ -117,12 +130,41 @@ def mock_scprint(
     mock_model.organisms = list(organisms)
     mock_model.genes = [f"ENSG{i:011d}" for i in range(N_GENES)]
 
+    # Stands in for the lamindb ontology: {ensembl_id: organism}.
+    ontology = {
+        g: SCPRINT_HUMAN for g in mock_model.genes if g not in set(retired_genes)
+    }
+
+    def _load_genes(orgs):
+        # Real load_genes returns a frame indexed by Ensembl ID, sorted ascending.
+        ids = sorted(ontology)
+        return pd.DataFrame({"organism": [ontology[g] for g in ids]}, index=ids)
+
     mock_scprint_cls = MagicMock()
     mock_scprint_cls.load_from_checkpoint.return_value = mock_model
 
+    def _fake_preprocess(adata):
+        """
+        Reproduce the var-axis behaviour the code under test depends on.
+
+        The real Preprocessor maps identifiers onto Ensembl IDs, zero-pads the var
+        axis out to the organism's entire ontology, sorts it ascending, and records
+        the padded-in genes in ``uns["unseen_genes"]``. The sorting matters: the
+        Collator's gene mask is positional, so an identity mock cannot exercise the
+        alignment checks at all.
+        """
+        ids = sorted(ontology)
+        n_keep = min(adata.n_vars, len(ids))
+        src = adata.X.toarray() if sp.issparse(adata.X) else np.asarray(adata.X)
+        padded = np.zeros((adata.n_obs, len(ids)), dtype=np.float32)
+        padded[:, :n_keep] = src[:, :n_keep]
+        out = ad.AnnData(X=padded, obs=adata.obs.copy(), var=pd.DataFrame(index=ids))
+        out.uns["unseen_genes"] = ids[n_keep:]
+        return out
+
     # Preprocessor is a callable object: Preprocessor(**kwargs)(adata) -> adata.
     mock_preprocessor_cls = MagicMock()
-    mock_preprocessor_cls.return_value = MagicMock(side_effect=lambda adata: adata)
+    mock_preprocessor_cls.return_value = MagicMock(side_effect=_fake_preprocess)
 
     if embedder_side_effect is None:
 
@@ -143,11 +185,31 @@ def mock_scprint(
     mock_tasks_mod.Embedder = mock_embedder_cls
     mock_scdataloader_mod = MagicMock()
     mock_scdataloader_mod.Preprocessor = mock_preprocessor_cls
+    mock_utils_mod = MagicMock()
+    mock_utils_mod.load_genes = MagicMock(side_effect=_load_genes)
+
+    # bionty stands in for the ontology's write side: saving a Gene record inserts
+    # it, so a repair is visible to the next load_genes call, exactly as in lamindb.
+    def _organism_filter(ontology_id=None):
+        found = MagicMock()
+        found.first.return_value = ontology_id
+        return found
+
+    def _make_gene(ensembl_gene_id, symbol, organism, description=""):
+        record = MagicMock()
+        record.save = lambda: ontology.__setitem__(ensembl_gene_id, organism)
+        return record
+
+    mock_bionty_mod = MagicMock()
+    mock_bionty_mod.Organism.filter = MagicMock(side_effect=_organism_filter)
+    mock_bionty_mod.Gene = MagicMock(side_effect=_make_gene)
 
     injected = {
         "scprint": mock_scprint_mod,
         "scprint.tasks": mock_tasks_mod,
         "scdataloader": mock_scdataloader_mod,
+        "scdataloader.utils": mock_utils_mod,
+        "bionty": mock_bionty_mod,
     }
     orig = {k: sys.modules.get(k) for k in injected}
     sys.modules.update(injected)
@@ -157,6 +219,8 @@ def mock_scprint(
             Embedder=mock_embedder_cls,
             Preprocessor=mock_preprocessor_cls,
             model=mock_model,
+            bionty=mock_bionty_mod,
+            ontology=ontology,
         )
     finally:
         for k, v in orig.items():
@@ -197,18 +261,27 @@ def test_compute_scprint_returns_correct_shape(raw_counts_adata):
     assert result.dtype == np.float32
 
 
-def test_reads_the_obsm_key_scprint_actually_writes(raw_counts_adata):
-    """Regression: the code once read obsm['scprint_emb'], which never exists."""
+@pytest.mark.parametrize("key", [SCPRINT_OBSM_KEY, SCPRINT_OBSM_KEY_V2])
+def test_reads_the_obsm_key_scprint_actually_writes(raw_counts_adata, key):
+    """
+    Both real spellings must be read.
+
+    Regression on two opposite bugs: the code originally read only
+    ``obsm["scprint_emb"]`` while the pinned scprint 1.x wrote ``obsm["scprint"]``,
+    and reading only ``"scprint"`` breaks just as silently against scprint 2.x,
+    which writes ``"scprint_emb"``.  The 2.x spelling is the one the manuscript
+    run actually exercised (scprint 2.3.8).
+    """
 
     def embed_writing_real_key(model, adata, cache=False):
         result = adata.copy()
-        result.obsm["scprint"] = np.ones((adata.n_obs, EMB_DIM), dtype=np.float32)
+        result.obsm[key] = np.ones((adata.n_obs, EMB_DIM), dtype=np.float32)
         return result, {}
 
     with mock_scprint(embedder_side_effect=embed_writing_real_key):
         result = compute_scprint(raw_counts_adata, batch_key="batch")
 
-    assert result is not None, "must read obsm['scprint'], the key scPRINT writes"
+    assert result is not None, f"must read obsm[{key!r}], a key scPRINT writes"
     assert result.shape == (N_CELLS, EMB_DIM)
 
 
@@ -219,7 +292,7 @@ def test_raises_when_embedding_key_absent(raw_counts_adata):
         return adata.copy(), {}
 
     with mock_scprint(embedder_side_effect=embed_writing_nothing):
-        with pytest.raises(RuntimeError, match="no 'scprint' embedding"):
+        with pytest.raises(RuntimeError, match="no 'scprint_emb'/'scprint' embedding"):
             compute_scprint(raw_counts_adata, batch_key="batch")
 
 
@@ -320,6 +393,85 @@ def test_preprocessor_points_at_counts_layer(normalised_adata_with_counts_layer)
         )
 
     assert mocks.Preprocessor.call_args.kwargs["use_layer"] == "counts"
+
+
+# ---------------------------------------------------------------------------
+# compute_scprint — gene-index alignment
+#
+# The failure these cover is silent: a misaligned index feeds every gene under the
+# wrong embedding row, and the result is finite, non-zero and non-degenerate, so it
+# passes every other guard in this file while describing noise.
+# ---------------------------------------------------------------------------
+
+# A gene in the middle of the checkpoint vocabulary. Withholding it from the
+# ontology shifts every later gene by one, which is the real-world bug: 23 of
+# medium-v1.5's IDs were retired between its training release and bionty's.
+RETIRED = f"ENSG{100:011d}"
+
+
+def test_drift_reports_first_misaligned_position():
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        drift = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
+
+    n_model, n_ontology, first_bad = drift[SCPRINT_HUMAN]
+    assert (n_model, n_ontology) == (N_GENES, N_GENES - 1)
+    assert first_bad == 100, "drift must start at the retired gene, not before it"
+
+
+def test_drift_is_empty_when_ontology_matches_checkpoint():
+    with mock_scprint() as mocks:
+        drift = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
+
+    assert drift[SCPRINT_HUMAN][2] is None
+
+
+def test_repairs_ontology_and_then_embeds(raw_counts_adata):
+    """The retired ID is registered, and only then is the embedding computed."""
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        assert RETIRED not in mocks.ontology
+        result = compute_scprint(raw_counts_adata, batch_key="batch", device="cpu")
+
+        assert RETIRED in mocks.ontology, "retired ID must be registered"
+        assert mocks.ontology[RETIRED] == SCPRINT_HUMAN
+        assert (
+            _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])[SCPRINT_HUMAN][2]
+            is None
+        )
+    assert result is not None
+    assert result.shape == (N_CELLS, EMB_DIM)
+
+
+def test_refuses_to_embed_misaligned_when_repair_declined(raw_counts_adata):
+    """align_ontology=False must raise, never embed against a shifted index."""
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        with pytest.raises(RuntimeError, match="misaligned"):
+            compute_scprint(
+                raw_counts_adata,
+                batch_key="batch",
+                device="cpu",
+                align_ontology=False,
+            )
+        mocks.Embedder.assert_not_called()
+        assert RETIRED not in mocks.ontology, "must not write when declined"
+
+
+def test_alignment_is_checked_before_gpu_work(raw_counts_adata):
+    """
+    The check must precede model.to(device).
+
+    Alignment depends only on the ontology and the checkpoint's gene list, so
+    failing after moving a multi-GB model to the GPU wastes an allocation and, in a
+    batch of jobs, a scheduling slot per dataset.
+    """
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        with pytest.raises(RuntimeError, match="misaligned"):
+            compute_scprint(
+                raw_counts_adata,
+                batch_key="batch",
+                device="cpu",
+                align_ontology=False,
+            )
+        mocks.model.to.assert_not_called()
 
 
 def test_rejects_lognormed_input(lognormed_only_adata):

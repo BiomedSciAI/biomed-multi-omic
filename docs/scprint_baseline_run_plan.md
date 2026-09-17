@@ -205,16 +205,87 @@ manuscript table.
 
 ## 7. Remaining checklist
 
-- [ ] build `$H2/envs/scprint` + `lamin init`
-- [ ] download `medium-v1.5.ckpt`
-- [ ] smoke-test `compute_scprint` on a ~2k-cell subset of `pbmc_10k`; confirm the
+- [x] build `$H2/envs/scprint` + `lamin init`
+- [x] download `medium-v1.5.ckpt`
+- [x] smoke-test `compute_scprint` on a ~2k-cell subset of `pbmc_10k`; confirm the
       logged gene-mapping rate is high and the embedding is non-degenerate
-- [ ] write `embed_one.py` + `submit_scprint.sh`
-- [ ] submit 9 GPU jobs, verify all 9 embeddings exist with the right row counts
-- [ ] score all 9 with the inner-source scorer
-- [ ] report per-dataset `avg_batch_correction` / `avg_bio_conservation`, the
+- [x] write `embed_one.py` + `submit_scprint.sh`
+- [x] submit 9 GPU jobs, verify all 9 embeddings exist with the right row counts
+- [x] score all 9 with the inner-source scorer
+- [x] report per-dataset `avg_batch_correction` / `avg_bio_conservation`, the
       3 exclusions, the `immune_atlas` mapping rate, and the
       `perirhinal_cortex`/`lung_atlas` duplication
+
+**Done 2026-09-16.** Results in `$H2/scprint_baseline/scprint_metrics.csv` (9 rows,
+manuscript column order, published table untouched). Per-dataset scorer output in
+`$H2/scprint_baseline/metrics/`, embeddings in `$H2/scprint_baseline/emb/`.
+
+Reproduction control passed: the Unintegrated embedding carried in each embedding
+file was scored alongside scPRINT and reproduces the published Unintegrated row on
+all 9 datasets — 17 of 18 values bit-identical, the 18th (`pbmc_10k`
+`avg_batch_correction`) off by 5.1e-4 from iLISI/KBET subsampling. This is what
+licenses comparing the scPRINT rows to the rest of the table.
+
+Two prerequisites that a naive setup gets silently wrong, both fixed here:
+
+- **Retired Ensembl IDs misalign the gene index.** bionty ships Ensembl release-114
+  only; the checkpoint's `model.genes` was built on an earlier release, so IDs
+  retired in between are absent from the ontology. `Collator` masks positionally
+  against a sorted var axis, so a single missing ID shifts every downstream gene by
+  one — 66.4% of human genes were misindexed. **A misaligned index still yields a
+  finite, well-conditioned embedding of pure noise**, so "the embedding looks fine"
+  does not detect this.
+
+  Handled inside `baselines.py`, so there is nothing to remember to run:
+  `_scprint_index_drift` reports the first misaligned position per organism,
+  `_register_retired_genes` adds the missing IDs back, and
+  `_ensure_scprint_gene_alignment` runs the check before any GPU work and repairs
+  or raises (`align_ontology`, default True). A second check after preprocessing
+  asserts the same invariant on the array actually handed to the Collator. Verified
+  against the live ontology: 23149/23149 human, 21607/21607 mouse, no drift.
+- **Gene coverage varies enormously across the 9** (see §"caveats" below): the
+  fraction of the model's 23,149 human slots carrying data ranges from 4.6%
+  (`covid_19`) to 79.8% (`heart_atlas`).
+
+### Results (2026-09-16)
+
+| dataset | avg_batch_correction | avg_bio_conservation | avg_total |
+|---|---|---|---|
+| cell_lines | 0.4315 | 0.9194 | 0.7242 |
+| covid_19 | 0.3542 | 0.5314 | 0.4605 |
+| heart_atlas | 0.3745 | 0.7028 | 0.5715 |
+| human_pbmc | 0.2058 | 0.6337 | 0.4626 |
+| immune_all_human | 0.4985 | 0.6605 | 0.5957 |
+| immune_atlas | 0.3453 | 0.5389 | 0.4615 |
+| lung_atlas | 0.3536 | 0.6152 | 0.5105 |
+| pancrm | 0.2332 | 0.5215 | 0.4062 |
+| pbmc_10k | 0.8488 | 0.6286 | 0.7167 |
+
+On the 7 datasets where every FM baseline is present, mean `avg_total`: Harmony
+0.669 > Unintegrated 0.604 > scGPT 0.577 > **scPRINT 0.558** ≈ Scanorama 0.556 ≈
+geneformer-38M 0.556 > transcriptformer 0.553 > geneformer-316M 0.541 > UCE
+0.43–0.44. scPRINT sits mid-pack among the zero-shot FMs, beating both geneformer
+sizes and both UCE variants and losing to scGPT.
+
+### Caveats to state in the revision
+
+- **Gene coverage.** Ontology mapping rate / fraction of the model's 23,149 human
+  slots carrying data: `cell_lines` 58.7%/76.4%, `covid_19` 97.3%/**4.6%**,
+  `heart_atlas` 69.1%/79.8%, `human_pbmc` 61.9%/78.1%, `immune_all_human`
+  97.5%/51.4%, `immune_atlas` **80.5%**/71.9%, `lung_atlas` 77.8%/76.1%, `pancrm`
+  94.2%/62.2%, `pbmc_10k` 100.0%/**14.2%**. The two rates are independent: a
+  dataset can map nearly all of its own genes and still fill few model slots
+  because it was distributed pre-filtered to a small panel. `covid_19` (4.6%) and
+  `pbmc_10k` (14.2%) are the datasets where scPRINT sees the least of its input
+  space; these numbers are a property of the distributed files, not of the run.
+- **`perirhinal_cortex` / `lung_atlas` duplication in the published table.** Across
+  all 10 existing baselines these two datasets have bit-identical
+  `avg_bio_conservation`, KMeans NMI, KMeans ARI, Silhouette label, cLISI and BRAS.
+  Only Harmony, Unintegrated and `X_uce_33l` differ at all, and only in the 4th–7th
+  decimal — the signature of the same data scored twice under two names with a
+  different seed for the stochastic batch metrics. Does not affect the scPRINT rows
+  (`perirhinal_cortex` is not among the 9), but it should be resolved before the
+  table is republished.
 
 ## 8. Untracked files to leave alone
 
