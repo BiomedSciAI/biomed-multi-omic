@@ -436,6 +436,105 @@ and agree to 3 decimals throughout (e.g. `cell_lines` bio 0.6650 vs 0.6652,
   (`perirhinal_cortex` is not among the 9), but it should be resolved before the
   table is republished.
 
+### scPRINT-2 (2026-09-17)
+
+R3's comment is about scPRINT as a baseline, and scPRINT-2 now exists, so the v1
+numbers above are extended with a v2 run rather than left to look like a
+comparison against a superseded model.
+
+**Which checkpoint, and why there is no choice.** `jkobject/scPRINT-2` on HF is
+not public (401) and its README says it holds *test datasets*, not weights. Every
+released checkpoint lives in the v1 repo `jkobject/scPRINT`, where the only v2
+file is `small-v2.ckpt` (889.7 MB) — what `scprint2 easy_setup` downloads and what
+every inference example in the v2 README uses. `config/{medium,large,vlarge}` there
+are *training* configs, not released weights, and upstream's own README points back
+at v1 as the repo that "contains larger size models". The paper's headline numbers
+come from an internal run (`ji9krimq.ckpt`) that is not downloadable. So unlike the
+v1 situation — where medium-v1.5 was used while large-v1 existed — there is no
+larger v2 checkpoint to be wrong about.
+
+**small-v2 is not a capacity handicap.** 101.9M params vs large-v1's 101.1M, and a
+**335,182-gene vocabulary (37,011 human)** vs v1's 44,756 — more coverage in
+exactly the dimension where v1 was weakest. d_model 256, nhead 4, nlayers 8,
+nlayers_cell 6, 16 organisms, epoch 37 / global_step 760000.
+
+**Three recipe differences from v1, each of which would silently break a run.**
+Taken from the upstream Figure-5 batch-correction repro notebook and cross-checked
+against `cell_emb.py` and the checkpoint's own `hyper_parameters`:
+
+1. `expr_emb_style == "metacell"` needs a KNN graph → `Preprocessor(do_postp=True)`
+   then `sc.pp.neighbors(adata, use_rep="X_pca")`.
+2. `gene_pos_file` is a stale absolute path in the checkpoint, as `precpt_gene_emb`
+   is — both must be passed as `None`.
+3. `model.mask_zeros = True`.
+
+`pred_embedding=["cell_type_ontology_term_id"]` is both the notebook's value and
+the checkpoint's recorded default. `max_len=3200` is the notebook's (v1 used 4000);
+exposed as a flag. Missing FlashAttention is harmless: the checkpoint's `attention`
+hparam is `'normal'`.
+
+**v1's "averaging dilutes the cell-type signal" finding does not transfer.** With
+`model.compressor is not None` — small-v2's compressor *is* a `ModuleDict` — the v2
+`Embedder` **hstacks** per-facet embeddings rather than averaging them, so
+`pred_embedding=all` is a legitimate variant to measure, not a known-worse one.
+
+**Isolation.** Separate venv (`envs/scprint2`), separate lamindb settings dir
+(`.lamin_v2`) and instance (`lamindb_scprint2`), separate runner
+(`embed_one_v2.py` / `run_embed_v2.sh` / `submit_v2.sh`), separate output suffix
+`_v2`. The v1 numbers therefore stay reproducible. Same read-only contract on
+`original.h5ad`. Two v2-specific hazards handled: the Preprocessor replaces
+`obs.index` with fresh UUIDs, so the embedding is mapped back **positionally**
+behind an assertion that the cell count is unchanged; and the `Embedder` streams
+chunks to a relative `data/` dir, so each job gets its own scratch cwd or
+concurrent datasets collide on filenames.
+
+**What must be said to R3 regardless of the numbers:** only `small-v2` is public,
+and the paper's headline results come from an unreleased internal checkpoint.
+
+#### scPRINT-2 results (9 datasets, both conventions, 2026-09-18)
+
+`pred_embedding` is worth 0.10 of the weighted score, so both settings are
+reported. Means over the same 9 datasets; the two conventions agree to 3 decimals
+on every mean, and all three runs' `Unintegrated` controls are *bit-identical*
+(0.637 / 0.883 / 0.735), which is an independent check that the separate v2 venv,
+lamindb instance and preprocessing path did not perturb the source data.
+
+| method | avg_bio | avg_batch | weighted |
+| --- | --- | --- | --- |
+| WCED MULTITASK | 0.624 | 0.907 | 0.738 |
+| MLM MULTITASK | 0.630 | 0.895 | 0.736 |
+| BMFM CONCAT | 0.620 | 0.908 | 0.735 |
+| Unintegrated | 0.637 | 0.883 | 0.735 |
+| scGPT | 0.613 | 0.880 | 0.720 |
+| scPRINT-1 (large-v1) | 0.577 | 0.873 | 0.695 |
+| **scPRINT-2 (all facets)** | **0.540** | **0.891** | **0.680** |
+| scPRINT-2 (cell_type facet) | 0.422 | 0.816 | 0.580 |
+
+Findings:
+
+- **The facet choice is the single largest factor for v2**, +0.118 avg_bio and
+  +0.075 avg_batch from `cell_type` to `all`, and it helps on all 9 datasets in
+  *both* components (avg_bio +0.03 to +0.26, largest on `heart_atlas`; avg_batch
+  +0.02 to +0.16). This is the *opposite* sign to
+  v1, for the structural reason in the section above (v1 averages, v2
+  concatenates). Upstream's own Figure-5 notebook uses the *weaker* of the two.
+- **scPRINT-2 small-v2 does not beat scPRINT-1 large-v1** on these 9 (0.680 vs
+  0.695), and both are below all four published methods. The deficit is entirely
+  in bio conservation (0.540 vs 0.577); on batch correction v2 is the best scPRINT
+  run and third overall (0.891, behind BMFM CONCAT 0.908 and WCED 0.907).
+- v2's larger vocabulary helps coverage only where the source file is not
+  pre-filtered: `cell_lines` fills 87.9% of the human model slots (v1 76.4%), but
+  `pbmc_10k` still only 16.3% (v1 14.2%) because that file ships 3,289 genes.
+- `pred_embedding=["other"]` cannot be requested on its own -- upstream's
+  `_predict` raises `ValueError: 'other' is not in list`, as "other" is only valid
+  inside the `["all"]` expansion -- so the per-facet contribution was not isolated.
+
+Caveats for the revision, in addition to those below: only `small-v2` is public,
+the paper's own numbers come from the unreleased `ji9krimq.ckpt`, and small-v2 is
+~102M params (comparable to large-v1) so this is not a small-vs-large comparison.
+Upstream's batch-correction evaluation is zero-shot (`FinetuneBatchClass` is
+imported but never called in that notebook), so the setting matches ours.
+
 ## 8. Untracked files to leave alone
 
 Unrelated to this work, do not commit:
