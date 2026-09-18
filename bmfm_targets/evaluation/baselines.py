@@ -12,7 +12,7 @@ import argparse
 import logging
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -165,13 +165,33 @@ def _counts_source(adata: AnnData) -> str | None:
 
 # Ensembl ID prefix per organism. Needed only to attribute a *retired* gene ID to
 # an organism: such an ID is by definition absent from the ontology, so the ontology
-# cannot be asked which organism it belonged to. scPRINT's checkpoints cover human
+# cannot be asked which organism it belonged to. scPRINT-1's checkpoints cover human
 # and mouse only, and compute_scprint checks ``organism in model.organisms``.
 _ENSEMBL_PREFIX = {SCPRINT_HUMAN: "ENSG", SCPRINT_MOUSE: "ENSMUSG"}
 
+GenesByOrganism = Sequence[str] | Mapping[str, Sequence[str]]
+
+
+def _genes_by_organism(
+    model_genes: GenesByOrganism, organisms: Sequence[str]
+) -> dict[str, list[str]]:
+    """
+    The checkpoint's gene list per organism, in the checkpoint's own order.
+
+    scPRINT-1 exposes ``model.genes`` as one flat list over human and mouse, so the
+    organism has to be recovered from the Ensembl prefix. scPRINT-2 checkpoints cover
+    16 organisms and keep the vocabulary as a dict keyed by organism; prefixes are
+    ambiguous at that width (``"ENSG"`` also prefixes chicken's ``ENSGALG``), so when
+    the dict is available it must be used rather than guessed at.
+    """
+    if isinstance(model_genes, Mapping):
+        return {o: [str(g) for g in model_genes[o]] for o in organisms}
+    mg = [str(g) for g in model_genes]
+    return {o: [g for g in mg if g.startswith(_ENSEMBL_PREFIX[o])] for o in organisms}
+
 
 def _scprint_index_drift(
-    model_genes: Sequence[str], organisms: Sequence[str]
+    model_genes: GenesByOrganism, organisms: Sequence[str]
 ) -> dict[str, tuple[int, int, int | None]]:
     """
     Per organism, where the Collator's gene index starts disagreeing with the model.
@@ -193,16 +213,23 @@ def _scprint_index_drift(
 
     Returns ``{organism: (n_model_genes, n_found_in_ontology, first_bad_position)}``,
     where ``first_bad_position`` is None when the two agree.
+
+    Checking each organism independently is sufficient even though ``start_idx`` is
+    computed on the concatenated frame: no drift anywhere means every per-organism
+    count matches, hence every block offset matches too. It is also necessary to pass
+    *all* the checkpoint's organisms, because a gene missing from an early block
+    shifts every later block — for ji9krimq, 3 missing mouse genes displace all 20,004
+    human genes on their own.
     """
     from scdataloader.utils import load_genes
 
-    mg = [str(g) for g in model_genes]
-    in_model = set(mg)
+    want_by_org = _genes_by_organism(model_genes, organisms)
     gdf = load_genes(list(organisms))
     drift = {}
     for org in organisms:
         # The model's genes for this organism, in the model's own order ...
-        want = [g for g in mg if g.startswith(_ENSEMBL_PREFIX[org])]
+        want = want_by_org[org]
+        in_model = set(want)
         # ... versus what the Collator's mask actually selects, in ontology order.
         got = [str(g) for g in gdf[gdf.organism == org].index if str(g) in in_model]
         first = next(
@@ -215,7 +242,7 @@ def _scprint_index_drift(
 
 
 def _register_retired_genes(
-    model_genes: Sequence[str], organisms: Sequence[str]
+    model_genes: GenesByOrganism, organisms: Sequence[str]
 ) -> int:
     """
     Add the checkpoint's retired gene IDs to the ontology so the index lines up.
@@ -229,6 +256,7 @@ def _register_retired_genes(
     import bionty as bt
     from scdataloader.utils import load_genes
 
+    want_by_org = _genes_by_organism(model_genes, organisms)
     gdf = load_genes(list(organisms))
     added = 0
     for org in organisms:
@@ -239,11 +267,7 @@ def _register_retired_genes(
                 f"scdataloader.utils.populate_my_ontology first."
             )
         known = {str(g) for g in gdf[gdf.organism == org].index}
-        missing = [
-            g
-            for g in map(str, model_genes)
-            if g.startswith(_ENSEMBL_PREFIX[org]) and g not in known
-        ]
+        missing = [g for g in want_by_org[org] if g not in known]
         for gid in missing:
             # A retired ID has no current symbol, so reuse the ID. It cannot match
             # "MT-", "RPS"/"RPL" or "^HB[^(P)]", which is what we want: load_genes
@@ -261,7 +285,7 @@ def _register_retired_genes(
 
 
 def _ensure_scprint_gene_alignment(
-    model_genes: Sequence[str], organisms: Sequence[str], fix: bool = True
+    model_genes: GenesByOrganism, organisms: Sequence[str], fix: bool = True
 ) -> None:
     """Verify the Collator/model gene index agrees, repairing the ontology if asked."""
     drift = _scprint_index_drift(model_genes, organisms)

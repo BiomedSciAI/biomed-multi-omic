@@ -252,12 +252,28 @@ manuscript table.
 - [x] report per-dataset `avg_batch_correction` / `avg_bio_conservation`, the
       3 exclusions, the `immune_atlas` mapping rate, and the
       `perirhinal_cortex`/`lung_atlas` duplication
+- [x] benchmark scPRINT-2 `ji9krimq` — **done but INVALID** (`_v3`/`_v3a`): the
+      gene-index alignment repair was never applied to the v2 path, so all 20,004
+      human genes were misindexed. Root-caused at the end of this section.
+- [x] generalise the alignment helpers to per-organism vocabularies and call them
+      from `embed_one_v2.py`; repair the `scprint2db` ontology (8 IDs, 16/16 exact)
+- [x] re-embed all 9 with the alignment fixed (`_v4`), re-score under both
+      conventions, and replace the `_v3`/`_v3a` tables — `avg_bio` 0.310 → **0.505**,
+      gained on all 9 datasets, and 0.505 falls inside upstream's own 0.467–0.553
+      range for this checkpoint
+- [ ] `_v4a` (all facets) — embedded, scoring outstanding
+- [ ] decide with the user how to present `Unintegrated` (0.637 `avg_bio`, which
+      ties or beats every published method in the table, BMFM's three included)
 
 **Done 2026-09-16, corrected 2026-09-17.**
 
-- Current results: `$WORK/scprint_large_v1_vs_published.csv`, with per-dataset
-  scorer output in `$WORK/metrics_tutorial/` and `$WORK/metrics_paper/`
-  (`*_lg_*` = `large-v1`) and embeddings in `$WORK/emb/` (`*_lg_scprint.h5ad`).
+- Current results: `$WORK/scprint_large_v1_vs_published.csv` (scPRINT-1) and
+  `$WORK/final_table_v4_tutorial.csv` (the combined scPRINT-1 + scPRINT-2 `_v4` +
+  `Unintegrated` + `NULL` table, tutorial convention), with per-dataset scorer output
+  in `$WORK/metrics_tutorial/` and `$WORK/metrics_paper/` (`*_lg_*` = `large-v1`,
+  `*_v4_*` = scPRINT-2 `ji9krimq` with the gene index repaired) and embeddings in
+  `$WORK/emb/` (`*_lg_scprint.h5ad`, `*_v4_scprint.h5ad`). Nothing was appended to
+  the manuscript's `baseline_metrics_all.csv`.
 - Superseded: `$WORK/scprint_metrics.csv` and `$WORK/metrics/` — convention (1) on
   `medium-v1.5`. Left in place, not cited. The published
   `baseline_metrics_all.csv` was never written to, and no `original.h5ad` was ever
@@ -290,6 +306,12 @@ Two prerequisites that a naive setup gets silently wrong, both fixed here:
   or raises (`align_ontology`, default True). A second check after preprocessing
   asserts the same invariant on the array actually handed to the Collator. Verified
   against the live ontology: 23149/23149 human, 21607/21607 mouse, no drift.
+
+  **This is the bug that later invalidated the first scPRINT-2 runs**, because
+  `embed_one_v2.py` was written standalone against the `scprint2` package and never
+  routed through these helpers. If another model path is ever added, calling
+  `_ensure_scprint_gene_alignment` is not optional — the failure is silent and
+  produces plausible numbers. See the root-cause section at the end of §7.
 - **Gene coverage varies enormously across the 9** (see §"caveats" below): the
   fraction of the model's 23,149 human slots carrying data ranges from 4.6%
   (`covid_19`) to 79.8% (`heart_atlas`).
@@ -512,6 +534,31 @@ here). `max_len=3200` is the notebook's; `default_benchmark` computes 4000 for t
 count depths, so this is exposed as a flag rather than assumed. Missing
 FlashAttention is harmless: the `attention` hparam is `'normal'`.
 
+**`max_len` measured, not assumed.** Run on `cell_lines`, the widest-panel dataset
+in the suite (32,738 genes, 3,338 non-zeros per cell, so the only one that can
+exceed 3200 at all):
+
+| `max_len` | avg_bio | avg_batch |
+| --- | --- | --- |
+| 3200 (notebook) | 0.354 | 0.965 |
+| 4000 (`default_benchmark`) | 0.351 | 0.964 |
+| 8000 | 0.272 | 0.953 |
+
+More context does not help and 8000 clearly hurts, so the low scores are not the
+model being starved of genes. `mask_zeros=True` means only non-zeros are eligible,
+which is why 3200 is already close to sufficient here and comfortably so everywhere
+else (non-zeros per cell: `covid_19` 126, `pbmc_10k` 452, `immune_atlas` 1324,
+`immune_all_human` 1536, `heart_atlas` 1501, `human_pbmc` 1618, `lung_atlas` 1952).
+
+**`use_raw` checked, and inert for these files.** `scdataloader`'s `Preprocessor`
+defaults to `use_raw=True` and, at `preprocess.py:180-182`, silently does
+`adata.X = adata.raw.X` whenever `.raw` exists — which would override the counts
+layer `embed_one_v2.py` validates via `_counts_source`, making that validation
+meaningless. Verified across all 9: none has `.raw` and none has any `layers`, so
+`X` is what reaches the model and the check holds. (It is *not* inert for upstream's
+cellxgene inputs, where `X` is normalised and `.raw` holds the counts — there the
+same line is what makes their run correct.)
+
 **v1's "averaging dilutes the cell-type signal" finding does not transfer.** With
 `model.compressor is not None` — small-v2's compressor *is* a `ModuleDict` — the v2
 `Embedder` **hstacks** per-facet embeddings rather than averaging them, so
@@ -638,8 +685,21 @@ Findings:
 
 #### scPRINT-2 `ji9krimq` results (the publication checkpoint)
 
-Run as `_v3` (single `cell_type_ontology_term_id` facet — upstream's config, and the
-primary number) and `_v3a` (all facets — a check on the averaging effect, see below).
+> **The reportable run is `_v4`.** The first pass at this checkpoint (`_v3`/`_v3a`)
+> was invalid: it fed the model gene embeddings from the wrong rows, because
+> `embed_one_v2.py` never called the gene-index alignment repair that
+> `compute_scprint` applies by default. All 20,004 human genes were misindexed by
+> 3-8 positions. See *Root cause: the collator indexes a local gene table that does
+> not match the checkpoint*, below. `_v4` is the same two configurations with the
+> alignment repaired, and its numbers are the ones to cite. The `_v3` column is kept
+> in the table below only so the size and direction of the defect stay on the record;
+> the `scPRINT-1 large-v1`, `Unintegrated` and `NULL` columns were never affected
+> (verified: the triggering warning fires in 27/32 `_v3` logs, 0/6 `large-v1` logs,
+> and **0/9 `_v4` logs**, and every `_v4` log reports `20004 model genes exist`
+> where `_v3` reported `19999`).
+
+Run as `_v4` (single `cell_type_ontology_term_id` facet — upstream's config, and the
+primary number) and `_v4a` (all facets — a check on the averaging effect, see below).
 Configuration is identical to the `small-v2` run except for the checkpoint and the
 `expr_emb_style`-driven preprocessing branch, so the comparison between the two
 isolates the checkpoint.
@@ -651,48 +711,81 @@ ASW_label/batch)` — the manuscript's own definitions. Both metric conventions
 (the scGPT tutorial's `scib_eval` and this repo's
 `calculate_batch_integration_metrics`) were run independently and agree to 3
 decimal places on every one of the 9 datasets, so only one set of figures is
-quoted. `NULL` is a row-shuffled embedding on the same file: the noise floor.
+quoted; the tutorial convention is the one tabulated, because it is the one that
+reproduces the published scGPT column exactly. `NULL` is a row-shuffled embedding on
+the same file: the noise floor.
 
-| dataset | scPRINT-2 `ji9krimq` bio | batch | scPRINT-1 large-v1 bio | batch | Unintegrated bio | batch | NULL bio | batch |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| cell_lines | 0.354 | 0.965 | 0.665 | 0.934 | 0.742 | 0.957 | 0.167 | 0.997 |
-| covid_19 | 0.336 | 0.725 | 0.452 | 0.850 | 0.440 | 0.764 | 0.147 | 0.538 |
-| heart_atlas | 0.225 | 0.640 | 0.659 | 0.936 | 0.722 | 0.909 | 0.164 | 0.636 |
-| human_pbmc | 0.351 | 0.824 | 0.546 | 0.822 | 0.632 | 0.887 | 0.165 | 0.715 |
-| immune_all_human | 0.320 | 0.802 | 0.537 | 0.889 | 0.549 | 0.893 | 0.163 | 0.586 |
-| immune_atlas | 0.316 | 0.655 | 0.548 | 0.827 | 0.647 | 0.859 | 0.159 | 0.539 |
-| lung_atlas | 0.278 | 0.649 | 0.541 | 0.902 | 0.666 | 0.904 | 0.161 | 0.487 |
-| pancrm | 0.248 | 0.572 | 0.499 | 0.718 | 0.608 | 0.819 | 0.159 | 0.589 |
-| pbmc_10k | 0.363 | 0.839 | 0.745 | 0.976 | 0.727 | 0.952 | 0.164 | 0.703 |
-| **MEAN** | **0.310** | **0.741** | **0.577** | **0.873** | **0.637** | **0.883** | **0.161** | **0.643** |
+| dataset | scPRINT-2 `_v4` bio | batch | (`_v3` bio, invalid) | scPRINT-1 large-v1 bio | batch | Unintegrated bio | batch | NULL bio | batch |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cell_lines | 0.547 | 0.962 | 0.354 | 0.665 | 0.934 | 0.742 | 0.957 | 0.167 | 0.997 |
+| covid_19 | 0.447 | 0.816 | 0.336 | 0.452 | 0.850 | 0.440 | 0.764 | 0.147 | 0.538 |
+| heart_atlas | 0.591 | 0.844 | 0.225 | 0.659 | 0.936 | 0.722 | 0.909 | 0.164 | 0.636 |
+| human_pbmc | 0.480 | 0.825 | 0.351 | 0.546 | 0.822 | 0.632 | 0.887 | 0.165 | 0.715 |
+| immune_all_human | 0.482 | 0.845 | 0.320 | 0.537 | 0.889 | 0.549 | 0.893 | 0.163 | 0.586 |
+| immune_atlas | 0.490 | 0.785 | 0.316 | 0.548 | 0.827 | 0.647 | 0.859 | 0.159 | 0.539 |
+| lung_atlas | 0.517 | 0.812 | 0.278 | 0.541 | 0.902 | 0.666 | 0.904 | 0.161 | 0.487 |
+| pancrm | 0.352 | 0.654 | 0.248 | 0.499 | 0.718 | 0.608 | 0.819 | 0.159 | 0.589 |
+| pbmc_10k | 0.641 | 0.947 | 0.363 | 0.745 | 0.976 | 0.727 | 0.952 | 0.164 | 0.703 |
+| **MEAN** | **0.505** | **0.832** | **0.310** | **0.577** | **0.873** | **0.637** | **0.883** | **0.161** | **0.643** |
+
+The repair gained `avg_bio` on **all 9 datasets with no exceptions**, by +0.104
+(`pancrm`) to +0.366 (`heart_atlas`), moving the mean 0.310 → 0.505. `avg_batch`
+moved only where it had headroom — flat on `cell_lines` (0.965 → 0.962) and
+`human_pbmc` (0.824 → 0.825), both already near saturation, and up 0.08–0.20 on the
+five datasets that sat low. That asymmetry is what a real information gain looks like
+on a metric that noise maximises; see the noise-floor section.
 
 Against the four published methods recomputed over these same 9 datasets (the
 paper's averages include `dc`, which we do not have, so they are not directly
 comparable): `avg_bio` means are BMFM CONCAT 0.620, MLM MULTITASK 0.630, WCED
 MULTITASK 0.624, scGPT 0.613. So on `avg_bio`, the full ordering is
 
-> MLM 0.630 > WCED 0.624 > CONCAT 0.620 > **scGPT 0.613** > Unintegrated 0.637(!) >
-> **scPRINT-1 0.577** > small-v2 all-facets 0.540 > small-v2 1-facet 0.422 >
-> **scPRINT-2 ji9krimq 0.310** > NULL 0.161
+> Unintegrated 0.637(!) > MLM 0.630 > WCED 0.624 > CONCAT 0.620 > **scGPT 0.613** >
+> **scPRINT-1 0.577** > small-v2 all-facets 0.540 > **scPRINT-2 ji9krimq 0.505** >
+> small-v2 1-facet 0.422 > NULL 0.161
 
-**The headline for R3 is that scPRINT-1 is roughly competitive (0.577) and
-scPRINT-2 is not (0.310)** — the opposite of what the version numbers suggest, but
-consistent with upstream's own modest scIB numbers for this checkpoint (below).
+**The headline for R3 is that scPRINT-1 is roughly competitive (0.577) and scPRINT-2
+`ji9krimq` is below it (0.505), with both below the four published methods.** Three
+things about that sentence have to be stated precisely, because each is easy to
+overclaim in either direction:
 
-Two features of the `ji9krimq` column are worth stating because they are what a
-reader will probe:
+- **0.505 agrees with upstream's own level for this checkpoint.** Upstream's scIB
+  numbers span 0.467–0.553 with mean 0.491 across their five datasets (below). Our
+  9-dataset 0.505 sits inside that range. This is the external check that the `_v4`
+  numbers are sound and the `_v3` ones were not: the earlier ~0.18 shortfall against
+  upstream is gone, and it closed by agreement with the model's authors rather than
+  by our own before/after comparison.
+- **large-v1 beats `ji9krimq` on all 9 datasets**, margins 0.005 (`covid_19`) to
+  0.147 (`pancrm`). But `ji9krimq` is 409.7M parameters against large-v1's 101.1M,
+  so this is **not** a size-matched comparison and carries no scaling claim.
+- **`ji9krimq`'s `avg_batch` of 0.832 is the lowest of any real method** in the table
+  (0.873–0.908 for the rest). Any reading in which scPRINT-2 is the best batch
+  corrector is now contradicted by our own corrected numbers, on top of upstream's
+  published iLISI 0.018 / kBET 0.162 / PCR 0.000 for immune_cell_atlas.
 
-- `avg_bio` is strikingly **flat**, 0.225–0.363, across datasets whose difficulty
-  varies widely — `Unintegrated` on the very same files ranges 0.440–0.742. An
-  embedding whose score barely responds to how separable the data is is the profile
-  of a weakly-structured representation, not of a method that is merely worse.
-- On `heart_atlas`, `avg_batch` 0.640 sits essentially **at** the noise floor
-  (0.636). This is the clearest single illustration of why `avg_batch` must be
-  quoted with the null beside it.
+`pancrm` is the one dataset where the corrected number is still conspicuously weak:
+0.352 against a published band of 0.450–0.647, i.e. below even scGPT's 0.450, which
+is itself the weakest published method there — and `Unintegrated` scores 0.608 on the
+same file. It also gained the least from the repair (+0.104). So `pancrm` is a
+genuine scPRINT-2 weakness that the gene-index defect does not account for, and it
+should not be presented as residual bug.
+
+The two features of the old `_v3` column that a reader would have probed are both
+resolved by the fix, which is itself evidence the diagnosis was right:
+
+- `_v3`'s `avg_bio` was strikingly **flat**, 0.225–0.363, across datasets whose
+  difficulty varies widely. `_v4` ranges 0.352–0.641, tracking dataset difficulty in
+  the same order as `Unintegrated` (0.440–0.742) — the profile of a representation
+  that responds to how separable the data is.
+- On `heart_atlas`, `_v3`'s `avg_batch` 0.640 sat within 0.004 of the noise floor
+  (0.636) — indistinguishable from a row shuffle on that column. `_v4` scores 0.844,
+  clearly off the floor. `heart_atlas` was flagged in advance as the dataset with the
+  most room to move and the least saturated batch metric, and it moved the most
+  (+0.366 bio, +0.204 batch).
 
 Integrity cross-check: `Unintegrated` was scored independently inside each of the
-four runs (`_lg`, `_v2`, `_v2a`, `_v3`), from the source `obsm` of a freshly-read
-`original.h5ad` each time. All four columns agree to 3dp on all 9 datasets, which
+five runs (`_lg`, `_v2`, `_v2a`, `_v3`, `_v4`), from the source `obsm` of a freshly-read
+`original.h5ad` each time. All five columns agree to 3dp on all 9 datasets, which
 confirms no run perturbed the source data.
 
 The recipe was diffed line-by-line against upstream's cell 17 and matches it:
@@ -717,7 +810,14 @@ checked before attributing any difference between the two to the checkpoint:
 Both runs therefore hand the model the same raw counts, and the difference between
 them is the checkpoint and nothing else.
 
-##### `all facets` averages for this checkpoint, so `_v3a` is a check and not a rival
+##### `all facets` averages for this checkpoint, so the all-facets run is a check and not a rival
+
+> The two measured rows in this subsection come from the **misaligned** `_v3`/`_v3a`
+> runs and are retained only as a record of what was checked. The all-facets variant
+> has been re-embedded with the alignment fixed (`_v4a`, all 9 datasets on GPU) and is
+> scoring; the mechanism argument below is unaffected, since it turns on
+> `model.compressor` rather than on the gene index, but the numbers must be replaced
+> before either facet configuration is compared quantitatively.
 
 `cell_emb.py:240-251` branches on `model.compressor`: a `ModuleDict` hstacks the
 per-facet embeddings, `None` sums them and divides by the count. `ji9krimq` logs
@@ -778,12 +878,68 @@ checkpoint, and a full-panel dataset. Notebook cell 17's scIB output for
 | Batch correction (their aggregate) | 0.342 |
 | Total | 0.492 |
 
-On the manuscript's definition, `avg_bio = mean(NMI, ARI, ASW_label) =
-mean(0.596, 0.341, 0.535) =` **0.491**. So ~0.5 avg_bio is what this checkpoint
-does in upstream's own hands, well below the ~0.70 that the published methods and
-even `Unintegrated` reach on the sceval datasets. A low scPRINT-2 avg_bio here is
-therefore a property of the model on this metric family, not evidence of a broken
-runner — and the flat `ASW_label` we see (~0.51) sits right on their 0.535.
+(That table is cell 17's *stored* output. `immune_cell_atlas` is commented out in
+cell 13's current state — "issue with scib (too large?)" — so the notebook as
+shipped would not regenerate it; the output is from an execution when it was
+enabled, and cell 17's own stdout confirms it with `doing
+cellxgene_census/immune_cell_atlas`.)
+
+Cell 20 hard-codes the same panel for the four datasets the notebook still runs, so
+upstream's numbers are available for **five** datasets in total. On the manuscript's
+`avg_bio = mean(NMI, ARI, ASW_label)`:
+
+| upstream dataset | NMI | ARI | ASW_label | **avg_bio** |
+| --- | --- | --- | --- | --- |
+| mouse_pancreas_atlas | 0.656 | 0.440 | 0.563 | **0.553** |
+| immune_cell_atlas | 0.596 | 0.341 | 0.535 | **0.491** |
+| dkd | 0.517 | 0.354 | 0.548 | **0.473** |
+| hypomap | 0.570 | 0.225 | 0.612 | **0.469** |
+| gtex_v9 | 0.617 | 0.281 | 0.504 | **0.467** |
+| MEAN | | | | **0.491** |
+
+**This is where the honest reading changes, and it is worth being blunt about it.**
+Upstream's range is 0.467–0.553. Ours is 0.225–0.363. The two ranges **do not
+overlap** — our best dataset scores below their worst. So upstream's numbers
+establish two things, and only two: (i) this checkpoint is *not* a strong performer
+on this metric family even in its authors' hands, well below the ~0.70 the published
+methods and `Unintegrated` reach; and (ii) there is nevertheless a systematic ~0.18
+gap between their runs and ours that these numbers do **not** explain.
+
+An earlier version of this section stopped at (i) and treated ~0.5 as corroborating
+our ~0.31. That was too generous to our own pipeline: 0.31 is not 0.49.
+
+The same applies to the label head. Cell 19 records upstream's own zero-shot
+`ref_cls` — the identical argmax-over-`CL:`-columns readout used in the diagnostic
+below — at accuracy 0.605 / macro F1 0.459 on `dkd` and 0.569 / 0.356 on `gtex_v9`.
+Macro F1 in the 0.36–0.46 range is not reachable by majority-class guessing, so
+their head genuinely discriminates. Ours returns AMI 0.102 on `pbmc_10k`. That is a
+second, independent instance of the same gap.
+
+The candidate explanations considered at the time were: the cell-quality gates
+(upstream keeps `min_nnz_genes=200, min_valid_genes_id=10_000`, we set them to
+0/1/1 to hold the cell set fixed — and `covid_19` averages 126 non-zero genes per
+cell, `pbmc_10k` 452, so upstream's own gate would discard much of what we feed the
+model); panel width and Ensembl-vs-symbol indexing; and the NMI/ARI clustering
+convention (upstream's scIB uses KMeans at `n_clusters = n_labels`, our conventions
+use Leiden at optimised resolution). All three would have had to be *large* to
+account for 0.18, and none of them is the cause. **The cause has since been found
+and it is none of these** — see the root-cause section below.
+
+The experiment that discriminates between "our pipeline is faithful" and "our
+pipeline is the problem" is to run our code on their data
+(`embed_upstream_ds.py` / `run_embed_up.sh`: `dkd`, 39,176 cells x 35,469 genes,
+the only one of the four small enough to be convenient at 403 MB). **It has now
+run, and it settles the attribution against us.** With upstream's own
+`Preprocessor` defaults restored and `is_symbol=False` pinned, on upstream's own
+`dkd`, with upstream's own checkpoint, our pipeline reproduces the failure: 17
+distinct cell-type calls over 39,176 cells, 23,699 of them `CL:4023056`
+(*vascular leptomeningeal cell (Mmus)*), AMI 0.0374 / ARI -0.0164 — where
+upstream reports accuracy 0.605 / macro F1 0.459 on that exact dataset and
+checkpoint. The preprocessing itself was clean (`39176 -> 39176` cells, 100%
+kept, 85,720 genes) and the embedding was non-degenerate (39,176 unique rows, no
+dead dims). Same data, same recipe, same checkpoint: **the failure travels with
+our environment, not with the data.** So the ~0.18 gap is not a property of the
+manuscript's datasets, and the numbers above cannot be attributed to the model.
 
 **And it cuts against the batch-correction reading directly.** Upstream's richer
 batch panel for the same embedding is iLISI 0.018, kBET 0.162, PCR 0.000, batch
@@ -794,13 +950,229 @@ ASW_label/batch)` for this embedding is metric saturation, not batch correction.
 Any sentence of the form "scPRINT-2 has strong batch correction" is contradicted by
 upstream's own table.
 
-Caveats for the revision: upstream's evaluation of this checkpoint is zero-shot
-(`FinetuneBatchClass` is imported but never called), and it scores the single-facet
-256-dim embedding via `embedding_key="scprint_emb"`, so `_v3` is the like-for-like
-configuration. `ji9krimq` at 409.7M params is roughly 4x large-v1 (101.1M), which
-is worth stating plainly rather than presenting the comparison as size-matched.
+##### The zero-shot label head does not merely underperform — it scores exactly zero
 
-Gene-panel note, which limits how far the comparison can be pushed: upstream
+A low `ASW_label` on its own cannot distinguish "the model is being fed badly" from
+"this checkpoint's cell-type facet is weakly structured", so the model's *own*
+cell-type call was read out as a diagnostic (`embed_one_v2.py --save-preds`, off by
+default so the benchmark files keep one schema). `keep_all_labels_pred=True` leaves
+one logit column per ontology term in `obs`; the call is the argmax over the `CL:`
+block, which is the idiom `model.py:1326` documents
+(`output["cls_output_cell_type_ontology_term_id"].argmax(-1)`).
+
+The column naming was verified against the tensor rather than assumed, because a
+block misalignment would produce exactly the symptom below and would *not* be
+caught by AMI/ARI (those are invariant to relabelling, but not to reading the wrong
+block). `model.py:2534-2545` builds `self.pred` as `torch.cat([... for clsname in
+self.classes], dim=1)`, and `cell_emb.py:262-266` names the columns with
+`for cl in model.classes` — the same iteration order, so the `CL:` block is the
+cell-type block.
+
+Run on `pbmc_10k`, chosen because 10x PBMC is as in-distribution as a
+cellxgene-trained model gets, so an OOD excuse cannot apply:
+
+| true label | mast cell `CL:0000097` | `CL:1000695` | `CL:0000525` | `CL:0002629` | other 5 |
+| --- | --- | --- | --- | --- | --- |
+| CD4 T cells | 3391 | 439 | 520 | 75 | 571 |
+| CD8 T cells | 1088 | 101 | 127 | 13 | 119 |
+| CD14+ Monocytes | 923 | 401 | 319 | 520 | 64 |
+| B cells | 571 | 575 | 268 | 181 | 26 |
+| NK cells | 207 | 136 | 18 | 41 | 55 |
+
+Only **9 of ~500** cell-type terms are ever the argmax; 6,509 of 11,990 cells
+(54%) are called *mast cell*, which is essentially absent from peripheral blood;
+and the top call is spread across the true types roughly in proportion to their
+abundance (67% of CD4 T, 75% of CD8 T, 41% of monocytes). Against the true labels
+the calls score **AMI 0.102, ARI 0.110** — barely above chance. Top logits sit in a
+narrow band (-1.88 to -0.49), which is itself not the profile of a confident head.
+`cell_lines` behaves the same way (7 distinct calls, and `CL:4023056` takes 2,838
+of 293t and 2,896 of jurkat — near-identical across two utterly different cell
+lines).
+
+**AMI/ARI understate this, and the correct metric is worse.** The head's 500
+cell-type outputs are the *leaves* of the CL hierarchy: `label_decoders
+['cell_type_ontology_term_id']` has 1032 entries, `labels_hierarchy` has 531, and
+the partition is clean — every ancestor key is >= 500 and every descendant index is
+< 500. So indices 0-499 are what the head can emit and 500-1030 are ancestor-only.
+Every coarse label our sceval data uses is ancestor-only (T cell 526, endothelial
+534, erythrocyte 563, macrophage 564, B cell 565, DC 575, neuron 584, monocyte 588,
+NK 596, CD4 T 597, CD8 T 598, leukocyte 611), so a *hierarchical* scorer — the one
+upstream uses, which credits a leaf call whose ancestors include the true term — is
+the right instrument. Scored that way on `immune_all_human`: **accuracy 0.0000, 0
+of 33,506 cells, all 16 types at 0.0%.** (An intermediate note in this file briefly
+concluded from the leaf/ancestor structure that the AMI/ARI readout was simply the
+wrong metric and the finding was an artifact. That retraction was itself wrong: the
+hierarchical score is zero, so the finding is stronger than the original framing,
+not weaker.)
+
+The readout was verified rather than assumed at every step, because a
+misalignment there would produce exactly this symptom. `head_out == label_counts`
+for all nine facets and the widths sum to 1113, which is the width of `self.pred`,
+so column naming from `range(label_counts[cl])` is exact. `model.py:2483-2490`
+builds `ind = {"other": 0}` then `self.classes.index(i) + 1`, and
+`model.py:1220-1227` reads `output["input_cell_embs"][:, i + 1, :]`, against a
+`class_encoder = CategoryValueEncoder(len(self.classes) + 1, ...)` — the `+1`s
+agree, so facet extraction is correct. Upstream's own readout (notebook cell 17) is
+character-for-character the same argmax over `CL:`-prefixed columns.
+
+##### Root cause: the collator indexes a *local* gene table that does not match the checkpoint
+
+The gene index handed to scPRINT-2 is not an identifier — it is a **row position**
+in a gene table loaded from our local lamindb instance at runtime. That table does
+not reproduce the checkpoint's gene list, so nearly every human gene is read from
+the wrong row of the frozen gene-embedding matrix. The chain, all in installed
+library code:
+
+1. `scprint2/tasks/cell_emb.py:111-118` constructs `Collator(organisms=...,
+   valid_genes=model.genes, ...)` with **no `genedf` argument**.
+2. `scdataloader/collator.py:117` therefore falls back to `genedf =
+   load_genes(self.organisms)` — the local bionty/lamindb table.
+3. `collator.py:133-136` computes `tot = genedf[genedf.index.isin(valid_genes)]`
+   and `start_idx[org] = np.where(tot.organism == organism)[0][0]`, after a bare
+   `print("Some valid genes are not in the genedf!!!")` on line 130 — the only
+   signal that anything is wrong. Nothing raises.
+4. `collator.py:290` emits `gene_locs.append(loc + self.start_idx[organism_id])`,
+   where `loc` is a position within the *local* table.
+5. `model.py:859-869` would rebuild `hp["genes"]` from the local table and
+   reconcile the two, but the branch is guarded by `if type(...) is list` and
+   `hp["genes"]` is a **dict**, so it is skipped and `model.genes` stays the
+   checkpoint's own list.
+
+`load_genes` sorts on `ensembl_gene_id` and drops a hardcoded `DROP` set, so the
+ordering is deterministic given the gene *set* — which means any missing gene
+silently shifts every position after it.
+
+The measured misalignment. The checkpoint's 16 gene lists total **335,182**,
+exactly the rows of `gene_encoder.0.embeddings.weight` (335182x512) and
+`pos_encoder.pe` (335182x1x512). The local table has 552,495 rows, of which `tot`
+= **335,174** — **8 genes short**:
+
+| organism | ckpt_n | local_n | ckpt block offset | local block offset | intra-block position agreement |
+| --- | --- | --- | --- | --- | --- |
+| NCBITaxon:10090 (mouse) | 21550 | 21547 | 0 | 0 | **55.12%** |
+| NCBITaxon:9606 (human) | 20004 | 19999 | 246612 | 246609 | **38.74%** |
+| the other 14 | identical | identical | — | shifted 3-8 | 100.00% |
+
+The missing genes are `ENSMUSG00000040715`, `ENSMUSG00000040838`,
+`ENSMUSG00000116048` (mouse, at intra-block positions 11876 / 11921 / 21382) and
+`ENSG00000139656`, `ENSG00000148362`, `ENSG00000169789`, `ENSG00000169807`,
+`ENSG00000290183` (human, at 7747 / 8953 / 12434 / 12436 / 19959).
+
+Human is the case that matters here, and it is misaligned in **both** ways at once.
+The three missing mouse genes shift the whole human block by -3, so *every* human
+gene is read from the wrong embedding row; on top of that, the intra-block shift is
+0 up to position 7747 and then -1..-5 for the remaining 12,252 genes. Net: all
+20,004 human genes are off, by 3 for the first 39% and by 4-8 after. The model
+receives real expression values attached to systematically wrong gene identities —
+which is precisely the input that would produce a low-rank, cell-type-blind
+embedding and a label head that fires on unrelated tissues.
+
+**The v1 control makes this an attribution, not a hypothesis.** The
+`load_genes` warning fires in **27 of 32** v3-era LSF logs — including the `dkd`
+upstream-config run — and in **0 of 6** checked `large-v1` logs. Same environment,
+same `original.h5ad`, same `Preprocessor`, same scorers: the checkpoint whose gene
+set our local table fully covers scores `avg_bio` **0.745** on `pbmc_10k` (the
+second-highest of any method in the table); the one whose gene set it does not
+cover scores **0.31**. That is the difference between the two runs.
+
+It is also visible in the returned embedding itself. After centering, `_v3`
+embeddings carry `||mean||^2/total` of 0.993-0.9995 — almost all the variance is a
+single constant offset — and effective rank 3.4-9.2. Per dataset (PC1 fraction /
+effective rank): `cell_lines` 0.421/9.2, `covid_19` 0.640/4.9, `heart_atlas`
+0.740/3.4, `human_pbmc` 0.409/8.8, `immune_all_human` 0.466/6.4, `immune_atlas`
+0.557/6.1, `lung_atlas` 0.532/6.1, `pancrm` 0.669/4.2, `pbmc_10k` 0.735/3.4.
+On the one file measured for all three runs, `cell_lines`, `large-v1` reaches
+effective rank **19.5** (`||mean||^2/total` 0.981, PC1 0.345) against `_v3`'s 9.2.
+
+**Effective rank is a proxy and it must not be leaned on.** Measured after the fix,
+`cell_lines` `_v4` comes out at effective rank **5.5** (PC1 0.517) — *lower* than
+the misaligned `_v3`'s 9.2. A scrambled input can easily spread variance over more
+directions than a coherent one, so this is not evidence against the fix; it is
+evidence that the spectrum does not settle the question either way. The `avg_bio`
+scores do, and only they should be quoted. (Note also that the `large-v1` figure is
+per-dataset: 19.5 on `cell_lines` is not comparable to a rank measured on a
+different file.)
+
+This single defect accounts for every symptom coherently: the collapsed effective
+rank, `avg_bio` pinned flat at 0.225-0.363 regardless of panel width or sequencing
+depth, hierarchical label-head accuracy of exactly zero, cell-type calls drawn from
+unrelated tissues, and the reproduction of all of it on upstream's own dataset.
+
+##### Consequence for the revision, and the fix
+
+**The `_v3` and `_v3a` rows above must not be reported as scPRINT-2 performance.**
+They measure our environment's gene table, not the model. The ~0.18 gap to
+upstream's 0.491 is explained and is ours. Everything that was ruled out along the
+way stays ruled out (correct checkpoint, column naming, facet extraction,
+leaf/ancestor structure, genuine raw counts on all nine files, `max_len`,
+`use_raw`, `do_postp`, embedding degeneracy), which is what leaves the gene table
+as the answer rather than one candidate among many.
+
+**The most uncomfortable part of this finding is that the bug was already known,
+already fixed, and already tested — in the scPRINT-1 path only.** §7 above records
+it under "Retired Ensembl IDs misalign the gene index", with three helpers in
+`baselines.py` (`_scprint_index_drift`, `_register_retired_genes`,
+`_ensure_scprint_gene_alignment`) that `compute_scprint` calls by default
+(`align_ontology=True`) before any GPU work, and five tests in
+`test_scprint_baseline.py` covering it. `embed_one.py` reaches that code because it
+loads `baselines.py` by path; **`embed_one_v2.py` was written standalone for the
+`scprint2` package and never called it.** That is the whole mistake. It also
+explains the 27/32-versus-0/6 warning split exactly: the v1 runs were repaired, the
+v2 runs never were. The mechanism is not new, only its second victim is.
+
+The fix, applied:
+
+1. `baselines.py` — the three helpers now accept the checkpoint's gene vocabulary
+   either as a flat sequence (scPRINT-1) or as a per-organism mapping (scPRINT-2),
+   via a new `_genes_by_organism`. The mapping form is *required* at 16 organisms:
+   the old prefix attribution would file chicken's `ENSGALG*` genes under human,
+   because `"ENSGALG".startswith("ENSG")`. All 26 existing tests still pass.
+2. `embed_one_v2.py` — calls `_ensure_scprint_gene_alignment(model._genes,
+   model.organisms)` before `model.to(device)`, with `--align-ontology
+   fix|check|off`. It passes the per-organism dict and *all 16* organisms, because
+   the three missing mouse genes displace all 20,004 human genes by themselves.
+3. Ran the repair against `anonymous/scprint2db`: 8 gene IDs registered,
+   `_ensure_scprint_gene_alignment` re-verified zero drift on all 16 organisms, and
+   `tot` is now **335,182 rows — exactly the embedding table**. The Collator's own
+   arithmetic was then reproduced independently, comparing both the intra-block gene
+   order and `start_idx` against the checkpoint: **16/16 organisms exact on both**
+   (before the repair, 2 organisms were misordered and 15 block offsets were
+   wrong). Registration is
+   additive and idempotent, and the placeholder rows are inert: no real dataset
+   carries a retired ID, `Preprocessor` zero-pads them, and `how="random expr"`
+   samples only from `np.where(expr > 0)`, so a zero column can never be selected.
+   They change gene *indexing* only, never model input.
+
+**The fix is confirmed in the metric, not merely in the invariants.** All nine
+datasets were re-embedded as `_v4` and re-scored: `avg_bio` rose on every one of the
+nine, mean 0.310 → **0.505**, and the largest single gain (+0.366) landed on
+`heart_atlas`, the dataset flagged in advance as having the most room and the least
+saturated batch metric. 0.505 falls inside upstream's own 0.467–0.553 range for this
+checkpoint, so the ~0.18 gap this section was written to explain is closed. Full
+table under *Results, all 9 datasets*, above.
+
+One methodological caution, recorded because it cuts against the fix and was nearly
+leaned on as evidence for it: **the effective-rank proxy moved the wrong way.** On
+`cell_lines`, `_v3` scored eff_rank 9.2 and `_v4` scored 5.5 — lower — while `avg_bio`
+rose 0.354 → 0.547 on the same file. `large-v1` scores 19.5 there. The spectrum
+settles nothing in either direction and only `avg_bio` should be quoted.
+
+Two claims that must **not** be revived by this: the withdrawn "scPRINT-2 has the
+best batch correction" claim stays withdrawn — upstream's own iLISI 0.018 / kBET
+0.162 / PCR 0.000 is independent of our bug, and the corrected `_v4` numbers now
+agree with it, since `avg_batch` 0.832 is the *lowest* of any real method in the
+table — and the superseded `small-v2` `_v2`/`_v2a` runs still must not be cited as
+scPRINT-2.
+
+Caveats that survive regardless: upstream's evaluation of this checkpoint is zero-shot
+(`FinetuneBatchClass` is imported but never called), and it scores the single-facet
+256-dim embedding via `embedding_key="scprint_emb"`, so `_v4` is the like-for-like
+configuration. `ji9krimq` at 409.7M params is roughly 4x large-v1 (101.1M), which
+is worth stating plainly rather than presenting the comparison as size-matched —
+particularly since large-v1 outscores it on all nine datasets.
+
+Gene-panel note, now a *secondary* limit behind the gene-table defect but still
+worth keeping for the re-run: upstream
 evaluates on cellxgene datasets carrying full transcriptomes, and its own
 `Preprocessor` default (`min_valid_genes_id=10_000`) refuses anything smaller. Our
 9 datasets range from 1,200 genes (`covid_19`) and 3,289 (`pbmc_10k`) to 33,694

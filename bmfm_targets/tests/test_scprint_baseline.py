@@ -31,6 +31,7 @@ from bmfm_targets.evaluation.baselines import (
     SCPRINT_HUMAN,
     SCPRINT_MOUSE,
     _counts_source,
+    _genes_by_organism,
     _scprint_index_drift,
     compute_scprint,
     run_baselines,
@@ -430,6 +431,45 @@ def test_drift_is_empty_when_ontology_matches_checkpoint():
         drift = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
 
     assert drift[SCPRINT_HUMAN][2] is None
+
+
+def test_ensembl_prefixes_are_ambiguous_so_a_mapping_must_win():
+    """
+    ``"ENSGALG".startswith("ENSG")``, so prefix attribution cannot be trusted.
+
+    scPRINT-1 has only human and mouse and exposes one flat gene list, so the
+    prefix is all there is. scPRINT-2's ji9krimq covers 16 organisms including
+    chicken, and keeps the vocabulary keyed by organism — that mapping must be used,
+    or every chicken gene is filed under human and the drift check reports a
+    misalignment that does not exist while missing one that does.
+    """
+    chicken = "NCBITaxon:9031"
+    human_genes = [f"ENSG{i:011d}" for i in range(3)]
+    chicken_genes = [f"ENSGALG{i:011d}" for i in range(3)]
+
+    flat = _genes_by_organism(human_genes + chicken_genes, [SCPRINT_HUMAN])
+    assert flat[SCPRINT_HUMAN] == human_genes + chicken_genes, (
+        "the flat form is expected to over-collect here; that is exactly why the "
+        "mapping form exists"
+    )
+
+    mapped = _genes_by_organism(
+        {SCPRINT_HUMAN: human_genes, chicken: chicken_genes},
+        [SCPRINT_HUMAN, chicken],
+    )
+    assert mapped == {SCPRINT_HUMAN: human_genes, chicken: chicken_genes}
+
+
+def test_drift_accepts_a_per_organism_mapping():
+    """The mapping form must agree with the flat form where both are valid."""
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        flat = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
+        mapped = _scprint_index_drift(
+            {SCPRINT_HUMAN: mocks.model.genes}, [SCPRINT_HUMAN]
+        )
+
+    assert mapped == flat
+    assert mapped[SCPRINT_HUMAN][2] == 100
 
 
 def test_repairs_ontology_and_then_embeds(raw_counts_adata):
