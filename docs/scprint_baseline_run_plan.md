@@ -442,36 +442,75 @@ R3's comment is about scPRINT as a baseline, and scPRINT-2 now exists, so the v1
 numbers above are extended with a v2 run rather than left to look like a
 comparison against a superseded model.
 
-**Which checkpoint, and why there is no choice.** `jkobject/scPRINT-2` on HF is
-not public (401) and its README says it holds *test datasets*, not weights. Every
-released checkpoint lives in the v1 repo `jkobject/scPRINT`, where the only v2
-file is `small-v2.ckpt` (889.7 MB) — what `scprint2 easy_setup` downloads and what
-every inference example in the v2 README uses. `config/{medium,large,vlarge}` there
-are *training* configs, not released weights, and upstream's own README points back
-at v1 as the repo that "contains larger size models". The paper's headline numbers
-come from an internal run (`ji9krimq.ckpt`) that is not downloadable. So unlike the
-v1 situation — where medium-v1.5 was used while large-v1 existed — there is no
-larger v2 checkpoint to be wrong about.
+**Which checkpoint — and the mistake made here first.** The first pass of this run
+used `small-v2.ckpt` and asserted in this document that it was the only public v2
+checkpoint and that `ji9krimq.ckpt` was an undownloadable internal artefact. **Both
+claims were false**, and the resulting 9-dataset benchmark measured the wrong model.
 
-**small-v2 is not a capacity handicap.** 101.9M params vs large-v1's 101.1M, and a
-**335,182-gene vocabulary (37,011 human)** vs v1's 44,756 — more coverage in
-exactly the dimension where v1 was weakest. d_model 256, nhead 4, nlayers 8,
-nlayers_cell 6, 16 organisms, epoch 37 / global_step 760000.
+What is actually true: `jkobject/scPRINT-2` on HF does 401 and does hold test
+datasets rather than weights, and `config/{medium,large,vlarge}` are training
+configs. But the v1 repo `jkobject/scPRINT` has an **`other_ckpts/` subdirectory**
+that a top-level listing does not surface, and `other_ckpts/ji9krimq.ckpt`
+(2,180,479,695 bytes) is in it, served HTTP 200 with no authentication. That is the
+checkpoint the paper's own results come from: upstream's repro notebook for the
+batch-correction figure loads exactly it —
+
+```python
+# cantinilab/scPRINT-2, notebooks/scPRINT-2-repro-notebooks/batch_corr_op.ipynb, cell 12
+ckpt_path = os.path.join(LOC2, "ji9krimq.ckpt")
+model = scPRINT2.load_from_checkpoint(ckpt_path, precpt_gene_emb=None, gene_pos_file=None)
+```
+
+The lesson worth keeping: `scprint2 easy_setup` downloads `small-v2.ckpt` and every
+README inference example uses it, so it is the obvious thing to grab and it loads
+without complaint. Nothing in the tooling tells you it is not the published model.
+Verify the checkpoint against the paper's own repro notebook, not against the
+quickstart.
+
+**The two checkpoints are not interchangeable.** From their `hyper_parameters` and
+`state_dict`:
+
+| | `small-v2.ckpt` | `ji9krimq.ckpt` (the paper's) |
+| --- | --- | --- |
+| params | 187.8M | **409.7M** |
+| d_model / nhead / nlayers | 256 / 4 / 8 | **512 / 8 / 16** |
+| `expr_emb_style` | `metacell` | **`continuous`** |
+| epoch / global_step | 37 / 760000 | 21 / 440000 |
+| gene vocab (human) | 335,182 (20,004) | 335,182 (20,004) |
+| `pred_embedding` | `['cell_type_ontology_term_id']` | `['cell_type_ontology_term_id']` |
+
+Both carry the same 9 class facets and the same 335,182-gene vocabulary, so the
+vocabulary-coverage findings below hold for either. `nlayers_cell` is 6 in both.
 
 **Three recipe differences from v1, each of which would silently break a run.**
 Taken from the upstream Figure-5 batch-correction repro notebook and cross-checked
 against `cell_emb.py` and the checkpoint's own `hyper_parameters`:
 
-1. `expr_emb_style == "metacell"` needs a KNN graph → `Preprocessor(do_postp=True)`
-   then `sc.pp.neighbors(adata, use_rep="X_pca")`.
-2. `gene_pos_file` is a stale absolute path in the checkpoint, as `precpt_gene_emb`
-   is — both must be passed as `None`.
-3. `model.mask_zeros = True`.
+1. **`expr_emb_style` is per-checkpoint and must be read off the model, never
+   hardcoded.** `small-v2` is `metacell`: it conditions each cell on its k-nearest
+   neighbours, so the AnnData needs a graph first — `Preprocessor(do_postp=True)`
+   then `sc.pp.neighbors(adata, use_rep="X_pca")`. `ji9krimq` is `continuous` and
+   needs neither. Upstream gates both on the same expression
+   (`do_postp=model.expr_emb_style == "metacell"`, `default_benchmark`
+   `cell_emb.py:440`; the notebook sets `metacell = model.expr_emb_style ==
+   "metacell"` in cell 14), and `embed_one_v2.py` does the same. Hardcoding it
+   either way silently mis-preprocesses one of the two checkpoints.
+2. `gene_pos_file` and `precpt_gene_emb` are stale absolute paths in the checkpoint
+   and must be passed as `None`. This is safe and is what upstream itself does
+   (`cli.py:197`, notebook cell 12) — **not** a workaround that loses information:
+   `on_load_checkpoint` (`model.py:818-823`) reconstructs the positional encoder
+   from the checkpoint's own `pos_encoder.pe` (335182x1x256) when `__init__` left
+   it `None`, and `model.py:1076` uses it in the forward pass. Verified explicitly,
+   because "override the path that fails to resolve" is exactly the shape of a
+   change that would quietly zero out gene identity.
+3. `model.mask_zeros = True` (notebook cell 14; not a recorded hparam).
 
-`pred_embedding=["cell_type_ontology_term_id"]` is both the notebook's value and
-the checkpoint's recorded default. `max_len=3200` is the notebook's (v1 used 4000);
-exposed as a flag. Missing FlashAttention is harmless: the checkpoint's `attention`
-hparam is `'normal'`.
+`pred_embedding=["cell_type_ontology_term_id"]` is the notebook's value **and** both
+checkpoints' recorded default, so it is also what `default_benchmark` uses (it falls
+back to `["all"]` only when `model.pred_embedding is None`, which is not the case
+here). `max_len=3200` is the notebook's; `default_benchmark` computes 4000 for these
+count depths, so this is exposed as a flag rather than assumed. Missing
+FlashAttention is harmless: the `attention` hparam is `'normal'`.
 
 **v1's "averaging dilutes the cell-type signal" finding does not transfer.** With
 `model.compressor is not None` — small-v2's compressor *is* a `ModuleDict` — the v2
@@ -488,16 +527,75 @@ behind an assertion that the cell count is unchanged; and the `Embedder` streams
 chunks to a relative `data/` dir, so each job gets its own scratch cwd or
 concurrent datasets collide on filenames.
 
-**What must be said to R3 regardless of the numbers:** only `small-v2` is public,
-and the paper's headline results come from an unreleased internal checkpoint.
+**What must be said to R3 regardless of the numbers:** the run uses the same
+checkpoint the scPRINT-2 paper's own batch-correction figure uses
+(`ji9krimq.ckpt`), zero-shot, with upstream's own `pred_embedding` — so it is not a
+comparison against a crippled or superseded variant. Upstream's evaluation is
+genuinely zero-shot too: `FinetuneBatchClass` is imported in that notebook but never
+called.
 
-#### scPRINT-2 results (9 datasets, both conventions, 2026-09-18)
+#### The noise floor, and why `avg_batch` cannot carry a claim on its own
 
-`pred_embedding` is worth 0.10 of the weighted score, so both settings are
-reported. Means over the same 9 datasets; the two conventions agree to 3 decimals
-on every mean, and all three runs' `Unintegrated` controls are *bit-identical*
-(0.637 / 0.883 / 0.735), which is an independent check that the separate v2 venv,
-lamindb instance and preprocessing path did not perturb the source data.
+Before any scPRINT-2 number is interpreted: `avg_batch = mean(graph_conn,
+ASW_label/batch)`, and **both components are maximised by an embedding that carries
+no information at all** — perfect batch mixing is what you get when nothing can be
+distinguished. So the column needs a measured null, not an assumed one.
+
+The null used is the **row-shuffled** real embedding (`make_noise_ctrl.py`): identical
+per-dimension scales, identical row norms, identical marginal distribution, zero
+cell-to-label correspondence. An iid gaussian control matched to the same sphere
+agrees with it to ~0.01 throughout. Scored by the same scorer, same conventions:
+
+| dataset | avg_bio | avg_batch | ASW_label/batch | graph_conn |
+| --- | --- | --- | --- | --- |
+| cell_lines | 0.167 | **0.997** | 0.994 | 1.000 |
+| covid_19 | 0.147 | 0.538 | 0.986 | 0.090 |
+| heart_atlas | 0.164 | 0.636 | 0.886 | 0.385 |
+| human_pbmc | 0.165 | 0.715 | 0.977 | 0.453 |
+| immune_all_human | 0.163 | 0.586 | 0.962 | 0.211 |
+| immune_atlas | 0.159 | 0.539 | 0.956 | 0.122 |
+| lung_atlas | 0.161 | 0.487 | 0.891 | 0.082 |
+| pancrm | 0.159 | 0.589 | 0.959 | 0.219 |
+| pbmc_10k | 0.164 | 0.703 | 0.982 | 0.423 |
+| **MEAN** | **0.161** | **0.643** | **0.955** | **0.332** |
+
+Three consequences, all of which apply to the published table and not just to
+scPRINT:
+
+- **`ASW_label/batch` is anti-informative in this range.** Noise scores 0.955 mean;
+  every real method scores *lower* (Unintegrated 0.821, scPRINT-1 large-v1 0.840,
+  scPRINT-2 small-v2 all-facets 0.890). On this component pure noise beats every
+  method in the manuscript's table. Within a family, the run with the higher
+  `ASW_label/batch` is the run closer to carrying nothing.
+- **`graph_conn` is the only discriminating half** (noise 0.332 vs ~0.89-0.94 for
+  real methods), and its noise value swings 1.000 → 0.082 by dataset, so it also
+  sets how much room `avg_batch` has on each dataset. On `cell_lines` the null
+  scores `avg_batch` 0.997 — higher than every published method, whose best is WCED
+  at 0.959.
+- **`avg_bio` is sound.** Floor 0.161 against the analytic 1/6 = 0.167 (NMI→0,
+  ARI→0, ASW_label→0.5). Differences in `avg_bio` mean what they appear to mean.
+
+Practical rule for the revision: rank on `avg_bio`, quote `avg_batch` only with the
+null beside it, and do not write "method X has the best batch correction". An
+earlier draft of this document did exactly that for scPRINT-2 small-v2 (0.891,
+"best of any scPRINT run and third overall"); that claim is **withdrawn** — it was
+reporting proximity to the noise value, not a capability. `build_final_table.py
+--with-null` emits these rows into the table so the floor travels with the numbers.
+
+Diagnostically, this is also what pointed at the wrong-checkpoint mistake: a profile
+of high `avg_batch` with depressed `avg_bio` is the signature of a weak embedding,
+because the batch half saturates as information is lost.
+
+#### scPRINT-2 `small-v2` results — the WRONG checkpoint, retained as a lesson
+
+These 9-dataset numbers are a correct measurement of `small-v2.ckpt`, which is *not*
+the published scPRINT-2. They are kept because they document what the mistake cost
+and because the facet-choice finding below is a property of the v2 architecture that
+carries over. **Do not cite these as scPRINT-2.** Means over the same 9 datasets;
+the two conventions agree to 3 decimals on every mean, and all three runs'
+`Unintegrated` controls are *bit-identical* (0.637 / 0.883 / 0.735), an independent
+check that the separate v2 venv, lamindb instance and preprocessing path did not
+perturb the source data.
 
 | method | avg_bio | avg_batch | weighted |
 | --- | --- | --- | --- |
@@ -519,9 +617,18 @@ Findings:
   v1, for the structural reason in the section above (v1 averages, v2
   concatenates). Upstream's own Figure-5 notebook uses the *weaker* of the two.
 - **scPRINT-2 small-v2 does not beat scPRINT-1 large-v1** on these 9 (0.680 vs
-  0.695), and both are below all four published methods. The deficit is entirely
-  in bio conservation (0.540 vs 0.577); on batch correction v2 is the best scPRINT
-  run and third overall (0.891, behind BMFM CONCAT 0.908 and WCED 0.907).
+  0.695), and both are below all four published methods. The deficit is in bio
+  conservation (0.540 vs 0.577). Its higher `avg_batch` (0.891 vs 0.873) is *not* a
+  point in its favour — see the noise floor above; on `ASW_label/batch` it is the
+  closest of the three runs to the noise value of 0.955.
+- **What collapses is `ASW_label`, and it is not a pipeline artefact.** It sits at
+  0.477-0.556 on *every* dataset; since the metric is `(s+1)/2`, that is a
+  silhouette of ≈ 0, i.e. no Euclidean class separation, while NMI/ARI stay at
+  0.632/0.476 off the kNN graph. Upstream reports the same range for their own
+  checkpoint (notebook cell 20: Silhouette label 0.504-0.612, KMeans ARI 0.225-0.440
+  across their four datasets — a *lower* ARI than measured here), so a flat
+  `ASW_label` is characteristic of scPRINT-2 embeddings rather than evidence of a
+  bug in this pipeline.
 - v2's larger vocabulary helps coverage only where the source file is not
   pre-filtered: `cell_lines` fills 87.9% of the human model slots (v1 76.4%), but
   `pbmc_10k` still only 16.3% (v1 14.2%) because that file ships 3,289 genes.
@@ -529,11 +636,20 @@ Findings:
   `_predict` raises `ValueError: 'other' is not in list`, as "other" is only valid
   inside the `["all"]` expansion -- so the per-facet contribution was not isolated.
 
-Caveats for the revision, in addition to those below: only `small-v2` is public,
-the paper's own numbers come from the unreleased `ji9krimq.ckpt`, and small-v2 is
-~102M params (comparable to large-v1) so this is not a small-vs-large comparison.
-Upstream's batch-correction evaluation is zero-shot (`FinetuneBatchClass` is
-imported but never called in that notebook), so the setting matches ours.
+#### scPRINT-2 `ji9krimq` results (the publication checkpoint)
+
+Run as `_v3` (single `cell_type_ontology_term_id` facet — upstream's config, and the
+primary number) and `_v3a` (all facets — our extension). Numbers pending; the GPU
+jobs are queued. Configuration is identical to the `small-v2` run except for the
+checkpoint and the `expr_emb_style`-driven preprocessing branch, so the comparison
+between the two isolates the checkpoint.
+
+Caveats for the revision: upstream's own evaluation of this checkpoint is zero-shot
+(`FinetuneBatchClass` imported but never called), and it scores the single-facet
+64-dim-per-facet embedding via `embedding_key="scprint_emb"`, so `_v3` is the
+like-for-like configuration. `ji9krimq` at 409.7M params is roughly 4x large-v1
+(101.1M), which is worth stating plainly rather than presenting the comparison as
+size-matched.
 
 ## 8. Untracked files to leave alone
 
