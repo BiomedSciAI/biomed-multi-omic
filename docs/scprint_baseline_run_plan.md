@@ -261,8 +261,15 @@ manuscript table.
       conventions, and replace the `_v3`/`_v3a` tables — `avg_bio` 0.310 → **0.505**,
       gained on all 9 datasets, and 0.505 falls inside upstream's own 0.467–0.553
       range for this checkpoint
-- [x] `_v4a` (all facets) — all 9 scored; facet choice is a wash (avg_bio mean 0.506
-      vs 0.505), so it changes nothing in the reported table
+- [x] `_v4a` (all facets) — all 9 scored under **both** conventions (max disagreement
+      5e-4); the facet choice is a wash on the headline (`avg_bio` mean 0.506 vs
+      0.505), and `_v4a` falls *below* the measured noise floor on `human_pbmc`, so
+      `_v4` stays the reported run
+- [x] second noise control (`Random424`, iid gaussian) completed on all 9 — it had
+      been scored on only 4, and those 4 were 4 of the 5 highest floors, so the
+      4-dataset mean `avg_batch` 0.751 was selection-biased upward. On all 9 it is
+      **0.660**. Nothing written down had quoted 0.751; the reported `NULL` column
+      was always the 9-dataset shuffle
 - [ ] decide with the user how to present `Unintegrated` (0.637 `avg_bio`, which
       ties or beats every published method in the table, BMFM's three included)
 
@@ -276,9 +283,15 @@ manuscript table.
   `$WORK/emb/` (`*_lg_scprint.h5ad`, `*_v4_scprint.h5ad`). Nothing was appended to
   the manuscript's `baseline_metrics_all.csv`.
 - Superseded: `$WORK/scprint_metrics.csv` and `$WORK/metrics/` — convention (1) on
-  `medium-v1.5`. Left in place, not cited. The published
-  `baseline_metrics_all.csv` was never written to, and no `original.h5ad` was ever
-  opened for write.
+  `medium-v1.5`. Left in place, not cited, because `summarize_conventions.py` still
+  reads them. `scprint_metrics.csv` is the one genuine trap in `$WORK`: its column
+  names are *identical* to the manuscript's `baseline_metrics_all.csv`
+  (`avg_batch_correction`, `avg_bio_conservation`, …) so it looks pasteable, while its
+  `avg_bio_conservation` is on a different scale from everything else here (0.919 on
+  `cell_lines`). `$WORK/README_WHICH_FILES.md` names the reportable files and the
+  do-not-quote ones for anyone arriving at that directory without this document. The
+  published `baseline_metrics_all.csv` was never written to, and no `original.h5ad`
+  was ever opened for write.
 - All 18 (9 datasets × 2 conventions) `large-v1` scorings completed; conventions
   (2) and (3) agree on all 18 dataset/embedding pairs to within 5e-4, which is the
   output precision of the (2) scorer.
@@ -591,8 +604,16 @@ distinguished. So the column needs a measured null, not an assumed one.
 
 The null used is the **row-shuffled** real embedding (`make_noise_ctrl.py`): identical
 per-dimension scales, identical row norms, identical marginal distribution, zero
-cell-to-label correspondence. An iid gaussian control matched to the same sphere
-agrees with it to ~0.01 throughout. Scored by the same scorer, same conventions:
+cell-to-label correspondence. A second, independently constructed null (`Random424`,
+iid gaussian row-normalised to the same sphere) is now scored on **all nine**
+datasets as a check on the first. The two nulls share nothing but cell count and
+scale, so where they agree, the floor is a property of the dataset rather than of how
+one null was built. They agree within 0.01 on six of the nine (`pbmc_10k` 0.002,
+`cell_lines` 0.003, `human_pbmc` 0.004, `immune_atlas` 0.007, `covid_19` 0.009,
+`immune_all_human` 0.009) and within 0.05 on the other three (`heart_atlas` 0.028,
+`lung_atlas` 0.043, `pancrm` 0.047). Gaussian noise floors slightly *higher* than a
+shuffle everywhere, mean `avg_batch` 0.660 vs 0.643, so the conservative floor is
+`max` of the two. Scored by the same scorer, same conventions:
 
 | dataset | avg_bio | avg_batch | ASW_label/batch | graph_conn |
 | --- | --- | --- | --- | --- |
@@ -620,8 +641,45 @@ scPRINT:
   sets how much room `avg_batch` has on each dataset. On `cell_lines` the null
   scores `avg_batch` 0.997 — higher than every published method, whose best is WCED
   at 0.959.
-- **`avg_bio` is sound.** Floor 0.161 against the analytic 1/6 = 0.167 (NMI→0,
-  ARI→0, ASW_label→0.5). Differences in `avg_bio` mean what they appear to mean.
+- **`avg_bio` is sound.** Floor 0.161 (shuffle) and 0.172 (gaussian) against the
+  analytic 1/6 = 0.167 (NMI→0, ARI→0, ASW_label→0.5); both nulls stay inside
+  0.147–0.177 on every dataset. Differences in `avg_bio` mean what they appear to
+  mean.
+
+##### How much room `avg_batch` actually has, per dataset
+
+With both nulls scored on all nine, the floor can be subtracted rather than assumed.
+Taking the conservative floor `max(Shuffled, Random424)` and the reported `_v4` run:
+
+| dataset | floor | `_v4` `avg_batch` | headroom |
+| --- | --- | --- | --- |
+| cell_lines | **1.000** | 0.962 | **−0.038** |
+| covid_19 | 0.547 | 0.816 | +0.269 |
+| heart_atlas | 0.664 | 0.844 | +0.180 |
+| human_pbmc | 0.719 | 0.825 | +0.106 |
+| immune_all_human | 0.595 | 0.845 | +0.249 |
+| immune_atlas | 0.546 | 0.785 | +0.239 |
+| lung_atlas | 0.530 | 0.812 | +0.282 |
+| pancrm | 0.636 | 0.654 | **+0.019** |
+| pbmc_10k | 0.705 | 0.947 | +0.242 |
+| **MEAN** | — | **0.832** | **+0.172** |
+
+Two entries matter more than the mean:
+
+- **`cell_lines` has no headroom at all: the gaussian null scores a perfect 1.000.**
+  Every method in the manuscript's table scores *below* noise on that dataset
+  (best is WCED at 0.959, `_v4` is 0.962). The `avg_batch` column carries no
+  information about batch correction on `cell_lines` and should not be read as if it
+  does — for any method, ours included.
+- **`pancrm` clears its floor by 0.019.** Combined with its `avg_bio` 0.352 — the
+  worst of the nine and below every published method — `pancrm` is the one dataset
+  where scPRINT-2 is close to indistinguishable from noise on *both* axes. This is
+  the same dataset flagged below as a genuine weakness the gene-index repair does not
+  explain, and the floor subtraction is independent evidence for that reading.
+
+Everywhere else the repaired run clears its floor by 0.11–0.28, so `avg_batch` 0.832
+is a real measurement on seven of nine datasets even though it is the lowest of any
+real method.
 
 Practical rule for the revision: rank on `avg_bio`, quote `avg_batch` only with the
 null beside it, and do not write "method X has the best batch correction". An
@@ -848,6 +906,23 @@ is that the extra readouts (`assay`, `disease`, `ethnicity`, `sex`, `tissue`) ar
 confounded with its batch variable, so folding them in encodes batch structure; but
 that is a per-dataset conjecture, not a general mechanism, since `heart_atlas` and
 `immune_atlas` move the *other* way by +0.059 and +0.044.
+
+Both runs are now scored under **both** conventions, and the two independent scorers
+agree to within **0.0005** on every one of the 18 `_v4a` comparisons (`_v4a` means:
+tutorial 0.5063/0.8180, paper 0.5062/0.8181; `_v4`: 0.5054/0.8322 and 0.5052/0.8322).
+So the `_v4` vs `_v4a` conclusion does not rest on one scorer.
+
+That also settles what `human_pbmc` is doing, and it is worth more than the mean. Its
+noise floor there is 0.719 (shuffle 0.715, gaussian 0.719 — the two nulls agree to
+0.004 on that dataset). `_v4` scores 0.825, clearly above it. **`_v4a` scores 0.574,
+which is 0.146 *below* the floor**, and the paper convention independently returns
+0.574 as well. An embedding can only mix batches *worse* than pure noise by carrying
+structure that actively tracks batch, so on `human_pbmc` the all-facets embedding is
+encoding batch as signal rather than failing to remove it. `_v4a` is below its floor
+on two datasets (`human_pbmc` −0.146 and `cell_lines` −0.057, the latter unavoidable
+since that floor is 1.000); `_v4` is below only on `cell_lines`. That is a cleaner
+reason to report `_v4` than "the mean is a wash", and it does not depend on the
+per-dataset conjecture above.
 
 Two corrections this table forces, recorded because both were stated in this file
 earlier and both were wrong:
