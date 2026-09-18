@@ -639,17 +639,102 @@ Findings:
 #### scPRINT-2 `ji9krimq` results (the publication checkpoint)
 
 Run as `_v3` (single `cell_type_ontology_term_id` facet — upstream's config, and the
-primary number) and `_v3a` (all facets — our extension). Numbers pending; the GPU
-jobs are queued. Configuration is identical to the `small-v2` run except for the
-checkpoint and the `expr_emb_style`-driven preprocessing branch, so the comparison
-between the two isolates the checkpoint.
+primary number) and `_v3a` (all facets — a check on the averaging effect, see below).
+Numbers pending; the GPU jobs are queued. Configuration is identical to the
+`small-v2` run except for the checkpoint and the `expr_emb_style`-driven
+preprocessing branch, so the comparison between the two isolates the checkpoint.
 
-Caveats for the revision: upstream's own evaluation of this checkpoint is zero-shot
-(`FinetuneBatchClass` imported but never called), and it scores the single-facet
-64-dim-per-facet embedding via `embedding_key="scprint_emb"`, so `_v3` is the
-like-for-like configuration. `ji9krimq` at 409.7M params is roughly 4x large-v1
-(101.1M), which is worth stating plainly rather than presenting the comparison as
-size-matched.
+The recipe was diffed line-by-line against upstream's cell 17 and matches it:
+`load_from_checkpoint(..., precpt_gene_emb=None, gene_pos_file=None)`,
+`mask_zeros = True`, `Preprocessor(force_preprocess=True, skip_validate=True,
+do_postp=metacell)`, `sc.pp.neighbors(use_rep="X_pca")` only when metacell, and
+`Embedder(how="random expr", max_len=3200, num_workers=8,
+pred_embedding=["cell_type_ontology_term_id"], keep_all_labels_pred=True,
+doplot=False)`. Two deliberate departures, both to keep the cell set fixed so the
+rows stay comparable to the published ones scored on the same file:
+`min_nnz_genes=0, min_valid_genes_id=1, min_dataset_size=1` (upstream keeps the
+defaults, whose `min_valid_genes_id=10_000` would reject `pbmc_10k` and `covid_19`
+outright — see the gene-panel note below), and `is_symbol` auto-detected rather
+than pinned to `False` (upstream's inputs are cellxgene Ensembl-indexed; ours are
+mostly symbol-indexed).
+
+##### `all facets` averages for this checkpoint, so `_v3a` is a check and not a rival
+
+`cell_emb.py:240-251` branches on `model.compressor`: a `ModuleDict` hstacks the
+per-facet embeddings, `None` sums them and divides by the count. `ji9krimq` logs
+`compressor=no`, so for it all-facets **averages**, exactly like large-v1 — it does
+*not* concatenate the way `small-v2` does. The earlier note that "v2 concatenates"
+was true of `small-v2` and does not generalise to the v2 checkpoint that matters.
+Single-facet is therefore right for `ji9krimq` on both counts: it is the
+checkpoint's own recorded `hyper_parameters["pred_embedding"]`, and it is the
+non-diluting path. `_v3a` is reported to measure the dilution rather than assert it.
+
+##### The embedding is 256-dim although `d_model=512`, and that is correct
+
+The checkpoint is two-width: the gene side is 512 (`gene_encoder.0.embeddings.weight`
+335182x512, `pos_encoder.pe` 335182x1x512, `expr_encoder.encoder.0.weight` 512x1)
+while the cell side is 256 (`class_encoder.embedding.weight` 10x256,
+`cell_transformer.blocks.0.mixer.out_proj.weight` 256x256). Since
+`output_cell_embs = cell_embs` when the compressor is None
+(`model.py:1216-1218`), the per-facet cell embedding is the cell-transformer width,
+256. So a 256-dim output from a `d_model=512` checkpoint is architectural, not a
+truncation — worth recording because "the embedding is half the model width" reads
+like a bug and would otherwise get chased twice.
+
+##### Upstream's own numbers for this checkpoint corroborate the level
+
+This is the load-bearing external check, because it is upstream's code, upstream's
+checkpoint, and a full-panel dataset. Notebook cell 17's scIB output for
+`cellxgene_census/immune_cell_atlas`, embedding key `scprint_emb`:
+
+| metric | ji9krimq (upstream's own run) |
+| --- | --- |
+| KMeans NMI | 0.596 |
+| KMeans ARI | 0.341 |
+| Silhouette label | 0.535 |
+| Isolated labels | 0.497 |
+| cLISI | 0.991 |
+| Graph connectivity | 0.856 |
+| iLISI | 0.018 |
+| kBET | 0.162 |
+| PCR comparison | 0.000 |
+| Bio conservation (their aggregate) | 0.592 |
+| Batch correction (their aggregate) | 0.342 |
+| Total | 0.492 |
+
+On the manuscript's definition, `avg_bio = mean(NMI, ARI, ASW_label) =
+mean(0.596, 0.341, 0.535) =` **0.491**. So ~0.5 avg_bio is what this checkpoint
+does in upstream's own hands, well below the ~0.70 that the published methods and
+even `Unintegrated` reach on the sceval datasets. A low scPRINT-2 avg_bio here is
+therefore a property of the model on this metric family, not evidence of a broken
+runner — and the flat `ASW_label` we see (~0.51) sits right on their 0.535.
+
+**And it cuts against the batch-correction reading directly.** Upstream's richer
+batch panel for the same embedding is iLISI 0.018, kBET 0.162, PCR 0.000, batch
+aggregate 0.342 — i.e. by every batch metric that is *not* saturated by
+structurelessness, scPRINT-2 barely mixes batches at all. That is independent
+confirmation of the noise-floor finding above: a high `mean(graph_conn,
+ASW_label/batch)` for this embedding is metric saturation, not batch correction.
+Any sentence of the form "scPRINT-2 has strong batch correction" is contradicted by
+upstream's own table.
+
+Caveats for the revision: upstream's evaluation of this checkpoint is zero-shot
+(`FinetuneBatchClass` is imported but never called), and it scores the single-facet
+256-dim embedding via `embedding_key="scprint_emb"`, so `_v3` is the like-for-like
+configuration. `ji9krimq` at 409.7M params is roughly 4x large-v1 (101.1M), which
+is worth stating plainly rather than presenting the comparison as size-matched.
+
+Gene-panel note, which limits how far the comparison can be pushed: upstream
+evaluates on cellxgene datasets carrying full transcriptomes, and its own
+`Preprocessor` default (`min_valid_genes_id=10_000`) refuses anything smaller. Our
+9 datasets range from 1,200 genes (`covid_19`) and 3,289 (`pbmc_10k`) to 33,694
+(`human_pbmc`); five are above 15k and four are not. With `max_len=3200`, the
+narrow-panel datasets are outside the regime upstream ever measures, so per-dataset
+scPRINT-2 numbers on those should be read as "this is what the published recipe
+yields on the manuscript's datasets", not as a claim about the model's ceiling.
+`cell_lines` (32,738 genes) is the control for this: it is full-panel and one of the
+easiest datasets in the suite, so it is the row where a panel-width excuse does not
+apply.
 
 ## 8. Untracked files to leave alone
 
