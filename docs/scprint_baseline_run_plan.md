@@ -261,7 +261,8 @@ manuscript table.
       conventions, and replace the `_v3`/`_v3a` tables — `avg_bio` 0.310 → **0.505**,
       gained on all 9 datasets, and 0.505 falls inside upstream's own 0.467–0.553
       range for this checkpoint
-- [ ] `_v4a` (all facets) — embedded, scoring outstanding
+- [x] `_v4a` (all facets) — all 9 scored; facet choice is a wash (avg_bio mean 0.506
+      vs 0.505), so it changes nothing in the reported table
 - [ ] decide with the user how to present `Unintegrated` (0.637 `avg_bio`, which
       ties or beats every published method in the table, BMFM's three included)
 
@@ -812,38 +813,54 @@ them is the checkpoint and nothing else.
 
 ##### `all facets` averages for this checkpoint, so the all-facets run is a check and not a rival
 
-> The two measured rows in this subsection come from the **misaligned** `_v3`/`_v3a`
-> runs and are retained only as a record of what was checked. The all-facets variant
-> has been re-embedded with the alignment fixed (`_v4a`, all 9 datasets on GPU) and is
-> scoring; the mechanism argument below is unaffected, since it turns on
-> `model.compressor` rather than on the gene index, but the numbers must be replaced
-> before either facet configuration is compared quantitatively.
-
 `cell_emb.py:240-251` branches on `model.compressor`: a `ModuleDict` hstacks the
 per-facet embeddings, `None` sums them and divides by the count. `ji9krimq` logs
 `compressor=no`, so for it all-facets **averages**, exactly like large-v1 — it does
 *not* concatenate the way `small-v2` does. The earlier note that "v2 concatenates"
 was true of `small-v2` and does not generalise to the v2 checkpoint that matters.
-Single-facet is therefore right for `ji9krimq` on both counts: it is the
-checkpoint's own recorded `hyper_parameters["pred_embedding"]`, and it is the
-non-diluting path. `_v3a` is reported to measure the dilution rather than assert it.
+Single-facet is right for `ji9krimq` because it is the checkpoint's own recorded
+`hyper_parameters["pred_embedding"]` and upstream's configuration; the all-facets run
+`_v4a` was done to measure the effect rather than assert it.
 
-Measured, and the result is **mixed**, so the dilution argument does not survive as
-a general claim:
+Measured on all 9 datasets with the gene index repaired, **the facet choice is a wash
+on the headline**:
 
-| dataset | `_v3` (1 facet) bio | `_v3a` (all facets) bio |
-| --- | --- | --- |
-| cell_lines | 0.354 | 0.282 |
-| covid_19 | 0.336 | 0.353 |
+| dataset | `_v4` bio | `_v4a` bio | Δ | `_v4` batch | `_v4a` batch | Δ |
+| --- | --- | --- | --- | --- | --- | --- |
+| cell_lines | 0.547 | 0.551 | +0.004 | 0.962 | 0.942 | −0.019 |
+| covid_19 | 0.447 | 0.477 | +0.030 | 0.816 | 0.804 | −0.012 |
+| heart_atlas | 0.591 | 0.554 | −0.037 | 0.844 | 0.902 | +0.059 |
+| human_pbmc | 0.480 | 0.509 | +0.029 | 0.825 | 0.574 | **−0.251** |
+| immune_all_human | 0.482 | 0.472 | −0.011 | 0.845 | 0.839 | −0.006 |
+| immune_atlas | 0.490 | 0.506 | +0.015 | 0.785 | 0.829 | +0.044 |
+| lung_atlas | 0.517 | 0.515 | −0.003 | 0.812 | 0.831 | +0.019 |
+| pancrm | 0.352 | 0.353 | +0.002 | 0.654 | 0.665 | +0.011 |
+| pbmc_10k | 0.641 | 0.620 | −0.020 | 0.947 | 0.977 | +0.029 |
+| **MEAN** | **0.505** | **0.506** | **+0.001** | **0.832** | **0.818** | **−0.014** |
 
-Averaging costs 0.07 on `cell_lines` and gains 0.017 on `covid_19`. So the honest
-statement is that the facet choice moves `avg_bio` by a few hundredths in either
-direction and does not come close to explaining the gap to the published methods —
-which is the question `_v3a` was run to answer. `_v3` remains the primary number
-because it is upstream's configuration, not because it flatters the model; on
-`covid_19` it is in fact the *lower* of the two. (An earlier note in this file
-claimed all-facets averaging simply hurts. That was generalised from `cell_lines`
-before `covid_19` had landed, and is wrong.)
+The `avg_bio` means differ by 0.001, with signs mixed 5 up / 4 down, so averaging the
+facets neither dilutes nor enriches the cell-type signal in any systematic way — and
+either way it is nowhere near the ~0.11 gap to the published methods, which is the
+question the run was there to answer. `avg_batch` is likewise mixed 4 up / 5 down;
+its −0.014 mean is carried entirely by one dataset, `human_pbmc` at −0.251, and
+excluding that dataset the mean Δ is **+0.016**. A plausible reading of `human_pbmc`
+is that the extra readouts (`assay`, `disease`, `ethnicity`, `sex`, `tissue`) are
+confounded with its batch variable, so folding them in encodes batch structure; but
+that is a per-dataset conjecture, not a general mechanism, since `heart_atlas` and
+`immune_atlas` move the *other* way by +0.059 and +0.044.
+
+Two corrections this table forces, recorded because both were stated in this file
+earlier and both were wrong:
+
+- The claim that all-facets averaging **dilutes** the cell-type signal was based on
+  `_v3a` losing 0.072 on `cell_lines` (0.354 → 0.282). With the gene index repaired
+  the same comparison *gains* 0.004. That dilution effect was an artefact of the
+  misalignment: averaging facets computed from wrong embedding rows compounds the
+  error, averaging correctly-indexed ones does not.
+- A three-dataset reading of the repaired numbers looked like a clean "bio up, batch
+  down" trade with a tidy confounding story behind it. It inverted on the fourth
+  dataset (`heart_atlas`). Four points were not enough to name a mechanism, and the
+  nine-dataset answer is simply that the effect is small and dataset-dependent.
 
 ##### The embedding is 256-dim although `d_model=512`, and that is correct
 
