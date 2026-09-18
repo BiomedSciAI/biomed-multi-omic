@@ -640,9 +640,60 @@ Findings:
 
 Run as `_v3` (single `cell_type_ontology_term_id` facet — upstream's config, and the
 primary number) and `_v3a` (all facets — a check on the averaging effect, see below).
-Numbers pending; the GPU jobs are queued. Configuration is identical to the
-`small-v2` run except for the checkpoint and the `expr_emb_style`-driven
-preprocessing branch, so the comparison between the two isolates the checkpoint.
+Configuration is identical to the `small-v2` run except for the checkpoint and the
+`expr_emb_style`-driven preprocessing branch, so the comparison between the two
+isolates the checkpoint.
+
+##### Results, all 9 datasets
+
+`avg_bio = mean(NMI, ARI, ASW_label)`, `avg_batch = mean(graph_conn,
+ASW_label/batch)` — the manuscript's own definitions. Both metric conventions
+(the scGPT tutorial's `scib_eval` and this repo's
+`calculate_batch_integration_metrics`) were run independently and agree to 3
+decimal places on every one of the 9 datasets, so only one set of figures is
+quoted. `NULL` is a row-shuffled embedding on the same file: the noise floor.
+
+| dataset | scPRINT-2 `ji9krimq` bio | batch | scPRINT-1 large-v1 bio | batch | Unintegrated bio | batch | NULL bio | batch |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cell_lines | 0.354 | 0.965 | 0.665 | 0.934 | 0.742 | 0.957 | 0.167 | 0.997 |
+| covid_19 | 0.336 | 0.725 | 0.452 | 0.850 | 0.440 | 0.764 | 0.147 | 0.538 |
+| heart_atlas | 0.225 | 0.640 | 0.659 | 0.936 | 0.722 | 0.909 | 0.164 | 0.636 |
+| human_pbmc | 0.351 | 0.824 | 0.546 | 0.822 | 0.632 | 0.887 | 0.165 | 0.715 |
+| immune_all_human | 0.320 | 0.802 | 0.537 | 0.889 | 0.549 | 0.893 | 0.163 | 0.586 |
+| immune_atlas | 0.316 | 0.655 | 0.548 | 0.827 | 0.647 | 0.859 | 0.159 | 0.539 |
+| lung_atlas | 0.278 | 0.649 | 0.541 | 0.902 | 0.666 | 0.904 | 0.161 | 0.487 |
+| pancrm | 0.248 | 0.572 | 0.499 | 0.718 | 0.608 | 0.819 | 0.159 | 0.589 |
+| pbmc_10k | 0.363 | 0.839 | 0.745 | 0.976 | 0.727 | 0.952 | 0.164 | 0.703 |
+| **MEAN** | **0.310** | **0.741** | **0.577** | **0.873** | **0.637** | **0.883** | **0.161** | **0.643** |
+
+Against the four published methods recomputed over these same 9 datasets (the
+paper's averages include `dc`, which we do not have, so they are not directly
+comparable): `avg_bio` means are BMFM CONCAT 0.620, MLM MULTITASK 0.630, WCED
+MULTITASK 0.624, scGPT 0.613. So on `avg_bio`, the full ordering is
+
+> MLM 0.630 > WCED 0.624 > CONCAT 0.620 > **scGPT 0.613** > Unintegrated 0.637(!) >
+> **scPRINT-1 0.577** > small-v2 all-facets 0.540 > small-v2 1-facet 0.422 >
+> **scPRINT-2 ji9krimq 0.310** > NULL 0.161
+
+**The headline for R3 is that scPRINT-1 is roughly competitive (0.577) and
+scPRINT-2 is not (0.310)** — the opposite of what the version numbers suggest, but
+consistent with upstream's own modest scIB numbers for this checkpoint (below).
+
+Two features of the `ji9krimq` column are worth stating because they are what a
+reader will probe:
+
+- `avg_bio` is strikingly **flat**, 0.225–0.363, across datasets whose difficulty
+  varies widely — `Unintegrated` on the very same files ranges 0.440–0.742. An
+  embedding whose score barely responds to how separable the data is is the profile
+  of a weakly-structured representation, not of a method that is merely worse.
+- On `heart_atlas`, `avg_batch` 0.640 sits essentially **at** the noise floor
+  (0.636). This is the clearest single illustration of why `avg_batch` must be
+  quoted with the null beside it.
+
+Integrity cross-check: `Unintegrated` was scored independently inside each of the
+four runs (`_lg`, `_v2`, `_v2a`, `_v3`), from the source `obsm` of a freshly-read
+`original.h5ad` each time. All four columns agree to 3dp on all 9 datasets, which
+confirms no run perturbed the source data.
 
 The recipe was diffed line-by-line against upstream's cell 17 and matches it:
 `load_from_checkpoint(..., precpt_gene_emb=None, gene_pos_file=None)`,
@@ -658,6 +709,14 @@ outright — see the gene-panel note below), and `is_symbol` auto-detected rathe
 than pinned to `False` (upstream's inputs are cellxgene Ensembl-indexed; ours are
 mostly symbol-indexed).
 
+`do_postp` is the only other thing that differs between the `small-v2` and
+`ji9krimq` runs (True vs False, because it is gated on `metacell`), so it was
+checked before attributing any difference between the two to the checkpoint:
+`scdataloader/preprocess.py:370-376` writes the normalised matrix to
+`adata.layers["norm"]` and adds `obsm["X_pca"]`. It does **not** overwrite `X`.
+Both runs therefore hand the model the same raw counts, and the difference between
+them is the checkpoint and nothing else.
+
 ##### `all facets` averages for this checkpoint, so `_v3a` is a check and not a rival
 
 `cell_emb.py:240-251` branches on `model.compressor`: a `ModuleDict` hstacks the
@@ -668,6 +727,23 @@ was true of `small-v2` and does not generalise to the v2 checkpoint that matters
 Single-facet is therefore right for `ji9krimq` on both counts: it is the
 checkpoint's own recorded `hyper_parameters["pred_embedding"]`, and it is the
 non-diluting path. `_v3a` is reported to measure the dilution rather than assert it.
+
+Measured, and the result is **mixed**, so the dilution argument does not survive as
+a general claim:
+
+| dataset | `_v3` (1 facet) bio | `_v3a` (all facets) bio |
+| --- | --- | --- |
+| cell_lines | 0.354 | 0.282 |
+| covid_19 | 0.336 | 0.353 |
+
+Averaging costs 0.07 on `cell_lines` and gains 0.017 on `covid_19`. So the honest
+statement is that the facet choice moves `avg_bio` by a few hundredths in either
+direction and does not come close to explaining the gap to the published methods —
+which is the question `_v3a` was run to answer. `_v3` remains the primary number
+because it is upstream's configuration, not because it flatters the model; on
+`covid_19` it is in fact the *lower* of the two. (An earlier note in this file
+claimed all-facets averaging simply hurts. That was generalised from `cell_lines`
+before `covid_19` had landed, and is wrong.)
 
 ##### The embedding is 256-dim although `d_model=512`, and that is correct
 
