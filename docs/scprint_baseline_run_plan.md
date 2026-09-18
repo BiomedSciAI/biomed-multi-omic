@@ -595,6 +595,56 @@ comparison against a crippled or superseded variant. Upstream's evaluation is
 genuinely zero-shot too: `FinetuneBatchClass` is imported in that notebook but never
 called.
 
+#### Read the two axes jointly: that is what the metric pair is for
+
+The pair is designed so that neither axis can be satisfied alone. `avg_batch` is
+trivially maximised — a structureless embedding mixes batches perfectly, and the nulls
+below score up to 1.000 on it. `avg_bio` cannot be gamed that way: both nulls sit at
+0.16–0.17 against an analytic floor of 1/6. But the converse trap is just as real:
+`avg_bio` *can* be raised by picking up structure that happens to separate cells, and
+if that structure is batch, the gain shows up as a loss on `avg_batch`. So neither a
+high `avg_batch` nor a rising `avg_bio` is evidence on its own. **Both moving up
+together is the only signature that cannot be bought cheaply**, and it is the
+criterion this document should be read against.
+
+This is what makes the gene-index repair defensible as a fix rather than a tuning:
+
+| | `_v3` (misaligned) | `_v4` (repaired) | Δ |
+| --- | --- | --- | --- |
+| `avg_bio` | 0.310 | **0.505** | **+0.195** |
+| `avg_batch` | 0.741 | **0.832** | **+0.091** |
+
+Both axes rose on **8 of the 9** datasets. The one exception is `cell_lines`, where
+`avg_batch` was already 0.965 against a noise floor of 1.000 — no headroom to rise
+into, so it went −0.004. On the five datasets whose `avg_batch` sat low, it gained
+0.08–0.20. A misindexed embedding loses on both axes at once and a repaired one gains
+on both at once; that joint movement is stronger evidence than the invariant checks
+(gene counts, warning counts) recorded elsewhere in this file, because it is the
+outcome measure rather than a proxy for it.
+
+Applied to the full table, the joint criterion also settles what can and cannot be
+claimed on either side. Nothing here sits on a trade-off frontier by accident:
+
+| Pareto frontier (dominated by nothing) | `avg_bio` | `avg_batch` |
+| --- | --- | --- |
+| Unintegrated (PCA) | **0.637** | 0.883 |
+| MLM MULTITASK | 0.630 | 0.895 |
+| WCED MULTITASK | 0.624 | 0.907 |
+| BMFM CONCAT | 0.620 | **0.908** |
+
+Those four trade genuinely — ~0.017 of `avg_bio` for ~0.025 of `avg_batch`. Everything
+else in the table is *dominated*, beaten on **both** axes simultaneously:
+
+- **scPRINT-2 `ji9krimq` (0.505/0.832) is beaten on both axes by six things**: all
+  three BMFM variants, scGPT, scPRINT-1 `large-v1`, and Unintegrated. It therefore
+  cannot be described as favouring batch correction over bio conservation, or as
+  making any trade at all. It is behind on both.
+- **scPRINT-1 `large-v1` (0.577/0.873)** is likewise beaten on both by five.
+- **scGPT (0.613/0.880) is beaten on both axes by Unintegrated (0.637/0.883)**, so
+  plain 30-dim PCA satisfies the joint criterion better than scGPT does on these nine
+  datasets. This is the open presentational question in §7, and the joint reading
+  makes it sharper rather than softer: scGPT cannot be defended as trading either.
+
 #### The noise floor, and why `avg_batch` cannot carry a claim on its own
 
 Before any scPRINT-2 number is interpreted: `avg_batch = mean(graph_conn,
@@ -680,6 +730,15 @@ Two entries matter more than the mean:
 Everywhere else the repaired run clears its floor by 0.11–0.28, so `avg_batch` 0.832
 is a real measurement on seven of nine datasets even though it is the lowest of any
 real method.
+
+Keep this subordinate to the joint reading above, though. An earlier draft of this
+section treated floor subtraction on `avg_batch` as the primary analysis; it is not.
+Because `avg_batch` is the axis that can be maximised for free, subtracting its floor
+tells you only whether a number is interpretable, never whether it is good. Its
+residual value is narrow and specific: `cell_lines` `avg_batch` is uninformative for
+*every* method in the table, and `pancrm` is the one dataset where scPRINT-2 is close
+to noise on both axes at once. Ranking, and every claim about capability, comes from
+the joint position.
 
 Practical rule for the revision: rank on `avg_bio`, quote `avg_batch` only with the
 null beside it, and do not write "method X has the best batch correction". An
