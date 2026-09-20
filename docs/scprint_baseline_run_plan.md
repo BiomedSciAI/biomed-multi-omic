@@ -518,6 +518,40 @@ quickstart.
 Both carry the same 9 class facets and the same 335,182-gene vocabulary, so the
 vocabulary-coverage findings below hold for either. `nlayers_cell` is 6 in both.
 
+##### Flavours, parameters and representation widths
+
+All four checkpoints that were run at any point, counted from the `state_dict` by
+module rather than taken from a model card. "Gene-indexed tables" is
+`gene_encoder.embedding` plus `pos_encoder.pe`, both one row per vocabulary gene:
+
+| flavour | file | **total** | main transformer | gene-indexed tables | other | d_model | layers | organisms | vocab rows |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `medium-v1.5` | 222 MB | 18.7M | 6.32M | 11.46M (61%) | 0.93M | 256 | 8 | 2 | 44,756 |
+| `large-v1` | 1.24 GB | **101.1M** | 50.44M | 45.83M (45%) | 4.79M | 512 | 16 | 2 | 44,756 |
+| `small-v2` | 890 MB | 187.8M | 14.75M | 171.74M (**91%**) | 1.26M | 256 | 8 | 16 | 335,182 |
+| `ji9krimq` | 2.18 GB | **409.7M** | 63.87M | 343.75M (**84%**) | 2.10M | 512 | 16 | 16 | 335,182 |
+
+Representation widths, measured as the `obsm` width actually handed to the scorer, not
+inferred from `d_model`:
+
+| run | flavour | 1 facet | all facets | facet combination |
+| --- | --- | --- | --- | --- |
+| `_lg` | `large-v1` | **512** | 512 | average |
+| `_v2` / `_v2a` | `small-v2` | **64** | **424** | **concatenate** |
+| `_v3` / `_v4` / `_v4a` | `ji9krimq` | **256** | **256** | average |
+| — | `Unintegrated` | 30 | — | PCA |
+| — | nulls | 424 | — | built from `_v2a`, hence `Random424` |
+
+Two things this settles empirically:
+
+- **`_v4a` is 256 dims, exactly like `_v4`.** Adding four more facets does not widen
+  the representation, which is direct confirmation of the `compressor=no` → *average*
+  branch at `cell_emb.py:240-251` rather than a reading of the source. `small-v2` is
+  the flavour that concatenates (64 → 424).
+- **`small-v2`'s single-facet representation is only 64 dims**, and 91% of its
+  parameters are vocabulary tables. Another reason the `_v2`/`_v2a` runs are not a
+  meaningful scPRINT-2 baseline beyond being the wrong checkpoint.
+
 **Three recipe differences from v1, each of which would silently break a run.**
 Taken from the upstream Figure-5 batch-correction repro notebook and cross-checked
 against `cell_emb.py` and the checkpoint's own `hyper_parameters`:
@@ -874,8 +908,11 @@ overclaim in either direction:
   upstream is gone, and it closed by agreement with the model's authors rather than
   by our own before/after comparison.
 - **large-v1 beats `ji9krimq` on all 9 datasets**, margins 0.005 (`covid_19`) to
-  0.147 (`pancrm`). But `ji9krimq` is 409.7M parameters against large-v1's 101.1M,
-  so this is **not** a size-matched comparison and carries no scaling claim.
+  0.147 (`pancrm`). `ji9krimq` is 409.7M parameters against large-v1's 101.1M, but
+  84% of that gap is gene-vocabulary tables that are mostly inert on human data —
+  the two transformers are 13% apart at identical `d_model` 512 / 16 layers — so this
+  is closer to size-matched than the totals suggest. It still carries no scaling
+  claim in either direction; see the corrected discussion in §11.
 - **`ji9krimq`'s `avg_batch` of 0.832 is the lowest of any real method** in the table
   (0.873–0.908 for the rest). Any reading in which scPRINT-2 is the best batch
   corrector is now contradicted by our own corrected numbers, on top of upstream's
@@ -1318,9 +1355,28 @@ scPRINT-2.
 Caveats that survive regardless: upstream's evaluation of this checkpoint is zero-shot
 (`FinetuneBatchClass` is imported but never called), and it scores the single-facet
 256-dim embedding via `embedding_key="scprint_emb"`, so `_v4` is the like-for-like
-configuration. `ji9krimq` at 409.7M params is roughly 4x large-v1 (101.1M), which
-is worth stating plainly rather than presenting the comparison as size-matched —
-particularly since large-v1 outscores it on all nine datasets.
+configuration.
+
+On size-matching, an earlier version of this paragraph said `ji9krimq` (409.7M) is
+"roughly 4x large-v1 (101.1M)" and that the comparison therefore carries no scaling
+claim. **That was too generous to `ji9krimq` and is corrected here.** Counted by
+module (see §"Flavours, parameters and representation widths"), 84% of that 4.05x gap
+is gene-indexed lookup tables, not capacity:
+
+- both are `d_model` 512 with 16 layers;
+- main transformer 56.76M (`ji9krimq`) vs 50.44M (`large-v1`) — **13% apart**, or 27%
+  counting `ji9krimq`'s extra 7.11M `cell_transformer`;
+- the rest of the gap is the gene table growing 7.5x, 44,756 → 335,182 rows, to cover
+  16 organisms instead of 2. **All nine datasets here are human**, so the large
+  majority of those rows are never indexed in these runs.
+
+So the capacity actually brought to bear on this benchmark is much closer to matched
+than the totals imply, and `large-v1` still outscores `ji9krimq` on all nine datasets.
+State the narrow version: total parameters differ 4x, transformers differ 13%, and the
+difference is mostly a multi-organism vocabulary that is inert on human data. The one
+asymmetry running the other way is representation width — `ji9krimq` emits 256 dims
+against `large-v1`'s 512 — but width is not the binding constraint on this benchmark,
+since 30-dim PCA `Unintegrated` has the highest `avg_bio` in the table.
 
 Gene-panel note, now a *secondary* limit behind the gene-table defect but still
 worth keeping for the re-run: upstream
