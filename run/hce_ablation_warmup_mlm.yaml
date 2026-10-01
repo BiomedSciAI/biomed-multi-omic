@@ -1,0 +1,108 @@
+# HCE-vs-CE ablation, stage 1: label-free MLM warmup on the 1pct cellxgene h5ad dump.
+# Matched to hce_ablation_warmup_wced (model/optim/data/L=1024/batch/epochs); objective and
+# zero-padding follow the paper MLM run (fin/mlm): genes+expressions masked 15%/0.95,
+# zeros interleaved so is_zero_bce is a real task. Labels-free (no label losses).
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: protein_coding
+  prepend_tokens: null
+model:
+  _target_: bmfm_targets.models.predictive.llama.LlamaForMultiTaskConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  hidden_act: gelu
+  hidden_size: 384
+  initializer_range: 0.02
+  layer_norm_eps: 1.0e-12
+  pad_token_id: 0
+  flex_attention: true
+  use_cache: true
+  attention: flex
+  checkpoint: null
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/${track_clearml.task_name}
+  max_epochs: 10
+  limit_train_batches: null
+  limit_val_batches: 20
+  precision: 16-mixed
+  val_check_interval: 0.2
+  gradient_clip_val: 0.5
+  accelerator: gpu
+  max_steps: -1
+  tf32_mode: medium
+  accumulate_grad_batches: 1
+  freeze_layers: false
+  resume_training_from_ckpt: false
+  num_sanity_val_steps: 2
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 1000
+  weight_decay: 0.1
+  learning_rate: 0.0001
+  betas:
+  - 0.9
+  - 0.99
+  epsilon: 1.0e-08
+  lr_decay_steps: null
+  losses:
+  - field_name: expressions
+    name: mse
+    ignore_zero: true
+  - field_name: expressions
+    name: is_zero_bce
+  - field_name: genes
+    name: cross_entropy
+data_module:
+  _target_: bmfm_targets.training.data_module.DataModule
+  _partial_: true
+  num_workers: 16
+  shuffle: true
+  max_length: 1024
+  sequence_order: random
+  padding: longest
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  transform_datasets: false
+  batch_size: ${n_cells_per_batch}
+  mlm: true
+  change_ratio: 0.15
+  mask_ratio: 0.95
+  switch_ratio: 0.0
+  pad_zero_expression_strategy:
+    strategy: batch_wise
+    interleave_zero_ratio: 0.9
+    expressed_sample_ratio: 0.2
+  masking_strategy: null
+  dataset_kwargs:
+    processed_data_source: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/cellxgene_random_1pct_h5ad/processed.h5ad
+    split_column_name: split
+    expose_zeros: all
+fields:
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: genes
+  is_masked: true
+  decode_modes:
+  - token_scores
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: expressions
+  is_masked: true
+  tokenization_strategy: continuous_value_encoder
+  encoder_kwargs:
+    kind: scale_adapt
+    n_sin_basis: 48
+    basis_scale: 0.01
+    trainable: false
+    zero_as_special_token: true
+  decode_modes:
+  - regression
+  - is_zero
+seed:
+  seed_value: 1234
+label_columns: []
+track_clearml:
+  project_name: bmfm-targets/hce_ablation
+  task_name: hce_ablation_warmup_mlm
+  continue_last_task: false
+n_cells_per_batch: 64
