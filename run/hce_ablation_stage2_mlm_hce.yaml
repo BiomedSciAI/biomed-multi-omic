@@ -1,0 +1,129 @@
+# HCE-vs-CE ablation, stage 2: MLM warmup -> multitask with cell type = hce.
+# Init: weights from hce_ablation_warmup_mlm/last.ckpt (label-free, 10 ep, 1pct h5ad), fresh optimizer.
+# Data: 1pct TS-v2-cleaned 'dropped' nexus index (original 1pct split minus TS-v2 leaked train cells).
+# Labels/label losses follow run/checkpoints/biomed.rna.llama.32m.mlm.multitask.v1.yaml for BOTH arms
+# (no sex; donor focal w=0.05 with gradient reversal). Zero-padding follows both refs (0.9/0.2).
+# Scale matches the warmup (L=1024, batch 64, 1 GPU). The HCE and CE configs differ ONLY in the cell-type loss name.
+tokenizer:
+  _target_: bmfm_targets.config.TokenizerConfig
+  identifier: protein_coding
+  prepend_tokens: null
+model:
+  _target_: bmfm_targets.models.predictive.llama.LlamaForMultiTaskConfig
+  _partial_: true
+  num_hidden_layers: 12
+  num_attention_heads: 12
+  hidden_act: gelu
+  hidden_size: 384
+  initializer_range: 0.02
+  layer_norm_eps: 1.0e-12
+  pad_token_id: 0
+  flex_attention: true
+  use_cache: true
+  attention: flex
+  checkpoint: /proj/bmfm/users/dmichael/training_runs/hce_ablation_warmup_mlm/last.ckpt
+task:
+  _target_: bmfm_targets.config.TrainingTaskConfig
+  default_root_dir: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/${track_clearml.task_name}
+  max_epochs: 10
+  limit_train_batches: null
+  limit_val_batches: 256
+  precision: 16-mixed
+  val_check_interval: 0.5
+  gradient_clip_val: 0.5
+  accelerator: gpu
+  max_steps: -1
+  tf32_mode: medium
+  accumulate_grad_batches: 1
+  freeze_layers: false
+  resume_training_from_ckpt: false
+  num_sanity_val_steps: 2
+trainer:
+  _target_: bmfm_targets.config.TrainerConfig
+  warmup_steps: 1000
+  weight_decay: 0.1
+  learning_rate: 0.0001
+  betas:
+  - 0.9
+  - 0.99
+  epsilon: 1.0e-08
+  lr_decay_steps: null
+  losses:
+  - label_column_name: cell_type_ontology_term_id
+    weight: 1
+    name: hce
+  - label_column_name: tissue
+    weight: 1
+    name: focal
+    focal_gamma: 2
+  - label_column_name: tissue_general
+    weight: 1
+    name: focal
+    focal_gamma: 2
+  - label_column_name: donor_id
+    weight: 0.05
+    name: focal
+    focal_gamma: 2
+  - field_name: expressions
+    name: mse
+    ignore_zero: true
+  - field_name: expressions
+    name: is_zero_bce
+data_module:
+  _target_: bmfm_targets.datasets.cellxgene.CellXGeneNexusDataModule
+  _partial_: true
+  num_workers: 8
+  mlm: true
+  collation_strategy: multitask
+  shuffle: true
+  max_length: 1024
+  padding: longest
+  sequence_order: random
+  batch_size: 64
+  limit_genes: protein_coding
+  log_normalize_transform: true
+  pad_zero_expression_strategy:
+    strategy: batch_wise
+    interleave_zero_ratio: 0.9
+    expressed_sample_ratio: 0.2
+  change_ratio: 0.15
+  mask_ratio: 0.95
+  switch_ratio: 0.0
+  dataset_kwargs:
+    uri: /proj/bmfm/omics/data/scRNA/cellxgene/2025-01-30/soma/
+    index_dir: /proj/bmfm/omics/data/scRNA/cellxgene/2026-09-17/cellxgene_random_1pct_TSv2evalcleaned_dropped_nexus_index/
+    expose_zeros: all
+    raw_counts: true
+label_columns:
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: cell_type_ontology_term_id
+  label_ontology: celltypeont
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: tissue
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: tissue_general
+- _target_: bmfm_targets.config.LabelColumnInfo
+  label_column_name: donor_id
+  gradient_reversal_coefficient: 1.0
+fields:
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: genes
+- _target_: bmfm_targets.config.FieldInfo
+  field_name: expressions
+  is_masked: true
+  tokenization_strategy: continuous_value_encoder
+  encoder_kwargs:
+    kind: scale_adapt
+    n_sin_basis: 48
+    basis_scale: 0.01
+    trainable: false
+    zero_as_special_token: true
+  decode_modes:
+  - regression
+  - is_zero
+seed:
+  seed_value: 1234
+track_clearml:
+  project_name: bmfm-targets/hce_ablation
+  task_name: hce_ablation_stage2_mlm_hce
+  continue_last_task: false
