@@ -519,14 +519,17 @@ class CziBenchmarkCallback(pl.Callback):
     def execute_czi_cell_type_classification_benchmark(self, adata_with_embeddings):
         label_prediction_task = MetadataLabelPredictionTask()
 
-        # take ground-truth labels from the dataset
+        # take ground-truth labels from the dataset. There is deliberately no
+        # `classifiers=` here: MetadataLabelPredictionTaskInput has no such
+        # field, so passing one is silently dropped and czbenchmarks fits its
+        # full set regardless.
         prediction_task_input = MetadataLabelPredictionTaskInput(
             labels=adata_with_embeddings.obs[self.target_column_name],
-            classifiers=["lr"],
             n_folds=self.n_folds,
         )
 
-        # evaluate embeddings against the ground-truth labels using fine-tuning with classifcal logistic regression classifier.
+        # evaluate embeddings against the ground-truth labels with czbenchmarks'
+        # own cross-validated classifiers.
         results = label_prediction_task.run(
             cell_representation=adata_with_embeddings.obsm[MODEL_EMBED_KEY],
             task_input=prediction_task_input,
@@ -544,9 +547,6 @@ class CziBenchmarkCallback(pl.Callback):
             aggfunc="mean",
             observed=False,
         )
-        results_table_wide = results_table_wide[
-            ["lr"]
-        ]  # remove the "mean" column cause we asked only the lr classifier
         return results_table_wide
 
 

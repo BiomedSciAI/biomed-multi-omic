@@ -25,4 +25,7 @@ def test_czi_benchhmark(dummy_embeddings):
 
     results = callback_obj.execute_czi_cell_type_classification_benchmark(adata_emb)
     assert results.shape[0] > 0
-    assert "lr" in results.columns
+    # czbenchmarks fits lr, knn and rf and adds a MEAN(...) column; all of them
+    # are paid for, so all of them must be returned.
+    assert {"lr", "knn", "rf"} <= set(results.columns), results.columns
+    assert any(c.startswith("MEAN(") for c in results.columns), results.columns
