@@ -14,7 +14,16 @@ def dummy_embeddings():
     return ad, results
 
 
-def test_czi_benchhmark(dummy_embeddings):
+def test_czi_label_prediction_keeps_every_classifier(dummy_embeddings):
+    """Every classifier czbenchmarks ran must be collected, not just ``lr``.
+
+    ``MetadataLabelPredictionTaskInput`` has no ``classifiers`` field, so a
+    request for a subset is silently dropped and czbenchmarks always fits lr,
+    knn and rf plus a ``MEAN(...)`` row. Selecting one column afterwards
+    therefore paid for all of them and threw two thirds away, and -- worse --
+    made us incomparable to the published CZI tables, which quote the
+    per-classifier values. This pins the whole set.
+    """
     ad, results = dummy_embeddings
     callback_obj = CziBenchmarkCallback(
         batch_column_name="batch", target_column_name="celltype", n_folds=2
@@ -23,9 +32,17 @@ def test_czi_benchhmark(dummy_embeddings):
     adata_emb = ad.copy()
     adata_emb.obsm["BMFM_RNA"] = aligned
 
-    results = callback_obj.execute_czi_cell_type_classification_benchmark(adata_emb)
-    assert results.shape[0] > 0
-    # czbenchmarks fits lr, knn and rf and adds a MEAN(...) column; all of them
-    # are paid for, so all of them must be returned.
-    assert {"lr", "knn", "rf"} <= set(results.columns), results.columns
-    assert any(c.startswith("MEAN(") for c in results.columns), results.columns
+    # on_predict_end normally sets these up; there is no ClearML in tests, which
+    # must not stop the metrics being collected.
+    callback_obj.cl = None
+    callback_obj._rows = []
+    callback_obj._report_label_prediction(aligned, adata_emb.obs["celltype"])
+
+    assert callback_obj._rows, "no label prediction metrics were collected"
+    classifiers = {r["classifier"] for r in callback_obj._rows}
+    assert {"lr", "knn", "rf"} <= classifiers, classifiers
+    assert any(c.startswith("MEAN(") for c in classifiers), classifiers
+    assert {"mean_fold_f1", "mean_fold_accuracy"} <= {
+        r["metric"] for r in callback_obj._rows
+    }
+    assert all(r["task"] == "CZI Cell Type Classification" for r in callback_obj._rows)
