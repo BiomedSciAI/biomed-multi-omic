@@ -254,12 +254,19 @@ class BatchIntegrationCallback(pl.Callback):
     def on_predict_end(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ) -> None:
+        # ClearML is a reporting surface, not a precondition. These scib metrics
+        # are the convention our published zero-shot tables use, and they cost a
+        # full Leiden resolution sweep over the embedding -- so losing them
+        # because a logger is absent, or because the server rejected this task's
+        # oversized hyperparameters, would mean paying for the GPU pass twice.
+        # The metrics table is therefore always computed and written to
+        # `trainer.log_dir`; ClearML gets it too, when it is there.
         self.cl = Logger.current_logger()
         if not self.cl:
             logger.warning(
-                "ClearML logger not found, skipping batch integration reporting."
+                "ClearML logger not found; batch integration metrics will be "
+                "written to disk only."
             )
-            return
 
         adata_emb = get_adata_with_embeddings(trainer, self.batch_column_name)
         if self.target_column_name is None:
@@ -267,12 +274,28 @@ class BatchIntegrationCallback(pl.Callback):
                 0
             ].label_column_name
 
-        self._execute_batch_integration(adata_emb)
+        self._execute_batch_integration(trainer, adata_emb)
 
-    def _execute_batch_integration(self, adata_emb: sc.AnnData) -> None:
-        """Run all batch integration evaluations and report to ClearML."""
+    def _execute_batch_integration(
+        self, trainer: pl.Trainer, adata_emb: sc.AnnData
+    ) -> None:
+        """Run all batch integration evaluations, persist them, and report them."""
         # Core metrics table
         batch_int_df = self._generate_metrics_table(adata_emb)
+
+        out = pathlib.Path(trainer.log_dir) / "batch_integration_metrics.csv"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        batch_int_df.assign(
+            n_cells=int(adata_emb.n_obs),
+            target_column=self.target_column_name,
+            batch_column=self.batch_column_name,
+        ).to_csv(out, index=False)
+        logger.info("wrote batch integration metrics to %s", out)
+
+        # Everything below is a ClearML-only reporting surface (tables, images).
+        if not self.cl:
+            return
+
         self.cl.report_table(
             title="Batch Integration",
             series="Batch Integration",
