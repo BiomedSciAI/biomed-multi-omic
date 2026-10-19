@@ -338,10 +338,31 @@ def single_batch_bio_metrics(
     """
     Bio-conservation metrics (NMI/ARI/ASW) for a single-batch embedding.
 
-    Clusters with Leiden when igraph/leidenalg are installed, so the returned
-    values match historical runs; otherwise falls back to KMeans(k=#label
-    classes) so the metrics stay computable without those optional, copyleft
-    dependencies. Both paths cluster on the full data before masking to NaN-free
+    Returns values on the SAME scale as the multi-batch ``scib.metrics`` path, so
+    that a per-tissue mean of ``avg_bio`` may mix single- and multi-batch tissues.
+    Bio conservation does not depend on the batch assignment, so the same
+    embedding must not score differently just because it has one batch. Three
+    things are needed for that, and all three were previously wrong:
+
+    * ``ASW_label`` is rescaled to [0, 1] as ``(asw + 1) / 2``, matching
+      ``scib.me.silhouette(..., scale=True)``. The raw sklearn score is in
+      [-1, 1], so leaving it unscaled understated single-batch tissues by about
+      0.35 in absolute terms on real data.
+    * Leiden resolution is optimised against NMI via
+      ``scib.metrics.cluster_optimal_resolution``, as ``scib.metrics`` does
+      internally. A single default-resolution call returns an NMI/ARI that is
+      merely a lower bound on what the multi-batch path would report.
+    * ``ASW_label`` is returned whenever at least two label classes are present.
+      sklearn handles singleton classes, and ``scib`` applies no stricter
+      condition, so requiring every class to hold >= 2 cells dropped the metric
+      from tissues where ``scib`` would have reported it -- silently reducing
+      ``avg_bio`` to a mean of two metrics instead of three.
+
+    Clusters with Leiden when igraph/leidenalg are installed; otherwise falls
+    back to KMeans(k=#label classes) so the metrics stay computable without
+    those optional, copyleft dependencies. The KMeans path cannot be resolution
+    optimised, so its NMI/ARI remain approximate and are not comparable to the
+    ``scib`` path. Both paths cluster on the full data before masking to NaN-free
     rows. Assumes ``sc.pp.neighbors`` has already been run on ``adata_emb``
     (required by the Leiden path).
     """
@@ -355,24 +376,46 @@ def single_batch_bio_metrics(
     X = adata_emb.obsm[embed_key]
     mask = pd.notna(labels)
 
+    cluster_key = "__tmp_scib_cluster"
+    # Resolution optimisation maximises NMI against the labels, which is
+    # degenerate with a single class (and raises inside scib), so fall back to a
+    # plain Leiden there. Every bio metric is undefined or trivial in that case
+    # anyway; this only keeps the call from blowing up.
+    n_label_classes = pd.Series(labels[mask]).nunique()
     try:
         import leidenalg  # noqa: F401
     except ImportError:
         clusters = _kmeans_clusters(X, labels)[mask]
     else:
-        cluster_key = "__tmp_scib_cluster"
-        sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
+        if cluster_key in adata_emb.obs:
+            del adata_emb.obs[cluster_key]
+        if n_label_classes > 1:
+            from scib.metrics.clustering import cluster_optimal_resolution
+
+            # Sweeps resolutions and keeps the NMI-maximising clustering, which
+            # is what scib.metrics() does for its own nmi_/ari_ outputs.
+            cluster_optimal_resolution(
+                adata_emb,
+                label_key=label_col,
+                cluster_key=cluster_key,
+                verbose=False,
+                force=True,
+            )
+        else:
+            sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
         clusters = adata_emb.obs[cluster_key].to_numpy()[mask]
         del adata_emb.obs[cluster_key]
 
     labels, X = labels[mask], X[mask]
-    vc = pd.Series(labels).value_counts()
+    n_classes = pd.Series(labels).nunique()
     return {
         "NMI_cluster/label": normalized_mutual_info_score(labels, clusters),
         "ARI_cluster/label": adjusted_rand_score(labels, clusters),
+        # (asw + 1) / 2 to match scib.me.silhouette's scale=True default.
+        # Undefined for a single class, which is what sklearn itself raises on.
         "ASW_label": (
-            float(silhouette_score(X, labels))
-            if (vc.size > 1 and vc.min() >= 2)
+            (float(silhouette_score(X, labels)) + 1) / 2
+            if n_classes > 1
             else np.nan
         ),
     }
@@ -397,7 +440,11 @@ def calculate_batch_integration_metrics(
         AnnData object with embeddings in obsm[embed_key] and metadata in obs
     batch_column_name : str or None
         Column name for batch information in adata_emb.obs. If None or single batch,
-        only bio metrics will be calculated.
+        only bio metrics will be calculated. The bio metrics themselves are on the
+        same scale either way (see :func:`single_batch_bio_metrics`), so a mean of
+        ``Avg_bio`` over a mix of single- and multi-batch inputs is meaningful;
+        ``Avg_batch`` is undefined for single-batch inputs and is omitted, so a
+        mean of ``Avg_batch`` is over the multi-batch inputs only.
     target_column_name : str
         Column name for target labels (e.g., cell type) in adata_emb.obs
     embed_key : str, default="concatenated_embeddings"
@@ -419,6 +466,13 @@ def calculate_batch_integration_metrics(
     -----
     This implementation follows the same logic as BatchIntegrationCallback._generate_metrics_table()
     from bmfm_targets/training/callbacks.py (lines 360-444).
+
+    Single- and multi-batch inputs take different code paths
+    (:func:`single_batch_bio_metrics` vs ``scib.metrics``). The bio block is
+    deliberately kept comparable between them: ASW is rescaled to [0, 1] and
+    Leiden resolution is NMI-optimised in both. If the KMeans fallback is taken
+    (no leidenalg installed) NMI/ARI are approximate and not comparable to the
+    scib path.
 
     Examples
     --------
