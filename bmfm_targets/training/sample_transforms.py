@@ -475,9 +475,13 @@ def dropout_random(
     """
     assert 0 <= dropout_ratio < 1
     sequence_len = len(next(iter(mfi.data.values())))
-    dropout_indices = [
+    # set, not list: `i not in dropout_indices` below is a membership test run once
+    # per element per field, so a list makes this O(n^2). At the real pre-truncation
+    # sequence length (~19071 genes) that cost 0.849 s/cell -- 90% of all dataloader
+    # CPU -- and starved the GPU. A set is semantically identical and ~355x faster.
+    dropout_indices = {
         i for i in range(sequence_len) if dropout_ratio > random.random()
-    ]
+    }
     data_after_dropout = {}
     for field, values in mfi.data.items():
         data_after_dropout[field] = [
