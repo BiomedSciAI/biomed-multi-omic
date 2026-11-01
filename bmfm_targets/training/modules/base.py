@@ -100,6 +100,35 @@ class BaseTrainingModule(pl.LightningModule):
                 )
                 model_config.label_columns = []
 
+        # SCModelConfigBase declares `tie_word_embeddings = False` as a CLASS
+        # attribute, because these models do not tie input/output embeddings.
+        # A config rehydrated from a checkpoint whose saved config.json predates
+        # that declaration has no such key, so PretrainedConfig.__init__ sets an
+        # INSTANCE attribute from the transformers default (True), shadowing the
+        # class attribute. post_init() -> tie_weights() then calls
+        # SCBertForMultiTaskModeling.get_output_embeddings(), which returns
+        # `self.cls.predictions.decoder` -- correct for SCBertForMaskedLM, where
+        # self.cls IS the SCOnlyMLMHead, but one level short on the multitask
+        # class, where self.cls is an SCMultiTaskHead holding that head under
+        # .predictions. The result is a hard
+        #     AttributeError: 'SCOnlyMLMHead' object has no attribute 'decoder'
+        # at construction, before a single batch is read (seen on the released
+        # ibm-research/biomed.rna.bert.110m.wced.v1 checkpoint, 2026-11-01).
+        #
+        # Restoring the documented intent is the right repair here rather than
+        # "fixing" get_output_embeddings: in predict mode every weight comes from
+        # the checkpoint, so tying is a no-op we only need to not crash on --
+        # whereas making the tie actually happen would overwrite a published
+        # model's decoder weights with its input embeddings and silently change
+        # what we are benchmarking.
+        if getattr(model_config, "tie_word_embeddings", False):
+            logger.info(
+                "Forcing tie_word_embeddings=False: these models do not tie "
+                "input/output embeddings, and a checkpoint config predating that "
+                "declaration otherwise crashes in tie_weights()."
+            )
+            model_config.tie_word_embeddings = False
+
         # this is needed when model_config is loaded from old checkpoints which don't contain the label_columns item in "hyperparameter" section
         if (
             not hasattr(model_config, "label_columns")
