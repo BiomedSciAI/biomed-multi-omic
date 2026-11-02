@@ -483,9 +483,10 @@ class CziBenchmarkCallback(pl.Callback):
     the two are different implementations and are expected to differ in value.
     """
 
-    #: czbenchmarks tasks run by default -- the full suite that applies to a
-    #: labelled, batched embedding.
+    #: All czbenchmarks tasks that can be selected with ``tasks``.
     ALL_TASKS = ("label_prediction", "clustering", "embedding", "batch_integration")
+    DEFAULT_TASKS = ("label_prediction",)
+    ALL_CLASSIFIERS = ("lr", "knn", "rf")
 
     def __init__(
         self,
@@ -493,15 +494,23 @@ class CziBenchmarkCallback(pl.Callback):
         target_column_name: str | None = None,
         n_folds: int = 5,
         tasks: Iterable[str] | None = None,
+        classifiers: Iterable[str] | None = None,
     ):
         super().__init__()
         self.batch_column_name = batch_column_name
         self.target_column_name = target_column_name
         self.n_folds = n_folds
-        self.tasks = tuple(tasks) if tasks is not None else self.ALL_TASKS
+        self.tasks = tuple(tasks) if tasks is not None else self.DEFAULT_TASKS
         unknown = set(self.tasks) - set(self.ALL_TASKS)
         if unknown:
             raise ValueError(f"unknown czbenchmarks tasks: {sorted(unknown)}")
+        self.classifiers = tuple(classifiers) if classifiers is not None else ("lr",)
+        unknown = set(self.classifiers) - set(self.ALL_CLASSIFIERS)
+        if unknown or not self.classifiers:
+            raise ValueError(
+                f"classifiers must be a non-empty subset of {self.ALL_CLASSIFIERS}, "
+                f"got {self.classifiers}"
+            )
         self.cl: Logger | None = None
 
     def on_predict_end(self, trainer, pl_module):
@@ -655,11 +664,7 @@ class CziBenchmarkCallback(pl.Callback):
 
     def _report_task(self, title: str, task, embeddings, task_input) -> None:
         """Run one czbenchmarks task and report its metrics verbatim."""
-        try:
-            results = task.run(cell_representation=embeddings, task_input=task_input)
-        except Exception:
-            logger.exception("czbenchmarks task %s failed, skipping", title)
-            return
+        results = task.run(cell_representation=embeddings, task_input=task_input)
         table = self._results_frame(results)[["metric", "value"]]
         self._collect(title, table)
         if not self.cl:
@@ -671,26 +676,28 @@ class CziBenchmarkCallback(pl.Callback):
 
     def _report_label_prediction(self, embeddings, labels) -> None:
         """
-        CZI cross-validated label prediction.
+        CZI cross-validated label prediction with the selected classifiers.
 
-        czbenchmarks runs *all* of its classifiers (lr, knn, rf) and emits an
-        extra ``MEAN(...)`` row across them; the task input has no
-        ``classifiers`` field, so asking for a subset is silently ignored. All
-        of it is reported here, because the published CZI tables quote the
-        per-classifier values and dropping them would make us incomparable.
+        Reports each classifier separately, as the published CZI tables do,
+        plus the ``MEAN(...)`` row czbenchmarks adds across them.
         """
-        try:
-            results = MetadataLabelPredictionTask().run(
-                cell_representation=embeddings,
-                task_input=MetadataLabelPredictionTaskInput(
-                    labels=labels, n_folds=self.n_folds
-                ),
-            )
-        except Exception:
-            logger.exception("czbenchmarks label prediction failed, skipping")
-            return
-
+        results = MetadataLabelPredictionTask().run(
+            cell_representation=embeddings,
+            task_input=MetadataLabelPredictionTaskInput(
+                labels=labels,
+                n_folds=self.n_folds,
+                classifiers=list(self.classifiers),
+            ),
+        )
         table = self._results_frame(results)
+        if "classifiers" not in MetadataLabelPredictionTaskInput.model_fields:
+            # Older czbenchmarks silently ignore `classifiers` and fit all of them.
+            logger.warning(
+                "this czbenchmarks version has no `classifiers` option; "
+                "filtering its results to %s",
+                self.classifiers,
+            )
+            table = table[table["classifier"].isin(self.classifiers)]
         self._collect("CZI Cell Type Classification", table)
         wide = table.pivot_table(
             index="metric",
@@ -713,9 +720,11 @@ class CziBenchmarkCallback(pl.Callback):
                     continue
                 name = f"czi_label_prediction_{metric}" + (f"_{clf}" if clf else "")
                 self.cl.report_single_value(name=name, value=float(value))
-        if "f1" in wide.index and "lr" in wide.columns:
-            # kept for continuity with previously reported runs
-            self.cl.report_single_value(name="f1", value=float(wide.loc["f1", "lr"]))
+        if "mean_fold_f1" in wide.index and "lr" in wide.columns:
+            # scalar name kept from before the full-table reporting
+            self.cl.report_single_value(
+                name="f1", value=float(wide.loc["mean_fold_f1", "lr"])
+            )
 
 
 class SGDCallback(pl.Callback):
