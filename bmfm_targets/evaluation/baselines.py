@@ -26,11 +26,7 @@ logger = logging.getLogger(__name__)
 
 AVAILABLE_METHODS = ["Unintegrated", "Harmony", "Scanorama", "LIGER", "scPRINT"]
 
-# HuggingFace checkpoint used for the scPRINT baseline (jkobject/scPRINT repo).
-# large-v1 (101.1M params, d_model 512, nlayers 16) and NOT the medium-v1.5
-# quickstart default (18.7M, 256, 8): scPRINT's zero-shot claim is about "our large
-# cell model", and on the 9 sceval datasets medium-v1.5 scores 0.093 lower on
-# avg_bio conservation (0.484 vs 0.577). See docs/scprint_baseline_run_plan.md §7.
+# HuggingFace checkpoint for the scPRINT baseline: large-v1, not the smaller medium-v1.5 quickstart default.
 SCPRINT_DEFAULT_CHECKPOINT = "large-v1.ckpt"
 SCPRINT_HUMAN = "NCBITaxon:9606"
 SCPRINT_MOUSE = "NCBITaxon:10090"
@@ -38,10 +34,7 @@ SCPRINT_MOUSE = "NCBITaxon:10090"
 
 def get_pca(adata: AnnData, batch_key: str | None, n_comps: int = 30) -> np.ndarray:
     """Compute PCA on (optionally normalized) data with HVG selection."""
-    # Imported lazily: importing bmfm_targets pulls in peft/transformers, which
-    # cannot coexist with the torch 2.2.0 that scprint pins. Keeping this out of
-    # module scope lets the scPRINT baseline run from a dedicated scprint env by
-    # loading this file directly.
+    # Imported lazily so this file can be loaded from a dedicated scprint env.
     from bmfm_targets.datasets.datasets_utils import guess_if_raw
 
     adata = adata.copy()
@@ -163,10 +156,7 @@ def _counts_source(adata: AnnData) -> str | None:
     return None
 
 
-# Ensembl ID prefix per organism. Needed only to attribute a *retired* gene ID to
-# an organism: such an ID is by definition absent from the ontology, so the ontology
-# cannot be asked which organism it belonged to. scPRINT-1's checkpoints cover human
-# and mouse only, and compute_scprint checks ``organism in model.organisms``.
+# Ensembl ID prefix per organism, used to attribute retired gene IDs.
 _ENSEMBL_PREFIX = {SCPRINT_HUMAN: "ENSG", SCPRINT_MOUSE: "ENSMUSG"}
 
 GenesByOrganism = Sequence[str] | Mapping[str, Sequence[str]]
@@ -227,10 +217,9 @@ def _scprint_index_drift(
     gdf = load_genes(list(organisms))
     drift = {}
     for org in organisms:
-        # The model's genes for this organism, in the model's own order ...
+        # Model genes in the model's order, vs. what the Collator's mask selects.
         want = want_by_org[org]
         in_model = set(want)
-        # ... versus what the Collator's mask actually selects, in ontology order.
         got = [str(g) for g in gdf[gdf.organism == org].index if str(g) in in_model]
         first = next(
             (i for i in range(min(len(got), len(want))) if got[i] != want[i]), None
@@ -269,10 +258,7 @@ def _register_retired_genes(
         known = {str(g) for g in gdf[gdf.organism == org].index}
         missing = [g for g in want_by_org[org] if g not in known]
         for gid in missing:
-            # A retired ID has no current symbol, so reuse the ID. It cannot match
-            # "MT-", "RPS"/"RPL" or "^HB[^(P)]", which is what we want: load_genes
-            # uses those string tests to flag QC markers, and these genes carry no
-            # counts and must not be treated as such.
+            # Retired IDs have no symbol; reuse the ID so QC-marker string tests don't match.
             bt.Gene(
                 ensembl_gene_id=gid,
                 symbol=gid,
@@ -445,11 +431,10 @@ def compute_scprint(
             f"but {organism} was requested."
         )
     model.eval()
-    # Before any GPU work: the gene index must line up, and it is cheap to check.
+    # Check gene-index alignment before any GPU work.
     _ensure_scprint_gene_alignment(model.genes, model.organisms, fix=align_ontology)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    # Embedder reads model.device to place batches, so the model must be moved
-    # first or the whole forward pass silently runs on CPU.
+    # Embedder reads model.device, so move the model first.
     model.to(device)
 
     n_genes_before = adata.n_vars
@@ -465,34 +450,19 @@ def compute_scprint(
         min_dataset_size=min_dataset_size,
     )
     adata = preprocessor(adata)
-    # Preprocessor zero-pads the var axis out to the model's entire vocabulary
-    # (scdataloader/preprocess.py:293-304), so adata.n_vars afterwards is the
-    # vocabulary size -- comparing it to the input gene count reports nonsense
-    # such as "2606% mapped". The padded-in genes are recorded in
-    # uns["unseen_genes"], so the genes that actually matched are the difference.
+    # Preprocessor pads var to the full vocabulary; count matched genes via uns["unseen_genes"].
     unseen = {str(g) for g in adata.uns.get("unseen_genes", [])}
     observed = {str(g) for g in adata.var_names} - unseen
     logger.info(
         f"scPRINT: {len(observed)}/{n_genes_before} input genes "
         f"({len(observed) / n_genes_before:.1%}) mapped onto the gene ontology."
     )
-    # That rate is not yet the useful one. The padded var axis spans every gene the
-    # ontology knows for this organism, but the checkpoint's own input space is far
-    # smaller (44_756 genes, 23_149 human + 21_607 mouse; medium-v1.5 and large-v1
-    # share this vocabulary) and Collator
-    # intersects against model.genes. Coverage of *that* set is what decides how
-    # much real signal reaches the transformer, so report it explicitly. Since the
-    # padded var axis is exactly the organism's ontology genes, intersecting it with
-    # model.genes yields the model's gene count for this organism specifically.
+    # Also report coverage of model.genes, which decides how much signal reaches the model.
     model_genes = {str(g) for g in model.genes}
     padded = [str(g) for g in adata.var_names]
     n_model_organism = len(model_genes & set(padded))
     n_usable = len(model_genes & observed)
-    # The alignment check above ran against the ontology. This asserts the same
-    # invariant on the array actually being handed over, which is what the Collator
-    # will mask: the padded axis must be sorted (its mask is POSITIONAL, so any
-    # other order scrambles genes), and masking it must reproduce a contiguous run
-    # of model.genes.
+    # Re-check alignment on the array handed to the Collator: its mask is positional.
     mg_order = [str(g) for g in model.genes]
     selected = [g for g in padded if g in model_genes]
     start = mg_order.index(selected[0]) if selected else 0
@@ -510,8 +480,7 @@ def compute_scprint(
             f"ontology rate above, is the fraction of the model's input that is "
             f"real -- a low value means the embedding rests on little signal."
         )
-    # The returned array is positionally matched against the caller's cells, so a
-    # Preprocessor that filters cells would silently misalign every label.
+    # Positionally matched to the caller's cells, so the Preprocessor must not drop cells.
     if adata.n_obs != n_obs_before:
         raise RuntimeError(
             f"scdataloader.Preprocessor changed the cell count "
@@ -530,8 +499,7 @@ def compute_scprint(
         pred_embedding=list(pred_embedding),
     )
 
-    # Embedder writes an intermediate h5ad to "<logger.save_dir or 'data'>/" and
-    # reads it back, so run it inside a scratch cwd to keep the call side-effect free.
+    # Embedder writes an intermediate h5ad; run in a scratch cwd.
     original_cwd = Path.cwd()
     with tempfile.TemporaryDirectory(prefix="scprint_embed_") as scratch:
         (Path(scratch) / "data").mkdir()
@@ -541,10 +509,7 @@ def compute_scprint(
         finally:
             os.chdir(original_cwd)
 
-    # The key Embedder writes moved between releases: scprint <=1.6.4 writes
-    # "scprint", >=2.x writes "scprint_emb" (scprint/tasks/cell_emb.py:196).
-    # scprint 2.3.8's own default_benchmark still reads "scprint" and is
-    # therefore broken, so neither spelling can be assumed -- accept either.
+    # The obsm key differs across scprint releases ("scprint" vs "scprint_emb"); accept either.
     emb_key = next((k for k in ("scprint_emb", "scprint") if k in embedded.obsm), None)
     if emb_key is None:
         raise RuntimeError(

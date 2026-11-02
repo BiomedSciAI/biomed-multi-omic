@@ -45,8 +45,7 @@ N_CELLS = 20
 N_GENES = 200
 EMB_DIM = 512
 
-# The key scPRINT itself writes.  Version-dependent -- see the module docstring.
-# Do not change without checking cell_emb.py in the version you have installed.
+# The key scPRINT itself writes (version-dependent; see the module docstring).
 SCPRINT_OBSM_KEY = "scprint"
 SCPRINT_OBSM_KEY_V2 = "scprint_emb"
 
@@ -406,14 +405,10 @@ def test_preprocessor_points_at_counts_layer(normalised_adata_with_counts_layer)
 # ---------------------------------------------------------------------------
 # compute_scprint — gene-index alignment
 #
-# The failure these cover is silent: a misaligned index feeds every gene under the
-# wrong embedding row, and the result is finite, non-zero and non-degenerate, so it
-# passes every other guard in this file while describing noise.
+# A misaligned index is silent: the output is finite and non-degenerate.
 # ---------------------------------------------------------------------------
 
-# A gene in the middle of the checkpoint vocabulary. Withholding it from the
-# ontology shifts every later gene by one, which is the real-world bug: 23 of
-# medium-v1.5's IDs were retired between its training release and bionty's.
+# A mid-vocabulary gene: withholding it from the ontology shifts every later gene by one.
 RETIRED = f"ENSG{100:011d}"
 
 
