@@ -38,3 +38,139 @@ def test_add_embed_to_adata(dummy_embeddings):
         adata_emb=ad_emb
     )
     assert "Avg_batch" in emb_int_table_w_batch_name.columns
+
+
+@pytest.fixture(scope="module")
+def clustered_adata():
+    """Synthetic AnnData: four well-separated cell types and two random batches."""
+    import anndata
+    import pandas as pd
+    import scanpy as sc
+
+    rng = np.random.default_rng(0)
+    per_type, n_types, dim = 40, 4, 10
+    centers = rng.normal(scale=12.0, size=(n_types, dim))
+    X = np.vstack(
+        [
+            centers[i] + rng.normal(scale=0.6, size=(per_type, dim))
+            for i in range(n_types)
+        ]
+    )
+    labels = np.repeat([f"type_{i}" for i in range(n_types)], per_type)
+    batches = rng.choice(["b0", "b1"], size=X.shape[0])
+    ad = anndata.AnnData(
+        X=X.copy(),
+        obs=pd.DataFrame(
+            {"cell_type": pd.Categorical(labels), "donor": pd.Categorical(batches)},
+            index=[f"cell{i}" for i in range(X.shape[0])],
+        ),
+    )
+    ad.obsm["BMFM_RNA"] = X.copy()
+    sc.pp.neighbors(ad, use_rep="BMFM_RNA")
+    return ad
+
+
+def test_single_batch_asw_is_scaled_to_unit_interval(clustered_adata):
+    """ASW_label is scib's (asw + 1) / 2, not the raw sklearn score."""
+    from sklearn.metrics import silhouette_score
+
+    from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
+
+    out = single_batch_bio_metrics(clustered_adata.copy(), "BMFM_RNA", "cell_type")
+    raw = float(
+        silhouette_score(
+            clustered_adata.obsm["BMFM_RNA"], clustered_adata.obs["cell_type"]
+        )
+    )
+    assert out["ASW_label"] == pytest.approx((raw + 1) / 2, abs=1e-6)
+    assert 0.0 <= out["ASW_label"] <= 1.0
+
+
+def test_single_batch_asw_reported_with_a_singleton_class(clustered_adata):
+    """A one-cell class must not suppress ASW_label."""
+    from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
+
+    ad = clustered_adata.copy()
+    lab = ad.obs["cell_type"].astype(str).to_numpy()
+    lab[0] = "singleton"
+    ad.obs["cell_type"] = lab
+    out = single_batch_bio_metrics(ad, "BMFM_RNA", "cell_type")
+    assert not np.isnan(out["ASW_label"])
+
+
+def test_single_batch_asw_is_nan_for_one_class(clustered_adata):
+    """With a single label class a silhouette is undefined, so NaN is correct."""
+    from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
+
+    ad = clustered_adata.copy()
+    ad.obs["cell_type"] = "only_one"
+    out = single_batch_bio_metrics(ad, "BMFM_RNA", "cell_type")
+    assert np.isnan(out["ASW_label"])
+
+
+def test_bio_metrics_do_not_depend_on_batch_count(clustered_adata):
+    """The same embedding gets the same bio block with and without a batch column."""
+    from bmfm_targets.evaluation.embeddings import calculate_batch_integration_metrics
+
+    multi = calculate_batch_integration_metrics(
+        clustered_adata.copy(),
+        batch_column_name="donor",
+        target_column_name="cell_type",
+        embed_key="BMFM_RNA",
+    )
+    single = calculate_batch_integration_metrics(
+        clustered_adata.copy(),
+        batch_column_name=None,
+        target_column_name="cell_type",
+        embed_key="BMFM_RNA",
+    )
+    # Avg_batch only exists for the multi-batch call; the bio block must match.
+    assert "Avg_batch" in multi.columns
+    assert "Avg_batch" not in single.columns
+    for col in (
+        "NMI_cluster_by_cell_type_(bio)",
+        "ARI_cluster_by_cell_type_(bio)",
+        "ASW_by_cell_type_(bio)",
+        "Avg_bio",
+    ):
+        assert col in single.columns, f"{col} missing from the single-batch result"
+        assert single[col].iloc[0] == pytest.approx(multi[col].iloc[0], abs=0.02), (
+            f"{col} differs between the batch paths: "
+            f"single={single[col].iloc[0]} multi={multi[col].iloc[0]}"
+        )
+
+
+def test_single_batch_leiden_uses_the_nmi_optimal_resolution():
+    """On overlapping clusters the resolution sweep beats default-resolution Leiden."""
+    pytest.importorskip("leidenalg")
+    import anndata
+    import pandas as pd
+    import scanpy as sc
+    from sklearn.metrics import normalized_mutual_info_score
+
+    from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
+
+    rng = np.random.default_rng(3)
+    n_types, per_type = 25, 20
+    centers = rng.normal(scale=1.0, size=(n_types, 15))
+    X = np.vstack(
+        [centers[i] + rng.normal(size=(per_type, 15)) for i in range(n_types)]
+    )
+    labels = np.repeat([f"t{i}" for i in range(n_types)], per_type)
+    ad = anndata.AnnData(
+        X=X,
+        obs=pd.DataFrame(
+            {"cell_type": pd.Categorical(labels)},
+            index=[f"c{i}" for i in range(len(labels))],
+        ),
+    )
+    ad.obsm["E"] = X
+    sc.pp.neighbors(ad, use_rep="E")
+
+    default_res = ad.copy()
+    sc.tl.leiden(default_res, key_added="plain", random_state=0)
+    plain_nmi = normalized_mutual_info_score(labels, default_res.obs["plain"])
+
+    out = single_batch_bio_metrics(ad.copy(), "E", "cell_type")
+
+    assert out["NMI_cluster/label"] > plain_nmi + 0.03

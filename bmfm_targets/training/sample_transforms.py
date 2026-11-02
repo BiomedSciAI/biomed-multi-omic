@@ -475,9 +475,9 @@ def dropout_random(
     """
     assert 0 <= dropout_ratio < 1
     sequence_len = len(next(iter(mfi.data.values())))
-    dropout_indices = [
+    dropout_indices = {
         i for i in range(sequence_len) if dropout_ratio > random.random()
-    ]
+    }
     data_after_dropout = {}
     for field, values in mfi.data.items():
         data_after_dropout[field] = [

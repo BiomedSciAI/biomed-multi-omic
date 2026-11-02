@@ -30,9 +30,25 @@ jobs:
       run: uv pip install -q pip wheel pytest-cov nbqa pylint
     - name: Install package
       run: uv pip install -q .[bulk_rna,benchmarking,test,notebook]
+    - name: Cache L1000 gene info (avoids hitting NCBI on every run)
+      id: l1000-cache
+      uses: actions/cache@v4
+      with:
+        path: bmfm_targets/tokenization/resources/GSE70138_Broad_LINCS_gene_info_2017-03-06.txt
+        key: l1000-gene-info-GSE70138-2017-03-06
+    - name: Report L1000 cache status
+      run: |
+        echo "cache-hit=${{ steps.l1000-cache.outputs.cache-hit }}"
+        f=bmfm_targets/tokenization/resources/GSE70138_Broad_LINCS_gene_info_2017-03-06.txt
+        if [ -f "$f" ]; then sha256sum "$f"; wc -l "$f"; else echo "L1000 file not present"; fi
+        echo "### L1000 cache hit: \`${{ steps.l1000-cache.outputs.cache-hit || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
     - name: Print environment
       run: uv pip freeze
     - name: Test package import
       run: pushd /tmp; python -c "import bmfm_targets"; popd;
     - name: Run package tests
+      env:
+        # After a cache hit the file must come from the cache; fail instead of
+        # silently falling back to a download.
+        BMFM_TARGETS_L1000_OFFLINE: ${{ steps.l1000-cache.outputs.cache-hit == 'true' && '1' || '' }}
       run: python -m pytest -v --durations=40 bmfm_targets/tests/
