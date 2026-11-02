@@ -6,13 +6,7 @@ networks.
 from .cellxgene_dataset import CellXGeneDataset, CellXGeneDataModule
 from .cellxgene_nexus_dataset import CellXGeneNexusDataset, CellXGeneNexusDataModule
 
-# The SOMA-backed loaders and the litdata indexing helper need
-# cellxgene_census[experimental]. Upstream removed `experimental.ml` in census
-# 1.18 (pyproject pins <=1.17 for this reason), so eagerly importing them makes
-# a drifted env fail to resolve *any* name in this package -- including the
-# litdata-backed Nexus loaders above, which depend on none of it. Resolve them
-# on first attribute access instead, so the real ImportError surfaces only to
-# callers that actually want SOMA.
+# The SOMA names need cellxgene_census[experimental]; resolve them lazily so other names import without it.
 _LAZY_SUBMODULES = {
     "CellXGeneSOMADataset": ".cellxgene_soma_dataset",
     "CellXGeneSOMADataModule": ".cellxgene_soma_dataset",

@@ -260,13 +260,7 @@ class BatchIntegrationCallback(pl.Callback):
     def on_predict_end(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ) -> None:
-        # ClearML is a reporting surface, not a precondition. These scib metrics
-        # are the convention our published zero-shot tables use, and they cost a
-        # full Leiden resolution sweep over the embedding -- so losing them
-        # because a logger is absent, or because the server rejected this task's
-        # oversized hyperparameters, would mean paying for the GPU pass twice.
-        # The metrics table is therefore always computed and written to
-        # `trainer.log_dir`; ClearML gets it too, when it is there.
+        # Always compute and write the metrics to `trainer.log_dir`; ClearML is optional.
         self.cl = Logger.current_logger()
         if not self.cl:
             logger.warning(
@@ -478,7 +472,8 @@ class BatchIntegrationCallback(pl.Callback):
 
 
 class CziBenchmarkCallback(pl.Callback):
-    """Run the czbenchmarks suite using CZI's own metric implementations.
+    """
+    Run the czbenchmarks suite using CZI's own metric implementations.
 
     Every number reported here is computed by czbenchmarks code -- their
     classifiers, their ``StratifiedKFold``/``MIN_CLASS_SIZE``/``RANDOM_SEED``,
@@ -510,14 +505,7 @@ class CziBenchmarkCallback(pl.Callback):
         self.cl: Logger | None = None
 
     def on_predict_end(self, trainer, pl_module):
-        # ClearML is a reporting surface, not a precondition. A run whose metrics
-        # only exist in ClearML is lost if the server rejects them -- which it
-        # does for these checkpoints: the multitask label_dict is logged as one
-        # hyperparameter per vocabulary entry, so `tasks.edit` 413s, ClearML logs
-        # the failure *including* the ~2MB payload it just tried to send, and
-        # shipping that console line 413s `events.add_batch` too. So every metric
-        # is written to `trainer.log_dir` regardless, and reported to ClearML only
-        # if a logger is actually there.
+        # Always write every metric to `trainer.log_dir`; report to ClearML only if a logger exists.
         self.cl = Logger.current_logger()
         if not self.cl:
             logger.warning(
@@ -538,11 +526,7 @@ class CziBenchmarkCallback(pl.Callback):
         embeddings = adata_emb.obsm[MODEL_EMBED_KEY]
         labels = adata_emb.obs[self.target_column_name]
 
-        # Each task is run in isolation and the CSV is rewritten after every
-        # one. The tasks are independent, and the embedding they share has
-        # already cost the GPU time for the whole run -- so a task that raises
-        # must not take the tasks that already succeeded down with it, and their
-        # numbers must already be on disk by the time it does.
+        # Run each task in isolation and rewrite the CSV after each, so a failure keeps earlier results.
         self._ctx = (trainer, adata_emb, labels)
 
         if "label_prediction" in self.tasks:
@@ -594,7 +578,8 @@ class CziBenchmarkCallback(pl.Callback):
         self._persist(*self._ctx)
 
     def _persist(self, trainer, adata_emb, labels) -> None:
-        """Write every collected czbenchmarks metric to ``trainer.log_dir``.
+        """
+        Write every collected czbenchmarks metric to ``trainer.log_dir``.
 
         One tidy CSV per run, carrying enough context columns to be concatenated
         across tissues and arms without consulting the directory name.
@@ -608,7 +593,7 @@ class CziBenchmarkCallback(pl.Callback):
             and self.batch_column_name in adata_emb.obs.columns
             else 0
         )
-        df = pd.DataFrame(self._rows).assign(
+        metrics_df = pd.DataFrame(self._rows).assign(
             n_cells=int(adata_emb.n_obs),
             n_classes=int(labels.nunique()),
             n_batches=n_batches,
@@ -617,8 +602,8 @@ class CziBenchmarkCallback(pl.Callback):
         )
         out = pathlib.Path(trainer.log_dir) / "czbenchmarks_metrics.csv"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(out, index=False)
-        logger.info("wrote %d czbenchmarks metrics to %s", len(df), out)
+        metrics_df.to_csv(out, index=False)
+        logger.info("wrote %d czbenchmarks metrics to %s", len(metrics_df), out)
 
     def _collect(self, task_name: str, table: pd.DataFrame) -> None:
         """Accumulate a task's long-format metrics for `_persist`."""
@@ -671,9 +656,7 @@ class CziBenchmarkCallback(pl.Callback):
     def _report_task(self, title: str, task, embeddings, task_input) -> None:
         """Run one czbenchmarks task and report its metrics verbatim."""
         try:
-            results = task.run(
-                cell_representation=embeddings, task_input=task_input
-            )
+            results = task.run(cell_representation=embeddings, task_input=task_input)
         except Exception:
             logger.exception("czbenchmarks task %s failed, skipping", title)
             return
@@ -687,7 +670,8 @@ class CziBenchmarkCallback(pl.Callback):
             self.cl.report_single_value(name=f"{prefix}_{metric}", value=float(value))
 
     def _report_label_prediction(self, embeddings, labels) -> None:
-        """CZI cross-validated label prediction.
+        """
+        CZI cross-validated label prediction.
 
         czbenchmarks runs *all* of its classifiers (lr, knn, rf) and emits an
         extra ``MEAN(...)`` row across them; the task input has no

@@ -15,7 +15,8 @@ def dummy_embeddings():
 
 
 def test_czi_label_prediction_keeps_every_classifier(dummy_embeddings):
-    """Every classifier czbenchmarks ran must be collected, not just ``lr``.
+    """
+    Every classifier czbenchmarks ran must be collected, not just ``lr``.
 
     ``MetadataLabelPredictionTaskInput`` has no ``classifiers`` field, so a
     request for a subset is silently dropped and czbenchmarks always fits lr,
@@ -32,8 +33,7 @@ def test_czi_label_prediction_keeps_every_classifier(dummy_embeddings):
     adata_emb = ad.copy()
     adata_emb.obsm["BMFM_RNA"] = aligned
 
-    # on_predict_end normally sets these up; there is no ClearML in tests, which
-    # must not stop the metrics being collected.
+    # on_predict_end normally sets these up; tests have no ClearML.
     callback_obj.cl = None
     callback_obj._rows = []
     callback_obj._report_label_prediction(aligned, adata_emb.obs["celltype"])
