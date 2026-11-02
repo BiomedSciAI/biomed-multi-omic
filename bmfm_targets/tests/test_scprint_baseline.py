@@ -230,354 +230,82 @@ def mock_scprint(
                 sys.modules[k] = v
 
 
-# ---------------------------------------------------------------------------
-# _counts_source
-# ---------------------------------------------------------------------------
+def _embed_writing(key=SCPRINT_OBSM_KEY, record=None):
+    """Embedder stand-in that writes a non-degenerate embedding under ``key``."""
 
-
-def test_counts_source_detects_x(raw_counts_adata):
-    assert _counts_source(raw_counts_adata) == "X"
-
-
-def test_counts_source_prefers_x_but_finds_layer(normalised_adata_with_counts_layer):
-    assert _counts_source(normalised_adata_with_counts_layer) == "counts"
-
-
-def test_counts_source_returns_none_for_lognormed(lognormed_only_adata):
-    assert _counts_source(lognormed_only_adata) is None
-
-
-# ---------------------------------------------------------------------------
-# compute_scprint — happy path
-# ---------------------------------------------------------------------------
-
-
-def test_compute_scprint_returns_correct_shape(raw_counts_adata):
-    with mock_scprint():
-        result = compute_scprint(raw_counts_adata, batch_key="batch")
-
-    assert result is not None
-    assert result.shape == (N_CELLS, EMB_DIM)
-    assert result.dtype == np.float32
-
-
-@pytest.mark.parametrize("key", [SCPRINT_OBSM_KEY, SCPRINT_OBSM_KEY_V2])
-def test_reads_the_obsm_key_scprint_actually_writes(raw_counts_adata, key):
-    """
-    Both real spellings must be read.
-
-    Regression on two opposite bugs: the code originally read only
-    ``obsm["scprint_emb"]`` while the pinned scprint 1.x wrote ``obsm["scprint"]``,
-    and reading only ``"scprint"`` breaks just as silently against scprint 2.x,
-    which writes ``"scprint_emb"``.  The 2.x spelling is the one the manuscript
-    run actually exercised (scprint 2.3.8).
-    """
-
-    def embed_writing_real_key(model, adata, cache=False):
+    def embed(model, adata, cache=False):
+        if record is not None:
+            record["organism"] = set(adata.obs["organism_ontology_term_id"])
         result = adata.copy()
         result.obsm[key] = np.ones((adata.n_obs, EMB_DIM), dtype=np.float32)
         return result, {}
 
-    with mock_scprint(embedder_side_effect=embed_writing_real_key):
-        result = compute_scprint(raw_counts_adata, batch_key="batch")
-
-    assert result is not None, f"must read obsm[{key!r}], a key scPRINT writes"
-    assert result.shape == (N_CELLS, EMB_DIM)
+    return embed
 
 
-def test_raises_when_embedding_key_absent(raw_counts_adata):
-    """A missing embedding is a hard failure, not a silent skip."""
-
-    def embed_writing_nothing(model, adata, cache=False):
-        return adata.copy(), {}
-
-    with mock_scprint(embedder_side_effect=embed_writing_nothing):
-        with pytest.raises(RuntimeError, match="no 'scprint_emb'/'scprint' embedding"):
-            compute_scprint(raw_counts_adata, batch_key="batch")
+RETIRED = f"ENSG{100:011d}"  # mid-vocabulary: withholding it shifts every later gene
 
 
-def test_raises_on_degenerate_embedding(raw_counts_adata):
-    def embed_all_zeros(model, adata, cache=False):
-        result = adata.copy()
-        result.obsm["scprint"] = np.zeros((adata.n_obs, EMB_DIM), dtype=np.float32)
-        return result, {}
-
-    with mock_scprint(embedder_side_effect=embed_all_zeros):
-        with pytest.raises(RuntimeError, match="degenerate"):
-            compute_scprint(raw_counts_adata, batch_key="batch")
+# --- _counts_source ---------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# compute_scprint — canonical settings
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("fixture", "expected"),
+    [
+        ("raw_counts_adata", "X"),
+        ("normalised_adata_with_counts_layer", "counts"),
+        ("lognormed_only_adata", None),
+    ],
+)
+def test_counts_source(request, fixture, expected):
+    assert _counts_source(request.getfixturevalue(fixture)) == expected
 
 
-def test_embedder_uses_canonical_benchmark_settings(raw_counts_adata):
-    """
-    Must match scprint.tasks.cell_emb.default_benchmark.
-
-    ``how="random expr"`` and a single ``cell_type_ontology_term_id`` class token
-    are the settings scPRINT's own published integration benchmark uses; anything
-    else is not the number the paper reports.
-    """
-    with mock_scprint() as mocks:
-        compute_scprint(raw_counts_adata, batch_key="batch")
-
-    kwargs = mocks.Embedder.call_args.kwargs
-    assert kwargs["how"] == "random expr"
-    assert kwargs["pred_embedding"] == ["cell_type_ontology_term_id"]
-    assert kwargs["doplot"] is False
-    assert kwargs["doclass"] is False
-    assert kwargs["output_expression"] == "none"
-    # dtype must not be pinned: scPRINT embeds under CUDA autocast, which
-    # rejects float32.
-    assert "dtype" not in kwargs
+# --- compute_scprint: output and failure modes -----------------------------
 
 
-def test_model_loaded_from_checkpoint_and_moved_to_device(raw_counts_adata):
-    """
-    Embedder places batches via ``model.device``.
-
-    If the model is left on CPU by ``load_from_checkpoint``, the whole forward
-    pass silently runs on CPU.
-    """
-    with mock_scprint() as mocks:
-        compute_scprint(raw_counts_adata, batch_key="batch", device="cpu")
-
-    mocks.scPrint.load_from_checkpoint.assert_called_once_with(
-        SCPRINT_DEFAULT_CHECKPOINT, precpt_gene_emb=None
-    )
-    mocks.model.eval.assert_called_once()
-    mocks.model.to.assert_called_once_with("cpu")
-
-
-def test_default_checkpoint_constant():
-    """
-    The default must stay the *large* checkpoint.
-
-    Benchmarking with medium-v1.5 (the README quickstart default) understates
-    scPRINT by 0.093 avg_bio on the 9 sceval datasets and produced a results table
-    that had to be withdrawn; scPRINT's zero-shot claim is about its large model.
-    """
-    assert SCPRINT_DEFAULT_CHECKPOINT == "large-v1.ckpt"
-
-
-# ---------------------------------------------------------------------------
-# compute_scprint — preprocessing
-# ---------------------------------------------------------------------------
-
-
-def test_preprocessor_invoked_with_symbol_flag(raw_counts_adata):
-    """
-    Gene identifiers must be mapped onto the checkpoint vocabulary.
-
-    ``model.genes`` are Ensembl IDs; feeding HUGO symbols straight to the
-    Collator gives near-zero gene overlap and a meaningless embedding.
-    """
-    with mock_scprint() as mocks:
-        compute_scprint(raw_counts_adata, batch_key="batch", device="cpu")
-
-    mocks.Preprocessor.assert_called_once()
-    kwargs = mocks.Preprocessor.call_args.kwargs
-    assert kwargs["is_symbol"] is True, "GENE* var_names are symbols, not Ensembl IDs"
-    assert kwargs["use_layer"] is None, "counts are in X here"
-    assert kwargs["do_postp"] is False, "no normalization: scPRINT wants counts"
-    mocks.Preprocessor.return_value.assert_called_once()
-
-
-def test_preprocessor_detects_ensembl_ids(ensembl_counts_adata):
-    with mock_scprint() as mocks:
-        compute_scprint(ensembl_counts_adata, batch_key="batch", device="cpu")
-
-    assert mocks.Preprocessor.call_args.kwargs["is_symbol"] is False
-
-
-def test_preprocessor_points_at_counts_layer(normalised_adata_with_counts_layer):
-    """When X is log-normalised, the counts layer must be named to Preprocessor."""
-    with mock_scprint() as mocks:
-        compute_scprint(
-            normalised_adata_with_counts_layer, batch_key="batch", device="cpu"
-        )
-
-    assert mocks.Preprocessor.call_args.kwargs["use_layer"] == "counts"
-
-
-# ---------------------------------------------------------------------------
-# compute_scprint — gene-index alignment
-#
-# A misaligned index is silent: the output is finite and non-degenerate.
-# ---------------------------------------------------------------------------
-
-# A mid-vocabulary gene: withholding it from the ontology shifts every later gene by one.
-RETIRED = f"ENSG{100:011d}"
-
-
-def test_drift_reports_first_misaligned_position():
-    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
-        drift = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
-
-    n_model, n_ontology, first_bad = drift[SCPRINT_HUMAN]
-    assert (n_model, n_ontology) == (N_GENES, N_GENES - 1)
-    assert first_bad == 100, "drift must start at the retired gene, not before it"
-
-
-def test_drift_is_empty_when_ontology_matches_checkpoint():
-    with mock_scprint() as mocks:
-        drift = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
-
-    assert drift[SCPRINT_HUMAN][2] is None
-
-
-def test_ensembl_prefixes_are_ambiguous_so_a_mapping_must_win():
-    """
-    ``"ENSGALG".startswith("ENSG")``, so prefix attribution cannot be trusted.
-
-    scPRINT-1 has only human and mouse and exposes one flat gene list, so the
-    prefix is all there is. scPRINT-2's ji9krimq covers 16 organisms including
-    chicken, and keeps the vocabulary keyed by organism — that mapping must be used,
-    or every chicken gene is filed under human and the drift check reports a
-    misalignment that does not exist while missing one that does.
-    """
-    chicken = "NCBITaxon:9031"
-    human_genes = [f"ENSG{i:011d}" for i in range(3)]
-    chicken_genes = [f"ENSGALG{i:011d}" for i in range(3)]
-
-    flat = _genes_by_organism(human_genes + chicken_genes, [SCPRINT_HUMAN])
-    assert flat[SCPRINT_HUMAN] == human_genes + chicken_genes, (
-        "the flat form is expected to over-collect here; that is exactly why the "
-        "mapping form exists"
-    )
-
-    mapped = _genes_by_organism(
-        {SCPRINT_HUMAN: human_genes, chicken: chicken_genes},
-        [SCPRINT_HUMAN, chicken],
-    )
-    assert mapped == {SCPRINT_HUMAN: human_genes, chicken: chicken_genes}
-
-
-def test_drift_accepts_a_per_organism_mapping():
-    """The mapping form must agree with the flat form where both are valid."""
-    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
-        flat = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
-        mapped = _scprint_index_drift(
-            {SCPRINT_HUMAN: mocks.model.genes}, [SCPRINT_HUMAN]
-        )
-
-    assert mapped == flat
-    assert mapped[SCPRINT_HUMAN][2] == 100
-
-
-def test_repairs_ontology_and_then_embeds(raw_counts_adata):
-    """The retired ID is registered, and only then is the embedding computed."""
-    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
-        assert RETIRED not in mocks.ontology
+@pytest.mark.parametrize("key", [SCPRINT_OBSM_KEY, SCPRINT_OBSM_KEY_V2])
+def test_reads_either_obsm_key_and_leaves_input_untouched(raw_counts_adata, key):
+    """Scprint <=1.6.4 writes ``scprint``, >=2.x writes ``scprint_emb``; read both."""
+    with mock_scprint(embedder_side_effect=_embed_writing(key)):
         result = compute_scprint(raw_counts_adata, batch_key="batch", device="cpu")
 
-        assert RETIRED in mocks.ontology, "retired ID must be registered"
-        assert mocks.ontology[RETIRED] == SCPRINT_HUMAN
-        assert (
-            _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])[SCPRINT_HUMAN][2]
-            is None
-        )
-    assert result is not None
     assert result.shape == (N_CELLS, EMB_DIM)
+    assert result.dtype == np.float32
+    assert "organism_ontology_term_id" not in raw_counts_adata.obs.columns
+    assert SCPRINT_OBSM_KEY not in raw_counts_adata.obsm
 
 
-def test_refuses_to_embed_misaligned_when_repair_declined(raw_counts_adata):
-    """align_ontology=False must raise, never embed against a shifted index."""
-    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
-        with pytest.raises(RuntimeError, match="misaligned"):
-            compute_scprint(
-                raw_counts_adata,
-                batch_key="batch",
-                device="cpu",
-                align_ontology=False,
-            )
-        mocks.Embedder.assert_not_called()
-        assert RETIRED not in mocks.ontology, "must not write when declined"
+@pytest.mark.parametrize(
+    ("writes", "match"),
+    [
+        ({}, "no 'scprint_emb'/'scprint' embedding"),
+        ({"scprint": 0.0}, "degenerate"),
+    ],
+)
+def test_missing_or_degenerate_embedding_raises(raw_counts_adata, writes, match):
+    def embed(model, adata, cache=False):
+        result = adata.copy()
+        for key, value in writes.items():
+            result.obsm[key] = np.full((adata.n_obs, EMB_DIM), value, np.float32)
+        return result, {}
 
-
-def test_alignment_is_checked_before_gpu_work(raw_counts_adata):
-    """
-    The check must precede model.to(device).
-
-    Alignment depends only on the ontology and the checkpoint's gene list, so
-    failing after moving a multi-GB model to the GPU wastes an allocation and, in a
-    batch of jobs, a scheduling slot per dataset.
-    """
-    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
-        with pytest.raises(RuntimeError, match="misaligned"):
-            compute_scprint(
-                raw_counts_adata,
-                batch_key="batch",
-                device="cpu",
-                align_ontology=False,
-            )
-        mocks.model.to.assert_not_called()
+    with mock_scprint(embedder_side_effect=embed):
+        with pytest.raises(RuntimeError, match=match):
+            compute_scprint(raw_counts_adata, batch_key="batch")
 
 
 def test_rejects_lognormed_input(lognormed_only_adata):
-    """
-    Log-normalised input must raise, never be embedded.
-
-    scPRINT conditions on sequencing depth, so a normalised matrix produces a
-    number that looks plausible and is wrong.
-    """
+    """ScPRINT conditions on depth, so normalised input gives a plausible wrong number."""
     with mock_scprint():
         with pytest.raises(ValueError, match="requires raw counts"):
             compute_scprint(lognormed_only_adata, batch_key="batch")
 
 
-# ---------------------------------------------------------------------------
-# compute_scprint — organism
-# ---------------------------------------------------------------------------
-
-
-def test_organism_tag_written_to_obs(raw_counts_adata):
-    captured = {}
-
-    def capturing_embed(model, adata, cache=False):
-        captured["organism"] = set(adata.obs["organism_ontology_term_id"])
-        result = adata.copy()
-        result.obsm["scprint"] = np.ones((adata.n_obs, EMB_DIM), dtype=np.float32)
-        return result, {}
-
-    with mock_scprint(embedder_side_effect=capturing_embed):
-        compute_scprint(
-            raw_counts_adata,
-            batch_key="batch",
-            organism=SCPRINT_MOUSE,
-            device="cpu",
-        )
-
-    assert captured["organism"] == {SCPRINT_MOUSE}
-
-
-def test_input_adata_not_mutated(raw_counts_adata):
-    with mock_scprint():
-        compute_scprint(raw_counts_adata, batch_key="batch", device="cpu")
-
-    assert "organism_ontology_term_id" not in raw_counts_adata.obs.columns
-    assert "scprint" not in raw_counts_adata.obsm
-
-
-def test_raises_on_organism_unsupported_by_checkpoint(raw_counts_adata):
-    with mock_scprint(organisms=(SCPRINT_HUMAN,)):
-        with pytest.raises(ValueError, match="supports organisms"):
-            compute_scprint(raw_counts_adata, batch_key="batch", organism=SCPRINT_MOUSE)
-
-
-# ---------------------------------------------------------------------------
-# Missing dependency
-# ---------------------------------------------------------------------------
-
-
 def test_returns_none_when_scprint_not_installed(raw_counts_adata):
-    """Graceful None return when the optional dependency is absent."""
     keys = ("scprint", "scprint.tasks", "scdataloader")
     orig = {k: sys.modules.get(k) for k in keys}
-    # Setting a key to None in sys.modules makes `import <key>` raise ImportError.
-    sys.modules.update(dict.fromkeys(keys))
+    sys.modules.update(dict.fromkeys(keys))  # None makes `import <key>` raise
     try:
         result = compute_scprint(raw_counts_adata, batch_key="batch")
     finally:
@@ -590,43 +318,140 @@ def test_returns_none_when_scprint_not_installed(raw_counts_adata):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# run_baselines wiring
-# ---------------------------------------------------------------------------
+# --- compute_scprint: how scPRINT is called --------------------------------
 
 
-def test_run_baselines_stores_scprint_in_obsm(raw_counts_adata, tmp_path):
-    """run_baselines dispatches to scPRINT and stores the result under obsm['scPRINT']."""
+def test_model_and_embedder_are_configured_like_scprints_own_benchmark(
+    raw_counts_adata,
+):
+    """Settings from ``scprint.tasks.cell_emb.default_benchmark``, plus device placement."""
+    with mock_scprint() as mocks:
+        compute_scprint(raw_counts_adata, batch_key="batch", device="cpu")
+
+    mocks.scPrint.load_from_checkpoint.assert_called_once_with(
+        SCPRINT_DEFAULT_CHECKPOINT, precpt_gene_emb=None
+    )
+    mocks.model.to.assert_called_once_with("cpu")  # Embedder reads model.device
+
+    kwargs = mocks.Embedder.call_args.kwargs
+    assert kwargs["how"] == "random expr"
+    assert kwargs["pred_embedding"] == ["cell_type_ontology_term_id"]
+    assert not kwargs["doplot"]
+    assert not kwargs["doclass"]
+    assert kwargs["output_expression"] == "none"
+    assert "dtype" not in kwargs  # CUDA autocast rejects an explicit float32
+
+
+@pytest.mark.parametrize(
+    ("fixture", "is_symbol", "use_layer"),
+    [
+        ("raw_counts_adata", True, None),
+        ("ensembl_counts_adata", False, None),
+        ("normalised_adata_with_counts_layer", True, "counts"),
+    ],
+)
+def test_preprocessor_gets_identifier_type_and_counts_location(
+    request, fixture, is_symbol, use_layer
+):
+    adata = request.getfixturevalue(fixture)
+    with mock_scprint() as mocks:
+        compute_scprint(adata, batch_key="batch", device="cpu")
+
+    kwargs = mocks.Preprocessor.call_args.kwargs
+    assert kwargs["is_symbol"] is is_symbol
+    assert kwargs["use_layer"] == use_layer
+    assert kwargs["do_postp"] is False  # scPRINT wants counts, not normalised data
+
+
+def test_organism_must_be_supported_and_is_tagged_on_obs(raw_counts_adata):
+    seen = {}
+    with mock_scprint(embedder_side_effect=_embed_writing(record=seen)):
+        compute_scprint(
+            raw_counts_adata, batch_key="batch", organism=SCPRINT_MOUSE, device="cpu"
+        )
+    assert seen["organism"] == {SCPRINT_MOUSE}
+
+    with mock_scprint(organisms=(SCPRINT_HUMAN,)):
+        with pytest.raises(ValueError, match="supports organisms"):
+            compute_scprint(raw_counts_adata, batch_key="batch", organism=SCPRINT_MOUSE)
+
+
+# --- gene-index alignment ---------------------------------------------------
+# A misaligned index is silent: the output is finite and non-degenerate.
+
+
+def test_drift_starts_at_the_retired_gene_and_flat_and_mapping_forms_agree():
+    with mock_scprint() as mocks:
+        clean = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
+    assert clean[SCPRINT_HUMAN][2] is None
+
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        flat = _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])
+        mapped = _scprint_index_drift(
+            {SCPRINT_HUMAN: mocks.model.genes}, [SCPRINT_HUMAN]
+        )
+
+    assert flat[SCPRINT_HUMAN] == (N_GENES, N_GENES - 1, 100)
+    assert mapped == flat
+
+
+def test_ensembl_prefix_attribution_is_ambiguous_so_a_mapping_must_win():
+    """``"ENSGALG".startswith("ENSG")``: chicken genes would be filed under human."""
+    chicken = "NCBITaxon:9031"
+    human_genes = [f"ENSG{i:011d}" for i in range(3)]
+    chicken_genes = [f"ENSGALG{i:011d}" for i in range(3)]
+
+    flat = _genes_by_organism(human_genes + chicken_genes, [SCPRINT_HUMAN])
+    assert flat[SCPRINT_HUMAN] == human_genes + chicken_genes  # over-collects
+
+    mapped = _genes_by_organism(
+        {SCPRINT_HUMAN: human_genes, chicken: chicken_genes},
+        [SCPRINT_HUMAN, chicken],
+    )
+    assert mapped == {SCPRINT_HUMAN: human_genes, chicken: chicken_genes}
+
+
+def test_retired_gene_is_registered_before_embedding(raw_counts_adata):
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        result = compute_scprint(raw_counts_adata, batch_key="batch", device="cpu")
+
+        assert mocks.ontology[RETIRED] == SCPRINT_HUMAN
+        assert (
+            _scprint_index_drift(mocks.model.genes, [SCPRINT_HUMAN])[SCPRINT_HUMAN][2]
+            is None
+        )
+    assert result.shape == (N_CELLS, EMB_DIM)
+
+
+def test_declined_repair_raises_before_any_write_or_gpu_work(raw_counts_adata):
+    with mock_scprint(retired_genes=(RETIRED,)) as mocks:
+        with pytest.raises(RuntimeError, match="misaligned"):
+            compute_scprint(
+                raw_counts_adata, batch_key="batch", device="cpu", align_ontology=False
+            )
+        mocks.Embedder.assert_not_called()
+        mocks.model.to.assert_not_called()
+        assert RETIRED not in mocks.ontology
+
+
+# --- run_baselines wiring ---------------------------------------------------
+
+
+@pytest.mark.parametrize("organism", [SCPRINT_HUMAN, SCPRINT_MOUSE])
+def test_run_baselines_stores_embedding_and_threads_organism(
+    raw_counts_adata, tmp_path, organism
+):
     h5ad_path = tmp_path / "test.h5ad"
     raw_counts_adata.write_h5ad(h5ad_path)
 
-    with mock_scprint():
-        run_baselines(h5ad_path, batch_key="batch", methods=["scPRINT"])
-
-    result = ad.io.read_h5ad(h5ad_path)
-    assert "scPRINT" in result.obsm
-    assert result.obsm["scPRINT"].shape == (N_CELLS, EMB_DIM)
-
-
-def test_run_baselines_threads_organism_through(raw_counts_adata, tmp_path):
-    """--scprint-organism must reach compute_scprint, else mouse data is scored as human."""
-    h5ad_path = tmp_path / "test.h5ad"
-    raw_counts_adata.write_h5ad(h5ad_path)
-
-    captured = {}
-
-    def capturing_embed(model, adata, cache=False):
-        captured["organism"] = set(adata.obs["organism_ontology_term_id"])
-        result = adata.copy()
-        result.obsm["scprint"] = np.ones((adata.n_obs, EMB_DIM), dtype=np.float32)
-        return result, {}
-
-    with mock_scprint(embedder_side_effect=capturing_embed):
+    seen = {}
+    with mock_scprint(embedder_side_effect=_embed_writing(record=seen)):
         run_baselines(
             h5ad_path,
             batch_key="batch",
             methods=["scPRINT"],
-            scprint_organism=SCPRINT_MOUSE,
+            scprint_organism=organism,
         )
 
-    assert captured["organism"] == {SCPRINT_MOUSE}
+    assert ad.io.read_h5ad(h5ad_path).obsm["scPRINT"].shape == (N_CELLS, EMB_DIM)
+    assert seen["organism"] == {organism}

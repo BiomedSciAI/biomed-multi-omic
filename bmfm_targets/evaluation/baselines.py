@@ -334,12 +334,19 @@ def compute_scprint(
     the ``cell_type_ontology_term_id`` class token. No classification heads or
     plotting are run.
 
-    Requires the optional ``scprint`` package, which pins ``torch==2.2.0`` and
-    ``lamindb==0.76.12`` and therefore needs its own environment::
+    Requires the optional ``scprint`` package. It is deliberately not in any
+    pyproject extra: it pins ``torch==2.2.0``, ``torchmetrics==1.6.0``,
+    ``numpy<2`` and ``python<3.13``, which conflict with this package
+    (``torchmetrics==1.1.0``, ``transformers>=5``). Install it in a separate
+    environment and run this file from there; ``bmfm_targets`` need not be
+    importable in that environment, because the heavy imports in this module are
+    lazy and the file can be loaded by path::
 
         pip install scprint 'lamindb[bionty]'
         lamin init --storage <dir> --schema bionty
         hf download jkobject/scPRINT large-v1.ckpt --local-dir .
+
+    If ``scprint`` is not importable this function returns ``None``.
 
     Input requirements, all of which are checked rather than assumed:
     - raw integer counts in ``X`` or in a layer (log-normalized input is rejected,
