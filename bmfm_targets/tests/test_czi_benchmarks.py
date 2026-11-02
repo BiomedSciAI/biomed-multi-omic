@@ -216,3 +216,52 @@ def test_batch_integration_metrics_are_written_without_clearml(
     assert (metrics_df["n_cells"] == adata_emb.n_obs).all()
     assert (metrics_df["target_column"] == "celltype").all()
     assert (metrics_df["batch_column"] == "batch").all()
+
+
+@pytest.fixture()
+def _pypi_style_czbenchmarks(monkeypatch):
+    """
+    Emulate the PyPI cz-benchmarks release, whose task input has no ``classifiers``.
+
+    There pydantic drops the argument and the task always fits lr, knn and rf.
+    """
+    from pydantic import BaseModel
+
+    from bmfm_targets.training import callbacks
+
+    real_input = callbacks.MetadataLabelPredictionTaskInput
+    real_run = callbacks.MetadataLabelPredictionTask.run
+
+    class OldInput(BaseModel):
+        labels: object
+        n_folds: int = 5
+
+    def old_run(self, cell_representation, task_input):
+        all_classifiers_input = real_input(
+            labels=task_input.labels, n_folds=task_input.n_folds
+        )
+        return real_run(
+            self,
+            cell_representation=cell_representation,
+            task_input=all_classifiers_input,
+        )
+
+    assert "classifiers" not in OldInput.model_fields
+    monkeypatch.setattr(callbacks, "MetadataLabelPredictionTaskInput", OldInput)
+    monkeypatch.setattr(callbacks.MetadataLabelPredictionTask, "run", old_run)
+
+
+@pytest.mark.usefixtures("_pypi_style_czbenchmarks")
+@pytest.mark.parametrize("requested", [("lr",), ("lr", "knn")])
+def test_classifiers_are_filtered_when_czbenchmarks_cannot_select_them(
+    emb_and_labels, tmp_path, caplog, requested
+):
+    _, embeddings, labels = emb_and_labels
+    cb, _ = _callback(tmp_path, classifiers=requested)
+
+    cb._report_label_prediction(embeddings, labels)
+
+    # lr, knn and rf all ran underneath, but only the requested ones are kept,
+    # and the MEAN(knn,lr,rf) row, which would mislead, is dropped.
+    assert _classifiers(cb) == set(requested)
+    assert "no `classifiers` option" in caplog.text
