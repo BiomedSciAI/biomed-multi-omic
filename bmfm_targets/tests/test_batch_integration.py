@@ -42,13 +42,7 @@ def test_add_embed_to_adata(dummy_embeddings):
 
 @pytest.fixture(scope="module")
 def clustered_adata():
-    """
-    Synthetic AnnData with well-separated cell-type clusters and two batches.
-
-    Built here rather than read from disk so the invariant below is testable
-    without a fixture h5ad. The clusters are separated far enough that the bio
-    metrics are high and stable, which is what makes a scale regression visible.
-    """
+    """Synthetic AnnData: four well-separated cell types and two random batches."""
     import anndata
     import pandas as pd
     import scanpy as sc
@@ -63,7 +57,6 @@ def clustered_adata():
         ]
     )
     labels = np.repeat([f"type_{i}" for i in range(n_types)], per_type)
-    # Batch is random, so the bio metrics must not depend on it.
     batches = rng.choice(["b0", "b1"], size=X.shape[0])
     ad = anndata.AnnData(
         X=X.copy(),
@@ -78,13 +71,7 @@ def clustered_adata():
 
 
 def test_single_batch_asw_is_scaled_to_unit_interval(clustered_adata):
-    """
-    ASW_label must be on scib's [0, 1] scale, not sklearn's raw [-1, 1].
-
-    Regression test: the raw score was returned here while the multi-batch
-    scib path rescaled by (asw + 1) / 2, so the two were ~0.35 apart in
-    absolute terms and could not be averaged together.
-    """
+    """ASW_label is scib's (asw + 1) / 2, not the raw sklearn score."""
     from sklearn.metrics import silhouette_score
 
     from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
@@ -100,14 +87,7 @@ def test_single_batch_asw_is_scaled_to_unit_interval(clustered_adata):
 
 
 def test_single_batch_asw_reported_with_a_singleton_class(clustered_adata):
-    """
-    A class with one cell must not suppress ASW_label.
-
-    sklearn computes a silhouette fine in that case and scib applies no
-    stricter condition, so the old `every class >= 2 cells` guard dropped the
-    metric where scib would have reported it -- quietly turning avg_bio into a
-    mean of two metrics instead of three.
-    """
+    """A one-cell class must not suppress ASW_label."""
     from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
 
     ad = clustered_adata.copy()
@@ -129,15 +109,7 @@ def test_single_batch_asw_is_nan_for_one_class(clustered_adata):
 
 
 def test_bio_metrics_do_not_depend_on_batch_count(clustered_adata):
-    """
-    THE INVARIANT: bio conservation is independent of the batch assignment.
-
-    Scoring the same embedding with a real batch column (scib path) and with
-    batch_column_name=None (single-batch path) must give the same bio block.
-    This is what makes a per-tissue mean of Avg_bio over a mix of single- and
-    multi-batch tissues meaningful, and it is what the three-way scale
-    mismatch broke.
-    """
+    """The same embedding gets the same bio block with and without a batch column."""
     from bmfm_targets.evaluation.embeddings import calculate_batch_integration_metrics
 
     multi = calculate_batch_integration_metrics(
@@ -166,3 +138,39 @@ def test_bio_metrics_do_not_depend_on_batch_count(clustered_adata):
             f"{col} differs between the batch paths: "
             f"single={single[col].iloc[0]} multi={multi[col].iloc[0]}"
         )
+
+
+def test_single_batch_leiden_uses_the_nmi_optimal_resolution():
+    """On overlapping clusters the resolution sweep beats default-resolution Leiden."""
+    pytest.importorskip("leidenalg")
+    import anndata
+    import pandas as pd
+    import scanpy as sc
+    from sklearn.metrics import normalized_mutual_info_score
+
+    from bmfm_targets.evaluation.embeddings import single_batch_bio_metrics
+
+    rng = np.random.default_rng(3)
+    n_types, per_type = 25, 20
+    centers = rng.normal(scale=1.0, size=(n_types, 15))
+    X = np.vstack(
+        [centers[i] + rng.normal(size=(per_type, 15)) for i in range(n_types)]
+    )
+    labels = np.repeat([f"t{i}" for i in range(n_types)], per_type)
+    ad = anndata.AnnData(
+        X=X,
+        obs=pd.DataFrame(
+            {"cell_type": pd.Categorical(labels)},
+            index=[f"c{i}" for i in range(len(labels))],
+        ),
+    )
+    ad.obsm["E"] = X
+    sc.pp.neighbors(ad, use_rep="E")
+
+    default_res = ad.copy()
+    sc.tl.leiden(default_res, key_added="plain", random_state=0)
+    plain_nmi = normalized_mutual_info_score(labels, default_res.obs["plain"])
+
+    out = single_batch_bio_metrics(ad.copy(), "E", "cell_type")
+
+    assert out["NMI_cluster/label"] > plain_nmi + 0.03
