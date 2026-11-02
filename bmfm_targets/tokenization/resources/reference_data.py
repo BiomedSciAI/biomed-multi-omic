@@ -1,11 +1,19 @@
 import functools
+import io
 import json
+import logging
+import os
 import pickle
 from pathlib import Path
 
 import cellxgene_census
 import pandas as pd
+import requests
 from huggingface_hub import hf_hub_download
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+logger = logging.getLogger(__name__)
 
 ABBRV_TAXA_NAMES = {
     "homo_sapiens": "hsapiens",
@@ -38,20 +46,63 @@ def get_protein_coding_genes():
         return json.load(f)
 
 
-def _get_original_L1000_gene_names():
+L1000_GENE_INFO_URL = (
+    "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE70138&format=file"
+    "&file=GSE70138%5FBroad%5FLINCS%5Fgene%5Finfo%5F2017%2D03%2D06%2Etxt%2Egz"
+)
+L1000_FILE_ENV = "BMFM_TARGETS_L1000_FILE"
+L1000_OFFLINE_ENV = "BMFM_TARGETS_L1000_OFFLINE"
+
+
+def _download_with_retries(url: str, retries: int = 4, backoff: float = 2.0) -> bytes:
+    """GET url, retrying on 429/5xx and connection errors with exponential backoff."""
+    retry = Retry(
+        total=retries,
+        backoff_factor=backoff,
+        status_forcelist=(429, 500, 502, 503, 504),
+        respect_retry_after_header=True,
+    )
+    with requests.Session() as session:
+        session.mount("https://", HTTPAdapter(max_retries=retry))
+        session.mount("http://", HTTPAdapter(max_retries=retry))
+        resp = session.get(url, headers={"User-Agent": "bmfm-targets"}, timeout=60)
+        resp.raise_for_status()
+        return resp.content
+
+
+def _get_original_L1000_gene_names(url: str = L1000_GENE_INFO_URL):
     """
-    Read the L1000 genes from original file, parse the file to extract the list itself.
-    If the file is stored localy use it, otherwise download it.
+    Read the L1000 landmark genes from the GSE70138 gene info file.
+
+    Lookup order: the path in $BMFM_TARGETS_L1000_FILE, the copy stored next to this
+    module, then a download (cached next to this module). If
+    $BMFM_TARGETS_L1000_OFFLINE is set, a missing local copy raises instead of
+    downloading, which lets CI prove that a restored cache is the one being used.
     """
     local_fname = (
         Path(__file__).parent / "GSE70138_Broad_LINCS_gene_info_2017-03-06.txt"
     )
+    env_fname = os.environ.get(L1000_FILE_ENV)
+    if env_fname:
+        local_fname = Path(env_fname)
+        if not local_fname.exists():
+            raise FileNotFoundError(f"{L1000_FILE_ENV}={env_fname} does not exist")
+
     if local_fname.exists():
+        logger.info("Using local L1000 gene info file %s", local_fname)
         genes_df = pd.read_csv(local_fname)
     else:
-        url = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE70138&format=file&file=GSE70138%5FBroad%5FLINCS%5Fgene%5Finfo%5F2017%2D03%2D06%2Etxt%2Egz"
-        genes_df = pd.read_csv(url, compression="gzip", delimiter="\t")
-        genes_df.to_csv(local_fname, index=False)
+        if os.environ.get(L1000_OFFLINE_ENV):
+            raise FileNotFoundError(
+                f"{local_fname} is missing and {L1000_OFFLINE_ENV} is set, "
+                "so the download was not attempted."
+            )
+        logger.info("Downloading L1000 gene info from %s", url)
+        content = _download_with_retries(url)
+        genes_df = pd.read_csv(io.BytesIO(content), compression="gzip", delimiter="\t")
+        tmp_fname = local_fname.with_suffix(local_fname.suffix + ".tmp")
+        genes_df.to_csv(tmp_fname, index=False)
+        tmp_fname.replace(local_fname)
 
     return genes_df[genes_df["pr_is_lm"] == 1]["pr_gene_symbol"]
 
