@@ -338,12 +338,15 @@ def single_batch_bio_metrics(
     """
     Bio-conservation metrics (NMI/ARI/ASW) for a single-batch embedding.
 
-    Clusters with Leiden when igraph/leidenalg are installed, so the returned
-    values match historical runs; otherwise falls back to KMeans(k=#label
-    classes) so the metrics stay computable without those optional, copyleft
-    dependencies. Both paths cluster on the full data before masking to NaN-free
-    rows. Assumes ``sc.pp.neighbors`` has already been run on ``adata_emb``
-    (required by the Leiden path).
+    Values are on the same scale as the multi-batch ``scib.metrics`` path:
+    ``ASW_label`` is rescaled to [0, 1] as ``(asw + 1) / 2``, and Leiden uses the
+    NMI-optimal resolution (``scib.metrics.cluster_optimal_resolution``). ASW is
+    reported whenever at least two label classes are present.
+
+    Falls back to KMeans(k=#label classes) when leidenalg is not installed; those
+    NMI/ARI values are approximate and not comparable to the scib path. Both paths
+    cluster on all cells before masking to rows with a label. Assumes
+    ``sc.pp.neighbors`` has already been run on ``adata_emb``.
     """
     from sklearn.metrics import (
         adjusted_rand_score,
@@ -355,25 +358,39 @@ def single_batch_bio_metrics(
     X = adata_emb.obsm[embed_key]
     mask = pd.notna(labels)
 
+    cluster_key = "__tmp_scib_cluster"
+    # The resolution sweep raises in scib with a single class; use plain Leiden then.
+    n_label_classes = pd.Series(labels[mask]).nunique()
     try:
         import leidenalg  # noqa: F401
     except ImportError:
         clusters = _kmeans_clusters(X, labels)[mask]
     else:
-        cluster_key = "__tmp_scib_cluster"
-        sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
+        if cluster_key in adata_emb.obs:
+            del adata_emb.obs[cluster_key]
+        if n_label_classes > 1:
+            from scib.metrics.clustering import cluster_optimal_resolution
+
+            cluster_optimal_resolution(
+                adata_emb,
+                label_key=label_col,
+                cluster_key=cluster_key,
+                verbose=False,
+                force=True,
+            )
+        else:
+            sc.tl.leiden(adata_emb, key_added=cluster_key, random_state=0)
         clusters = adata_emb.obs[cluster_key].to_numpy()[mask]
         del adata_emb.obs[cluster_key]
 
     labels, X = labels[mask], X[mask]
-    vc = pd.Series(labels).value_counts()
+    n_classes = pd.Series(labels).nunique()
     return {
         "NMI_cluster/label": normalized_mutual_info_score(labels, clusters),
         "ARI_cluster/label": adjusted_rand_score(labels, clusters),
+        # scib's scale=True rescaling; undefined (NaN) for a single class.
         "ASW_label": (
-            float(silhouette_score(X, labels))
-            if (vc.size > 1 and vc.min() >= 2)
-            else np.nan
+            (float(silhouette_score(X, labels)) + 1) / 2 if n_classes > 1 else np.nan
         ),
     }
 
@@ -397,7 +414,8 @@ def calculate_batch_integration_metrics(
         AnnData object with embeddings in obsm[embed_key] and metadata in obs
     batch_column_name : str or None
         Column name for batch information in adata_emb.obs. If None or single batch,
-        only bio metrics will be calculated.
+        only bio metrics will be calculated, on the same scale as the multi-batch
+        case (see :func:`single_batch_bio_metrics`). ``Avg_batch`` is omitted.
     target_column_name : str
         Column name for target labels (e.g., cell type) in adata_emb.obs
     embed_key : str, default="concatenated_embeddings"
