@@ -377,10 +377,7 @@ def single_batch_bio_metrics(
     mask = pd.notna(labels)
 
     cluster_key = "__tmp_scib_cluster"
-    # Resolution optimisation maximises NMI against the labels, which is
-    # degenerate with a single class (and raises inside scib), so fall back to a
-    # plain Leiden there. Every bio metric is undefined or trivial in that case
-    # anyway; this only keeps the call from blowing up.
+    # Resolution optimisation is degenerate with a single class (and raises in scib); use plain Leiden.
     n_label_classes = pd.Series(labels[mask]).nunique()
     try:
         import leidenalg  # noqa: F401
@@ -392,8 +389,7 @@ def single_batch_bio_metrics(
         if n_label_classes > 1:
             from scib.metrics.clustering import cluster_optimal_resolution
 
-            # Sweeps resolutions and keeps the NMI-maximising clustering, which
-            # is what scib.metrics() does for its own nmi_/ari_ outputs.
+            # Same resolution sweep as scib.metrics().
             cluster_optimal_resolution(
                 adata_emb,
                 label_key=label_col,
@@ -414,9 +410,7 @@ def single_batch_bio_metrics(
         # (asw + 1) / 2 to match scib.me.silhouette's scale=True default.
         # Undefined for a single class, which is what sklearn itself raises on.
         "ASW_label": (
-            (float(silhouette_score(X, labels)) + 1) / 2
-            if n_classes > 1
-            else np.nan
+            (float(silhouette_score(X, labels)) + 1) / 2 if n_classes > 1 else np.nan
         ),
     }
 

@@ -42,7 +42,8 @@ def test_add_embed_to_adata(dummy_embeddings):
 
 @pytest.fixture(scope="module")
 def clustered_adata():
-    """Synthetic AnnData with well-separated cell-type clusters and two batches.
+    """
+    Synthetic AnnData with well-separated cell-type clusters and two batches.
 
     Built here rather than read from disk so the invariant below is testable
     without a fixture h5ad. The clusters are separated far enough that the bio
@@ -56,11 +57,13 @@ def clustered_adata():
     per_type, n_types, dim = 40, 4, 10
     centers = rng.normal(scale=12.0, size=(n_types, dim))
     X = np.vstack(
-        [centers[i] + rng.normal(scale=0.6, size=(per_type, dim)) for i in range(n_types)]
+        [
+            centers[i] + rng.normal(scale=0.6, size=(per_type, dim))
+            for i in range(n_types)
+        ]
     )
     labels = np.repeat([f"type_{i}" for i in range(n_types)], per_type)
-    # Batch is assigned at random, so it carries no biological signal: the bio
-    # metrics must not depend on it.
+    # Batch is random, so the bio metrics must not depend on it.
     batches = rng.choice(["b0", "b1"], size=X.shape[0])
     ad = anndata.AnnData(
         X=X.copy(),
@@ -75,7 +78,8 @@ def clustered_adata():
 
 
 def test_single_batch_asw_is_scaled_to_unit_interval(clustered_adata):
-    """ASW_label must be on scib's [0, 1] scale, not sklearn's raw [-1, 1].
+    """
+    ASW_label must be on scib's [0, 1] scale, not sklearn's raw [-1, 1].
 
     Regression test: the raw score was returned here while the multi-batch
     scib path rescaled by (asw + 1) / 2, so the two were ~0.35 apart in
@@ -96,7 +100,8 @@ def test_single_batch_asw_is_scaled_to_unit_interval(clustered_adata):
 
 
 def test_single_batch_asw_reported_with_a_singleton_class(clustered_adata):
-    """A class with one cell must not suppress ASW_label.
+    """
+    A class with one cell must not suppress ASW_label.
 
     sklearn computes a silhouette fine in that case and scib applies no
     stricter condition, so the old `every class >= 2 cells` guard dropped the
@@ -124,7 +129,8 @@ def test_single_batch_asw_is_nan_for_one_class(clustered_adata):
 
 
 def test_bio_metrics_do_not_depend_on_batch_count(clustered_adata):
-    """THE INVARIANT: bio conservation is independent of the batch assignment.
+    """
+    THE INVARIANT: bio conservation is independent of the batch assignment.
 
     Scoring the same embedding with a real batch column (scib path) and with
     batch_column_name=None (single-batch path) must give the same bio block.
