@@ -59,7 +59,7 @@ bulk_rna = ["GEOparse", "biopython"]
 benchmarking = [
   "scib",
   "scib-metrics",
-  "cz-benchmarks @ git+https://github.com/sivanravidos/cz-benchmarks.git@main"
+  "cz-benchmarks @ git+https://github.com/sivanravidos/cz-benchmarks.git@72a0fd288fe2638a18b761958b3108cd9ae26df8"
 ]
 baselines=[
   "pyliger",

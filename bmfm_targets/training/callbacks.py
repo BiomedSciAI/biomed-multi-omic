@@ -12,6 +12,12 @@ import scanpy as sc
 import transformers
 from clearml.logger import Logger
 from czbenchmarks.tasks import (
+    BatchIntegrationTask,
+    BatchIntegrationTaskInput,
+    ClusteringTask,
+    ClusteringTaskInput,
+    EmbeddingTask,
+    EmbeddingTaskInput,
     MetadataLabelPredictionTask,
     MetadataLabelPredictionTaskInput,
 )
@@ -254,12 +260,13 @@ class BatchIntegrationCallback(pl.Callback):
     def on_predict_end(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ) -> None:
+        # Always compute and write the metrics to `trainer.log_dir`; ClearML is optional.
         self.cl = Logger.current_logger()
         if not self.cl:
             logger.warning(
-                "ClearML logger not found, skipping batch integration reporting."
+                "ClearML logger not found; batch integration metrics will be "
+                "written to disk only."
             )
-            return
 
         adata_emb = get_adata_with_embeddings(trainer, self.batch_column_name)
         if self.target_column_name is None:
@@ -267,12 +274,28 @@ class BatchIntegrationCallback(pl.Callback):
                 0
             ].label_column_name
 
-        self._execute_batch_integration(adata_emb)
+        self._execute_batch_integration(trainer, adata_emb)
 
-    def _execute_batch_integration(self, adata_emb: sc.AnnData) -> None:
-        """Run all batch integration evaluations and report to ClearML."""
+    def _execute_batch_integration(
+        self, trainer: pl.Trainer, adata_emb: sc.AnnData
+    ) -> None:
+        """Run all batch integration evaluations, persist them, and report them."""
         # Core metrics table
         batch_int_df = self._generate_metrics_table(adata_emb)
+
+        out = pathlib.Path(trainer.log_dir) / "batch_integration_metrics.csv"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        batch_int_df.assign(
+            n_cells=int(adata_emb.n_obs),
+            target_column=self.target_column_name,
+            batch_column=self.batch_column_name,
+        ).to_csv(out, index=False)
+        logger.info("wrote batch integration metrics to %s", out)
+
+        # Everything below is a ClearML-only reporting surface (tables, images).
+        if not self.cl:
+            return
+
         self.cl.report_table(
             title="Batch Integration",
             series="Batch Integration",
@@ -449,25 +472,57 @@ class BatchIntegrationCallback(pl.Callback):
 
 
 class CziBenchmarkCallback(pl.Callback):
+    """
+    Run the czbenchmarks suite using CZI's own metric implementations.
+
+    Every number reported here is computed by czbenchmarks code -- their
+    classifiers, their ``StratifiedKFold``/``MIN_CLASS_SIZE``/``RANDOM_SEED``,
+    their Leiden and their silhouette -- so the results are directly comparable
+    to CZI's published tables. This is deliberately *not* the scib path in
+    :class:`BatchIntegrationCallback`, which is our own manuscript convention;
+    the two are different implementations and are expected to differ in value.
+    """
+
+    #: All czbenchmarks tasks that can be selected with ``tasks``.
+    ALL_TASKS = ("label_prediction", "clustering", "embedding", "batch_integration")
+    DEFAULT_TASKS = ("label_prediction",)
+    ALL_CLASSIFIERS = ("lr", "knn", "rf")
+
     def __init__(
         self,
         batch_column_name: str | None = None,
         target_column_name: str | None = None,
         n_folds: int = 5,
+        tasks: Iterable[str] | None = None,
+        classifiers: Iterable[str] | None = None,
     ):
         super().__init__()
         self.batch_column_name = batch_column_name
         self.target_column_name = target_column_name
         self.n_folds = n_folds
+        self.tasks = tuple(tasks) if tasks is not None else self.DEFAULT_TASKS
+        unknown = set(self.tasks) - set(self.ALL_TASKS)
+        if unknown:
+            raise ValueError(f"unknown czbenchmarks tasks: {sorted(unknown)}")
+        self.classifiers = tuple(classifiers) if classifiers is not None else ("lr",)
+        unknown = set(self.classifiers) - set(self.ALL_CLASSIFIERS)
+        if unknown or not self.classifiers:
+            raise ValueError(
+                f"classifiers must be a non-empty subset of {self.ALL_CLASSIFIERS}, "
+                f"got {self.classifiers}"
+            )
         self.cl: Logger | None = None
 
     def on_predict_end(self, trainer, pl_module):
+        # Always write every metric to `trainer.log_dir`; report to ClearML only if a logger exists.
         self.cl = Logger.current_logger()
         if not self.cl:
             logger.warning(
-                "ClearML logger not found, skipping batch integration reporting."
+                "ClearML logger not found; czbenchmarks metrics will be written "
+                "to disk only."
             )
-            return
+        self._rows: list[dict] = []
+        self._failed: list[str] = []
 
         adata_emb = get_adata_with_embeddings(
             trainer, batch_column_name=self.batch_column_name
@@ -477,54 +532,199 @@ class CziBenchmarkCallback(pl.Callback):
                 0
             ].label_column_name
 
-        results = self.execute_czi_cell_type_classification_benchmark(adata_emb)
-        self.cl.report_table(
-            title="CZI Cell Type Classification",
-            series="CZI Cell Type Classification",
-            table_plot=results,
-        )
+        embeddings = adata_emb.obsm[MODEL_EMBED_KEY]
+        labels = adata_emb.obs[self.target_column_name]
 
-        # Report logistic regression F1 as scalar for easier querying
-        if "mean_fold_f1" in results.index and "lr" in results.columns:
-            lr_f1 = float(results.loc["mean_fold_f1", "lr"])
-            self.cl.report_single_value(name="f1", value=lr_f1)
-        else:
-            logger.warning(
-                "Logistic regression F1 score (mean_fold_f1, lr) not found in CZI benchmark results"
+        # Run each task in isolation and rewrite the CSV after each, so a failure keeps earlier results.
+        self._ctx = (trainer, adata_emb, labels)
+
+        if "label_prediction" in self.tasks:
+            self._run_task(
+                "label_prediction",
+                lambda: self._report_label_prediction(embeddings, labels),
             )
 
-    def execute_czi_cell_type_classification_benchmark(self, adata_with_embeddings):
-        label_prediction_task = MetadataLabelPredictionTask()
+        if "clustering" in self.tasks:
+            self._run_task(
+                "clustering",
+                lambda: self._report_task(
+                    "CZI Clustering",
+                    ClusteringTask(),
+                    embeddings,
+                    ClusteringTaskInput(obs=adata_emb.obs, input_labels=labels),
+                ),
+            )
 
-        # take ground-truth labels from the dataset
-        prediction_task_input = MetadataLabelPredictionTaskInput(
-            labels=adata_with_embeddings.obs[self.target_column_name],
-            classifiers=["lr"],
-            n_folds=self.n_folds,
+        if "embedding" in self.tasks:
+            self._run_task(
+                "embedding",
+                lambda: self._report_task(
+                    "CZI Embedding",
+                    EmbeddingTask(),
+                    embeddings,
+                    EmbeddingTaskInput(input_labels=labels),
+                ),
+            )
+
+        if "batch_integration" in self.tasks:
+            self._run_task(
+                "batch_integration",
+                lambda: self._report_batch_integration(adata_emb, embeddings, labels),
+            )
+
+        if self._failed:
+            logger.error(
+                "czbenchmarks tasks that did not complete: %s", ", ".join(self._failed)
+            )
+
+    def _run_task(self, name: str, run) -> None:
+        """Run one czbenchmarks task, then checkpoint the metrics to disk."""
+        try:
+            run()
+        except Exception:
+            self._failed.append(name)
+            logger.exception("czbenchmarks task %r failed; continuing", name)
+        self._persist(*self._ctx)
+
+    def _persist(self, trainer, adata_emb, labels) -> None:
+        """
+        Write every collected czbenchmarks metric to ``trainer.log_dir``.
+
+        One tidy CSV per run, carrying enough context columns to be concatenated
+        across tissues and arms without consulting the directory name.
+        """
+        if not self._rows:
+            logger.warning("no czbenchmarks metrics collected, nothing to write")
+            return
+        n_batches = (
+            int(adata_emb.obs[self.batch_column_name].nunique())
+            if self.batch_column_name
+            and self.batch_column_name in adata_emb.obs.columns
+            else 0
+        )
+        metrics_df = pd.DataFrame(self._rows).assign(
+            n_cells=int(adata_emb.n_obs),
+            n_classes=int(labels.nunique()),
+            n_batches=n_batches,
+            target_column=self.target_column_name,
+            batch_column=self.batch_column_name,
+        )
+        out = pathlib.Path(trainer.log_dir) / "czbenchmarks_metrics.csv"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        metrics_df.to_csv(out, index=False)
+        logger.info("wrote %d czbenchmarks metrics to %s", len(metrics_df), out)
+
+    def _collect(self, task_name: str, table: pd.DataFrame) -> None:
+        """Accumulate a task's long-format metrics for `_persist`."""
+        for row in table.itertuples(index=False):
+            self._rows.append(
+                {
+                    "task": task_name,
+                    "metric": row.metric,
+                    "classifier": getattr(row, "classifier", "") or "",
+                    "value": float(row.value),
+                }
+            )
+
+    def _report_batch_integration(self, adata_emb, embeddings, labels):
+        """CZI batch integration, which needs a batch column with >1 level."""
+        batch_col = self.batch_column_name
+        if batch_col is None or batch_col not in adata_emb.obs:
+            logger.warning(
+                "No batch column available, skipping CZI batch integration task."
+            )
+            return
+        batch_labels = adata_emb.obs[batch_col]
+        if batch_labels.nunique() < 2:
+            logger.warning(
+                "Only one batch present, skipping CZI batch integration task."
+            )
+            return
+        self._report_task(
+            "CZI Batch Integration",
+            BatchIntegrationTask(),
+            embeddings,
+            BatchIntegrationTaskInput(batch_labels=batch_labels, labels=labels),
         )
 
-        # evaluate embeddings against the ground-truth labels using fine-tuning with classifcal logistic regression classifier.
-        results = label_prediction_task.run(
-            cell_representation=adata_with_embeddings.obsm[MODEL_EMBED_KEY],
-            task_input=prediction_task_input,
-        )
-
-        results_table = pd.DataFrame(
-            [(r.metric_type.value, r.params["classifier"], r.value) for r in results],
+    @staticmethod
+    def _results_frame(results) -> pd.DataFrame:
+        """Flatten czbenchmarks MetricResults into a long table."""
+        return pd.DataFrame(
+            [
+                (
+                    r.metric_type.value,
+                    str(r.params.get("classifier", "")) if r.params else "",
+                    r.value,
+                )
+                for r in results
+            ],
             columns=["metric", "classifier", "value"],
         )
 
-        results_table_wide = results_table.pivot_table(
+    def _report_task(self, title: str, task, embeddings, task_input) -> None:
+        """Run one czbenchmarks task and report its metrics verbatim."""
+        results = task.run(cell_representation=embeddings, task_input=task_input)
+        table = self._results_frame(results)[["metric", "value"]]
+        self._collect(title, table)
+        if not self.cl:
+            return
+        self.cl.report_table(title=title, series=title, table_plot=table)
+        prefix = title.replace("CZI ", "czi_").lower().replace(" ", "_")
+        for metric, value in zip(table.metric, table.value):
+            self.cl.report_single_value(name=f"{prefix}_{metric}", value=float(value))
+
+    def _report_label_prediction(self, embeddings, labels) -> None:
+        """
+        CZI cross-validated label prediction with the selected classifiers.
+
+        Reports each classifier separately, as the published CZI tables do,
+        plus the ``MEAN(...)`` row czbenchmarks adds across them.
+        """
+        results = MetadataLabelPredictionTask().run(
+            cell_representation=embeddings,
+            task_input=MetadataLabelPredictionTaskInput(
+                labels=labels,
+                n_folds=self.n_folds,
+                classifiers=list(self.classifiers),
+            ),
+        )
+        table = self._results_frame(results)
+        if "classifiers" not in MetadataLabelPredictionTaskInput.model_fields:
+            # Older czbenchmarks silently ignore `classifiers` and fit all of them.
+            logger.warning(
+                "this czbenchmarks version has no `classifiers` option; "
+                "filtering its results to %s",
+                self.classifiers,
+            )
+            table = table[table["classifier"].isin(self.classifiers)]
+        self._collect("CZI Cell Type Classification", table)
+        wide = table.pivot_table(
             index="metric",
             columns="classifier",
             values="value",
             aggfunc="mean",
             observed=False,
         )
-        results_table_wide = results_table_wide[
-            ["lr"]
-        ]  # remove the "mean" column cause we asked only the lr classifier
-        return results_table_wide
+        if not self.cl:
+            return
+        self.cl.report_table(
+            title="CZI Cell Type Classification",
+            series="CZI Cell Type Classification",
+            table_plot=wide,
+        )
+        for metric in wide.index:
+            for clf in wide.columns:
+                value = wide.loc[metric, clf]
+                if pd.isna(value):
+                    continue
+                name = f"czi_label_prediction_{metric}" + (f"_{clf}" if clf else "")
+                self.cl.report_single_value(name=name, value=float(value))
+        if "mean_fold_f1" in wide.index and "lr" in wide.columns:
+            # scalar name kept from before the full-table reporting
+            self.cl.report_single_value(
+                name="f1", value=float(wide.loc["mean_fold_f1", "lr"])
+            )
 
 
 class SGDCallback(pl.Callback):
