@@ -2,7 +2,7 @@ defaults:
  - base_seq_cls
 
 _target_: bmfm_targets.datasets.dnaseq.DNASeqCovidDataModule
-max_length: 256
+max_length: 320
 dataset_kwargs:
   processed_data_source: ${input_directory}/covid_prediction
   dataset_name: ${dataset_name}
