@@ -2,12 +2,13 @@
 """
 MoA Classification Comparison Script for Multiple Embeddings.
 
-Compares predictive performance of different embeddings (X_bmfm_wced_v1, X_bmfm_mlm, X_bmfm_wced)
-for mechanism of action (MoA) classification using stratified drug group cross-validation.
-Each CV fold leaves out at least one drug from each MoA group.
+Compares the embeddings named by --embedding_keys for mechanism of action (MoA)
+classification using stratified drug group cross-validation, and writes metrics, CSVs and
+diagnostic plots. Each CV fold leaves out at least one drug from each MoA group. The
+filtering and CV code is in moa_lib.py; the Figure 6 pipeline is the run_*.py scripts.
 
 Usage:
-    python moa_predict.py --input data.h5ad --output results/
+    python moa_predict.py --input data.h5ad --output results/ --embedding_keys X_a X_b
 """
 
 import argparse
@@ -18,9 +19,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import scib.metrics as scm
+import scib.metrics  # noqa: F401  importing scib sets a larger plot style; kept so these plots are unchanged
 import seaborn as sns
-from sklearn.linear_model import LogisticRegression
+from moa_lib import (  # noqa: F401  (re-exported for callers of this script)
+    create_stratified_drug_folds,
+    load_and_prepare_data,
+    scib_bio_metrics,
+    stratified_drug_group_cv,
+)
 from sklearn.metrics import (
     auc,
     average_precision_score,
@@ -132,318 +138,6 @@ def parse_args():
     )
 
     return parser.parse_args()
-
-
-def load_and_prepare_data(
-    adata_path: str,
-    embedding_keys: list[str],
-    cell_type: str | None = None,
-    skip_vehicle_filter: bool = False,
-    dose: list[float] | None = None,
-    viability_threshold: float = 0.85,
-    skip_viability_filter: bool = False,
-    skip_others_filter: bool = False,
-    min_drugs_per_moa: int = 2,
-) -> tuple[sc.AnnData, dict[str, np.ndarray]]:
-    """
-    Load AnnData and extract embeddings.
-
-    Parameters
-    ----------
-    adata_path : str
-        Path to AnnData file
-    embedding_keys : List[str]
-        List of embedding keys in adata.obsm
-    cell_type : Optional[str], optional
-        Cell type to subset data by (filters adata.obs['cell_type'] column)
-    skip_vehicle_filter : bool, optional
-        Skip filtering out vehicle control (default: False)
-    dose : List[float], optional
-        Dose values to filter for (default: [10000])
-    viability_threshold : float, optional
-        Viability threshold for filtering cells (default: 0.85)
-    skip_viability_filter : bool, optional
-        Skip viability filtering (default: False)
-    skip_others_filter : bool, optional
-        Skip removing 'Others' MoA class (default: False)
-    min_drugs_per_moa : int, optional
-        Minimum number of drugs per MoA class (default: 2)
-
-    Returns
-    -------
-    adata : AnnData
-        Loaded AnnData object
-    embeddings : Dict[str, np.ndarray]
-        Dictionary of embeddings
-    """
-    print(f"Loading data from {adata_path}...")
-    adata = sc.read_h5ad(adata_path)
-
-    # Verify required columns exist
-    required_cols = ["target", "product_name", "dose"]
-    for col in required_cols:
-        if col not in adata.obs.columns:
-            raise ValueError(f"Required column '{col}' not found in adata.obs")
-
-    print(f"Loaded {adata.n_obs} cells")
-    print(f"MoA classes (before filtering): {adata.obs['target'].nunique()}")
-    print(f"Unique products (before filtering): {adata.obs['product_name'].nunique()}")
-
-    # Set default dose if not provided
-    if dose is None:
-        dose = [10000]
-
-    # Filter by cell type if specified
-    if cell_type is not None:
-        if "cell_type" not in adata.obs.columns:
-            raise ValueError("Column 'cell_type' not found in adata.obs")
-        print(f"\nFiltering to cell type: {cell_type}...")
-        cell_type_mask = adata.obs["cell_type"] == cell_type
-        adata = adata[cell_type_mask].copy()
-        print(f"After cell type filtering: {adata.n_obs} cells")
-
-    # Filter out vehicle control
-    if not skip_vehicle_filter:
-        print("\nFiltering out vehicle control...")
-        vehicle_mask = adata.obs["target"].str.lower() != "vehicle"
-        adata = adata[vehicle_mask].copy()
-        print(f"After vehicle filtering: {adata.n_obs} cells")
-
-    # Filter to specified dose(s)
-    print(f"\nFiltering to dose(s): {dose}...")
-    dose_mask = adata.obs["dose"].isin(dose)
-    adata = adata[dose_mask].copy()
-    print(f"After dose filtering: {adata.n_obs} cells")
-    print(f"MoA classes: {adata.obs['target'].nunique()}")
-    print(f"Unique products: {adata.obs['product_name'].nunique()}")
-
-    # Filter to cells with low viability (strong drug effect)
-    if not skip_viability_filter:
-        print(f"\nFiltering to cells with viability < {viability_threshold}...")
-        viability_mask = adata.obs["viability"] < viability_threshold
-        adata = adata[viability_mask].copy()
-        print(f"After viability filtering: {adata.n_obs} cells")
-        print(f"MoA classes: {adata.obs['target'].nunique()}")
-        print(f"Unique products: {adata.obs['product_name'].nunique()}")
-
-    # Remove "Others" MoA class (poorly defined)
-    if not skip_others_filter:
-        print("\nRemoving 'Others' MoA class...")
-        others_mask = adata.obs["target"].str.lower() != "others"
-        adata = adata[others_mask].copy()
-        print(f"After removing 'Others': {adata.n_obs} cells")
-        print(f"MoA classes: {adata.obs['target'].nunique()}")
-        print(f"Unique products: {adata.obs['product_name'].nunique()}")
-
-    # Remove MoA classes with fewer than min_drugs_per_moa drugs
-    print(f"\nRemoving MoA classes with fewer than {min_drugs_per_moa} drug(s)...")
-    moa_drug_counts = adata.obs.groupby("target")["product_name"].nunique()
-    moas_to_keep = moa_drug_counts[moa_drug_counts >= min_drugs_per_moa].index.tolist()
-    n_moas_removed = len(moa_drug_counts) - len(moas_to_keep)
-
-    if n_moas_removed > 0:
-        print(
-            f"  Removing {n_moas_removed} MoA classes with fewer than {min_drugs_per_moa} drug(s)"
-        )
-        moa_mask = adata.obs["target"].isin(moas_to_keep)
-        adata = adata[moa_mask].copy()
-        print(f"After MoA filtering: {adata.n_obs} cells")
-        print(f"MoA classes: {adata.obs['target'].nunique()}")
-        print(f"Unique products: {adata.obs['product_name'].nunique()}")
-    else:
-        print(f"  All MoA classes have at least {min_drugs_per_moa} drug(s)")
-
-    # Extract embeddings after filtering
-    embeddings = {}
-    for key in embedding_keys:
-        if key not in adata.obsm:
-            raise ValueError(f"Embedding '{key}' not found in adata.obsm")
-        embeddings[key] = adata.obsm[key]
-        print(f"  - {key}: shape {embeddings[key].shape}")
-
-    return adata, embeddings
-
-
-def create_stratified_drug_folds(
-    products: np.ndarray,
-    moa_labels: np.ndarray,
-    n_folds: int = 5,
-    random_seed: int = 42,
-) -> list[list[str]]:
-    """
-    Create folds where each fold has at least one drug from each MoA group.
-
-    Parameters
-    ----------
-    products : np.ndarray
-        Product (drug) identifiers for each cell
-    moa_labels : np.ndarray
-        MoA class for each cell (encoded as integers)
-    n_folds : int
-        Number of folds to create
-    random_seed : int
-        Random seed for reproducibility
-
-    Returns
-    -------
-    folds : List[List[str]]
-        List of folds, each containing drug names to be held out
-    """
-    rng = np.random.RandomState(random_seed)
-
-    # Get unique drugs and their MoA classes
-    unique_products = np.unique(products)
-    drug_to_moa = {}
-    for product in unique_products:
-        # Get the MoA for this drug (should be consistent)
-        product_mask = products == product
-        moa = moa_labels[product_mask][0]
-        drug_to_moa[product] = moa
-
-    # Group drugs by MoA
-    moa_to_drugs = {}
-    for drug, moa in drug_to_moa.items():
-        if moa not in moa_to_drugs:
-            moa_to_drugs[moa] = []
-        moa_to_drugs[moa].append(drug)
-
-    # Shuffle drugs within each MoA group
-    for moa in moa_to_drugs:
-        rng.shuffle(moa_to_drugs[moa])
-
-    # Check minimum drugs per MoA class
-    min_drugs_per_moa = min(len(drugs) for drugs in moa_to_drugs.values())
-    if min_drugs_per_moa < n_folds:
-        print(
-            f"  Warning: Some MoA classes have fewer than {n_folds} drugs (min={min_drugs_per_moa})"
-        )
-        if min_drugs_per_moa < 2:
-            raise ValueError(
-                f"Cannot perform cross-validation: some MoA classes have only {min_drugs_per_moa} drug(s). "
-                f"Need at least 2 drugs per MoA class to create train/test splits."
-            )
-        print(
-            f"  Adjusting to {min_drugs_per_moa} folds to ensure each fold has all MoA classes"
-        )
-        n_folds = min_drugs_per_moa
-
-    # Create folds by ensuring each fold gets at least one drug from each MoA
-    folds = [[] for _ in range(n_folds)]
-
-    # First pass: assign one drug from each MoA to each fold in round-robin fashion
-    for moa, drugs in moa_to_drugs.items():
-        for fold_idx in range(min(n_folds, len(drugs))):
-            folds[fold_idx].append(drugs[fold_idx])
-
-    # Second pass: distribute remaining drugs across folds
-    for moa, drugs in moa_to_drugs.items():
-        remaining_drugs = drugs[n_folds:]  # Drugs not yet assigned
-        for i, drug in enumerate(remaining_drugs):
-            fold_idx = i % n_folds
-            folds[fold_idx].append(drug)
-
-    return folds
-
-
-def stratified_drug_group_cv(
-    X: np.ndarray,
-    y: np.ndarray,
-    products: np.ndarray,
-    n_folds: int = 5,
-    n_repeats: int = 5,
-    random_seed: int = 42,
-    max_iter: int = 1000,
-) -> dict[str, list]:
-    """
-    Perform stratified drug group cross-validation.
-    Each fold leaves out at least one drug from each MoA group.
-
-    Parameters
-    ----------
-    X : np.ndarray
-        Feature matrix (embeddings)
-    y : np.ndarray
-        Target labels (MoA) - encoded as integers
-    products : np.ndarray
-        Product (drug) identifiers
-    n_folds : int
-        Number of folds
-    n_repeats : int
-        Number of CV repeats
-    random_seed : int
-        Random seed
-    max_iter : int
-        Maximum iterations for logistic regression
-
-    Returns
-    -------
-    results : Dict[str, List]
-        Dictionary containing predictions and metrics for each fold
-    """
-    results = {
-        "y_true": [],
-        "y_pred": [],
-        "y_prob": [],
-        "test_products": [],
-        "fold": [],
-        "repeat": [],
-    }
-
-    fold_idx = 0
-    for repeat in range(n_repeats):
-        # Create stratified folds for this repeat
-        folds = create_stratified_drug_folds(
-            products, y, n_folds=n_folds, random_seed=random_seed + repeat
-        )
-
-        for fold_num, test_drugs in enumerate(folds):
-            # Create test mask for all drugs in this fold
-            test_mask = np.isin(products, test_drugs)
-            train_mask = ~test_mask
-
-            X_train, X_test = X[train_mask], X[test_mask]
-            y_train, y_test = y[train_mask], y[test_mask]
-
-            # Skip if test set is too small or has only one class
-            if len(y_test) < 10 or len(np.unique(y_test)) < 2:
-                print(
-                    f"  Warning: Skipping fold {fold_num} in repeat {repeat}: insufficient test samples"
-                )
-                continue
-
-            # Report fold statistics
-            test_moas = np.unique(y_test)
-            print(
-                f"  Repeat {repeat}, Fold {fold_num}: {len(test_drugs)} drugs, "
-                f"{len(test_moas)} MoA classes in test set, {len(y_test)} cells"
-            )
-
-            # Train logistic regression
-            clf = LogisticRegression(
-                max_iter=max_iter,
-                random_state=random_seed + repeat,
-                class_weight="balanced",
-                solver="lbfgs",
-                n_jobs=-1,
-            )
-
-            clf.fit(X_train, y_train)
-
-            # Predict
-            y_pred = clf.predict(X_test)
-            y_prob = clf.predict_proba(X_test)
-
-            # Store results
-            results["y_true"].extend(y_test.tolist())
-            results["y_pred"].extend(y_pred.tolist())
-            results["y_prob"].append(y_prob)
-            results["test_products"].extend(products[test_mask].tolist())
-            results["fold"].extend([fold_idx] * len(y_test))
-            results["repeat"].extend([repeat] * len(y_test))
-
-            fold_idx += 1
-
-    return results
 
 
 def calculate_metrics(results: dict[str, list]) -> dict[str, float]:
@@ -1432,53 +1126,17 @@ def plot_avg_bio_scores(
     for emb_key in embedding_keys:
         print(f"Processing {emb_key}...")
 
-        # Create a temporary adata with the embedding
-        adata_temp = adata.copy()
-
-        if emb_key not in adata_temp.obsm:
+        if emb_key not in adata.obsm:
             print(f"  Warning: {emb_key} not found in adata.obsm")
             continue
 
-        # Store embedding with a consistent key for scib
-        adata_temp.obsm["X_emb"] = adata_temp.obsm[emb_key]
-
-        # Use scib.metrics.metrics() to calculate all metrics
-        # Since we don't have batch information, we'll use a dummy batch column
-        # This allows us to focus on biological conservation metrics
-        adata_temp.obs["batch"] = "batch1"  # Single batch for bio metrics only
-
-        results_df = scm.metrics(
-            adata_temp,
-            adata_int=adata_temp,
-            batch_key="batch",
-            label_key="target",
-            embed="X_emb",
-            isolated_labels_asw_=False,
-            silhouette_=True,
-            hvg_score_=False,
-            pcr_=False,
-            isolated_labels_f1_=False,
-            trajectory_=False,
-            nmi_=True,
-            ari_=True,
-            cell_cycle_=False,
-            kBET_=False,
-            ilisi_=False,
-            clisi_=False,
-            graph_conn_=False,
+        m = scib_bio_metrics(adata.obs, np.asarray(adata.obsm[emb_key]))
+        nmi_score, ari_score, asw_score, avg_bio = (
+            m["NMI"],
+            m["ARI"],
+            m["ASW"],
+            m["avg_bio"],
         )
-
-        # Extract results from the dataframe
-        results = results_df.iloc[:, 0].to_dict()
-
-        # Get the bio conservation metrics
-        nmi_score = results.get("NMI_cluster/label", np.nan)
-        ari_score = results.get("ARI_cluster/label", np.nan)
-        asw_score = results.get("ASW_label", np.nan)
-
-        # Calculate average bio score
-        bio_keys_values = [nmi_score, ari_score, asw_score]
-        avg_bio = np.nanmean(bio_keys_values)
 
         bio_scores[emb_key] = {
             "NMI_cluster/label": nmi_score,

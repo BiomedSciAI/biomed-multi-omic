@@ -1,14 +1,23 @@
-# Versions used for the paper's Figure 6. NMI/ARI (and so Avg Bio) depend on the Leiden
-# implementation; newer scanpy/leidenalg give different values. Python 3.11.
+# Environment that produced the paper's Figure 6 from the embeddings (Python 3.11.9).
+# NMI/ARI (and so Avg Bio) depend on the Leiden implementation and the UMAPs on
+# numba/pynndescent; other versions give different values.
+# build_input.py also needs scikit-misc (seurat_v3 HVG); the embedding models run in
+# their own environments (see README).
 anndata==0.11.4
+h5py==3.16.0
 igraph==0.11.8
 leidenalg==0.10.2
-matplotlib
+llvmlite==0.50.0
+louvain==0.8.2
+matplotlib==3.11.2
+numba==0.68.1
 numpy==1.26.4
-pandas<3
+pandas==3.0.6
 pynndescent==0.5.13
 scanpy==1.11.1
 scib==1.1.7
 scikit-learn==1.5.2
+scikit-misc==0.5.3
+scipy==1.17.1
 seaborn==0.13.2
 umap-learn==0.5.7

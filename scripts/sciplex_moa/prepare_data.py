@@ -1,7 +1,7 @@
 """
 Filter the Sci-Plex 3 A549 AnnData to the MoA task set and export it for the other scripts.
 
-Applies moa_predict.load_and_prepare_data with its defaults (no vehicle, dose 10,000 nM,
+Applies moa_lib.load_and_prepare_data with its defaults (no vehicle, dose 10,000 nM,
 viability < 0.85, no "Others" class, >= 2 drugs per MoA). On the paper's data this gives
 4,667 cells, 37 drugs, 9 MoA classes.
 
@@ -10,7 +10,7 @@ Writes <out>/obs.csv and <out>/obsm.npz (one array per embedding key in adata.ob
 import argparse
 from pathlib import Path
 
-import moa_predict as M
+import moa_lib as M
 import numpy as np
 
 
