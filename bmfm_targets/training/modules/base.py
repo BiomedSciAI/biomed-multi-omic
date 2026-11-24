@@ -100,8 +100,9 @@ class BaseTrainingModule(pl.LightningModule):
                 )
                 model_config.label_columns = []
 
-        # Configs from older checkpoints lack this key and pick up the transformers
-        # default (True); see the PR description for the crash this causes.
+        # Every released checkpoint pickles tie_word_embeddings=True (the old
+        # transformers default). These models never tie embeddings, so pin it to
+        # False rather than depend on tie_weights() tolerating the stale flag.
         if getattr(model_config, "tie_word_embeddings", False):
             logger.info(
                 "Forcing tie_word_embeddings=False: these models do not tie "
