@@ -313,3 +313,54 @@ def test_filling_predictions_to_anndata(
             adata[sample_id, row["input_genes"]].X.data[0]
             == row["predicted_expressions"]
         )
+
+
+def _gated_expression_frame(regression_logits_col: str) -> pd.DataFrame:
+    """
+    One gene, four cells, a regression head that is always 0.1 too high, and an
+    is_zero gate that wrongly zeroes the cell whose true value is 1.
+
+    Hand-computed answers on the three expressed cells:
+      gated error   (predicted vs label): |0-1|, |2.1-2|, |3.1-3| -> mean 0.4
+      ungated error (raw logits vs label): 0.1, 0.1, 0.1           -> mean 0.1
+    """
+    label = [0.0, 1.0, 2.0, 3.0]
+    return pd.DataFrame(
+        {
+            "input_genes": ["A"] * 4,
+            "label_expressions": label,
+            "predicted_expressions": [0.0, 0.0, 2.1, 3.1],
+            regression_logits_col: [x + 0.1 for x in label],
+            "logits_expressions_is_zero_bce": [3.0, 1.0, -2.0, -3.0],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "regression_logits_col",
+    ["logits_expressions_mse", "logits_expressions_regression"],
+)
+def test_ungated_error_uses_raw_regression_logits(regression_logits_col):
+    """WCED names its regression logits `mse`; non-WCED decoders name them `regression`."""
+    gene_err = batch_prediction_metrics.get_gene_level_expression_error(
+        _gated_expression_frame(regression_logits_col)
+    )
+
+    assert gene_err.loc["A", "gene_err_nz"] == pytest.approx(0.4)
+    assert gene_err.loc["A", "gene_err_nz_by_logits"] == pytest.approx(0.1)
+
+
+def test_ungated_error_absent_without_regression_logits():
+    frame = _gated_expression_frame("logits_expressions_mse").drop(
+        columns="logits_expressions_mse"
+    )
+    gene_err = batch_prediction_metrics.get_gene_level_expression_error(frame)
+    assert "gene_err_nz_by_logits" not in gene_err.columns
+
+
+def test_two_regression_logits_columns_raise():
+    frame = _gated_expression_frame("logits_expressions_mse").assign(
+        logits_expressions_regression=0.0
+    )
+    with pytest.raises(ValueError, match="Ambiguous regression logits"):
+        batch_prediction_metrics.get_gene_level_expression_error(frame)

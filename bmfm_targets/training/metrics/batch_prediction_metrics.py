@@ -46,6 +46,21 @@ def _resolve_input_expression_column(exp_preds: pd.DataFrame) -> str:
     raise ValueError("No input_expressions column found.")
 
 
+REGRESSION_LOGITS_COLUMNS = (
+    "logits_expressions_regression",
+    "logits_expressions_mse",
+)
+
+
+def _resolve_regression_logits_column(exp_preds: pd.DataFrame) -> str | None:
+    present = [c for c in REGRESSION_LOGITS_COLUMNS if c in exp_preds.columns]
+    if len(present) > 1:
+        raise ValueError(
+            f"Ambiguous regression logits: found both {present}; expected at most one."
+        )
+    return present[0] if present else None
+
+
 def get_gene_level_expression_error(exp_preds: pd.DataFrame) -> pd.DataFrame:
     metrics = {}
     input_expr_col = _resolve_input_expression_column(exp_preds)
@@ -78,9 +93,12 @@ def get_gene_level_expression_error(exp_preds: pd.DataFrame) -> pd.DataFrame:
         ).abs(),
     )
 
-    if "logits_expressions_regression" in exp_preds.columns:
+    # The raw regression head output, before the is_zero gate sets entries to 0.
+    # Non-WCED decode modes name it `regression`; WCED names it after its loss, `mse`.
+    regression_logits_col = _resolve_regression_logits_column(exp_preds)
+    if regression_logits_col is not None:
         exp_preds["abs_diff_regression_logits"] = (
-            exp_preds["logits_expressions_regression"] - exp_preds["label_expressions"]
+            exp_preds[regression_logits_col] - exp_preds["label_expressions"]
         ).abs()
         metrics["gene_err_nz_by_logits"] = (
             exp_preds.query("label_expressions > 0")
