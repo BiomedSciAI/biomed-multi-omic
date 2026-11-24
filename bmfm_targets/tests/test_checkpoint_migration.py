@@ -850,3 +850,25 @@ def test_mlm_checkpoint_with_label_columns_in_hyperparams_but_no_weights():
 
     # The fix in task_utils.py detects this condition and clears label_columns
     # before instantiation, preventing the RuntimeError
+
+
+def test_stale_tie_word_embeddings_does_not_crash_multitask_construction(
+    minimal_multitask_config,
+):
+    """A config with the transformers default tie_word_embeddings=True must load."""
+    from bmfm_targets.config import TrainerConfig
+    from bmfm_targets.training.modules.base import BaseTrainingModule
+
+    config = minimal_multitask_config
+    # what PretrainedConfig.__init__ does for a config.json lacking the key
+    config.tie_word_embeddings = True
+
+    module = BaseTrainingModule(
+        model_config=config,
+        trainer_config=TrainerConfig(losses=[]),
+        tokenizer=None,
+        label_dict=None,
+    )
+
+    assert module.model_config.tie_word_embeddings is False
+    assert module.model.config.tie_word_embeddings is False

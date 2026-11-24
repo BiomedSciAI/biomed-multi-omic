@@ -12,12 +12,13 @@ data_module:
   _partial_: true
   num_workers: 8
   mlm: true
-  collation_strategy: multitask
   shuffle: true
   max_length: 8192
   padding: longest
   sequence_order: random
-  sequence_dropout_ratio: 0.2
+  # The published run set `sequence_dropout_ratio: 0.2`. No such option exists
+  # (the real one is `sequence_dropout_factor`), so that run had no sequence
+  # dropout. The key is removed rather than renamed to keep the trained recipe.
   batch_size: 8
   limit_genes: protein_coding
   log_normalize_transform: true

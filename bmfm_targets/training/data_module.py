@@ -1,3 +1,5 @@
+import difflib
+import inspect
 import logging
 from collections.abc import Mapping
 from copy import deepcopy
@@ -35,6 +37,19 @@ class DataModule(pl.LightningDataModule):
 
     DATASET_FACTORY: type[BaseRNAExpressionDataset] = BaseRNAExpressionDataset
     DATASET_TRANSFORMER_FACTORY: type[DatasetTransformer] = DatasetTransformer
+
+    #: Keys a Hydra config may set under ``data_module`` only so that other parts
+    #: of the config can interpolate them, e.g. ``${data_module.dataset_name}``.
+    #: The DataModule accepts and ignores them.
+    STASH_KEYS = frozenset(
+        {"dataset_name", "batch_column_name", "label_column_name", "counts_column_name"}
+    )
+    #: Keys that once configured the DataModule and now have no effect. Accepted
+    #: with a warning so that configs saved with them still load.
+    RETIRED_KEYS = {
+        "collation_strategy": "the collator infers its behavior from fields and "
+        "label_columns",
+    }
 
     class LabelOntologyTuple(NamedTuple):
         """Label ontology artifacts."""
@@ -85,7 +100,7 @@ class DataModule(pl.LightningDataModule):
         shuffle: bool = False,
         tokenize_kwargs: dict | None = None,
         bootstrap_test_dataloader: bool = False,
-        **kwargs,  # to enable stashing hydra config settings
+        **kwargs,  # only STASH_KEYS and RETIRED_KEYS; see _check_extra_kwargs
     ):
         """
         Construct a PyTorch Lightning DataModule for single-cell RNA expression datasets.
@@ -222,6 +237,7 @@ class DataModule(pl.LightningDataModule):
             Whether to shuffle the data during training, by default False.
         """
         super().__init__()
+        self._check_extra_kwargs(kwargs)
 
         self.data_dir = Path(data_dir) if data_dir is not None else data_dir
         self.processed_name = processed_name + ".h5ad"
@@ -292,6 +308,49 @@ class DataModule(pl.LightningDataModule):
         self.label_ontology_artifacts = self._setup_label_ontology()
         self.bootstrap_test_dataloader = bootstrap_test_dataloader
         self.__post_init__()
+
+    def _check_extra_kwargs(self, kwargs: dict) -> None:
+        """
+        Reject keyword arguments that no ``__init__`` in the class chain consumed.
+
+        Without this check a misspelled option (e.g. ``sequence_dropout_ratio`` for
+        ``sequence_dropout_factor``) is dropped and the run silently uses the
+        default.
+        """
+        for key in sorted(set(kwargs) & set(self.RETIRED_KEYS)):
+            logger.warning(
+                f"data_module.{key} is ignored: {self.RETIRED_KEYS[key]}. "
+                "Remove it from the config."
+            )
+        unknown = sorted(set(kwargs) - self.STASH_KEYS - set(self.RETIRED_KEYS))
+        if not unknown:
+            return
+        accepted = self._accepted_init_params()
+        hints = []
+        for key in unknown:
+            close = difflib.get_close_matches(key, accepted, n=1)
+            hints.append(
+                f"{key!r}" + (f" (did you mean {close[0]!r}?)" if close else "")
+            )
+        raise TypeError(
+            f"{type(self).__name__} got unexpected keyword argument(s): "
+            f"{', '.join(hints)}. Config-only keys allowed for interpolation: "
+            f"{sorted(self.STASH_KEYS)}."
+        )
+
+    @classmethod
+    def _accepted_init_params(cls) -> list[str]:
+        params = set()
+        for klass in cls.__mro__:
+            init = klass.__dict__.get("__init__")
+            if init is None:
+                continue
+            params |= {
+                name
+                for name, p in inspect.signature(init).parameters.items()
+                if name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+            }
+        return sorted(params)
 
     def __post_init__(self):
         pass

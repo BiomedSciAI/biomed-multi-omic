@@ -100,6 +100,17 @@ class BaseTrainingModule(pl.LightningModule):
                 )
                 model_config.label_columns = []
 
+        # Every released checkpoint pickles tie_word_embeddings=True (the old
+        # transformers default). These models never tie embeddings, so pin it to
+        # False rather than depend on tie_weights() tolerating the stale flag.
+        if getattr(model_config, "tie_word_embeddings", False):
+            logger.info(
+                "Forcing tie_word_embeddings=False: these models do not tie "
+                "input/output embeddings, and a checkpoint config predating that "
+                "declaration otherwise crashes in tie_weights()."
+            )
+            model_config.tie_word_embeddings = False
+
         # this is needed when model_config is loaded from old checkpoints which don't contain the label_columns item in "hyperparameter" section
         if (
             not hasattr(model_config, "label_columns")
