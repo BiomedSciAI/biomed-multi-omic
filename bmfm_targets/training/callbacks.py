@@ -487,6 +487,11 @@ class CziBenchmarkCallback(pl.Callback):
     ALL_TASKS = ("label_prediction", "clustering", "embedding", "batch_integration")
     DEFAULT_TASKS = ("label_prediction",)
     ALL_CLASSIFIERS = ("lr", "knn", "rf")
+    #: The paper protocol (Methods): Macro F1 and accuracy averaged over folds
+    #: *and* over these three classifiers.
+    DEFAULT_CLASSIFIERS = ALL_CLASSIFIERS
+    #: Label-prediction metrics that every classifier must report.
+    REQUIRED_LABEL_METRICS = ("mean_fold_accuracy", "mean_fold_f1")
 
     def __init__(
         self,
@@ -504,7 +509,9 @@ class CziBenchmarkCallback(pl.Callback):
         unknown = set(self.tasks) - set(self.ALL_TASKS)
         if unknown:
             raise ValueError(f"unknown czbenchmarks tasks: {sorted(unknown)}")
-        self.classifiers = tuple(classifiers) if classifiers is not None else ("lr",)
+        self.classifiers = (
+            tuple(classifiers) if classifiers is not None else self.DEFAULT_CLASSIFIERS
+        )
         unknown = set(self.classifiers) - set(self.ALL_CLASSIFIERS)
         if unknown or not self.classifiers:
             raise ValueError(
@@ -674,6 +681,39 @@ class CziBenchmarkCallback(pl.Callback):
         for metric, value in zip(table.metric, table.value):
             self.cl.report_single_value(name=f"{prefix}_{metric}", value=float(value))
 
+    def _check_label_prediction_complete(
+        self, table: pd.DataFrame, expect_mean_row: bool
+    ) -> None:
+        """
+        Raise if any requested classifier is missing a metric, or has a NaN one.
+
+        A missing row would otherwise drop out of every downstream mean, so a
+        tissue whose rf fit failed would be averaged over lr and knn only and
+        still look like a complete result.
+        """
+        expected_classifiers = list(self.classifiers)
+        if expect_mean_row and len(self.classifiers) > 1:
+            expected_classifiers.append(f"MEAN({','.join(sorted(self.classifiers))})")
+        expected_metrics = set(table["metric"]) | set(self.REQUIRED_LABEL_METRICS)
+        present = {
+            (m, c)
+            for m, c, v in table[["metric", "classifier", "value"]].itertuples(
+                index=False
+            )
+            if pd.notna(v)
+        }
+        missing = sorted(
+            (c, m)
+            for c in expected_classifiers
+            for m in expected_metrics
+            if (m, c) not in present
+        )
+        if missing:
+            raise ValueError(
+                "czbenchmarks label prediction is incomplete; missing or NaN "
+                f"(classifier, metric) rows: {missing}"
+            )
+
     def _report_label_prediction(self, embeddings, labels) -> None:
         """
         CZI cross-validated label prediction with the selected classifiers.
@@ -690,7 +730,10 @@ class CziBenchmarkCallback(pl.Callback):
             ),
         )
         table = self._results_frame(results)
-        if "classifiers" not in MetadataLabelPredictionTaskInput.model_fields:
+        native_selection = (
+            "classifiers" in MetadataLabelPredictionTaskInput.model_fields
+        )
+        if not native_selection:
             # Older czbenchmarks silently ignore `classifiers` and fit all of them.
             logger.warning(
                 "this czbenchmarks version has no `classifiers` option; "
@@ -698,6 +741,7 @@ class CziBenchmarkCallback(pl.Callback):
                 self.classifiers,
             )
             table = table[table["classifier"].isin(self.classifiers)]
+        self._check_label_prediction_complete(table, expect_mean_row=native_selection)
         self._collect("CZI Cell Type Classification", table)
         wide = table.pivot_table(
             index="metric",

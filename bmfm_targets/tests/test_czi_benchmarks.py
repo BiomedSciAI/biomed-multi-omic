@@ -44,10 +44,11 @@ def _classifiers(cb):
     return {r["classifier"] for r in cb._rows}
 
 
-def test_default_runs_only_label_prediction_with_lr():
+def test_default_runs_label_prediction_with_all_three_classifiers():
+    """Methods: Macro F1 and accuracy are means over folds and lr, knn and rf."""
     cb = CziBenchmarkCallback(target_column_name="celltype")
     assert cb.tasks == ("label_prediction",)
-    assert cb.classifiers == ("lr",)
+    assert set(cb.classifiers) == {"lr", "knn", "rf"}
 
 
 @pytest.mark.parametrize(
@@ -265,3 +266,72 @@ def test_classifiers_are_filtered_when_czbenchmarks_cannot_select_them(
     # and the MEAN(knn,lr,rf) row, which would mislead, is dropped.
     assert _classifiers(cb) == set(requested)
     assert "no `classifiers` option" in caplog.text
+
+
+def _stub_label_prediction(monkeypatch, drop=None, nan=None):
+    """
+    Replace the czbenchmarks task with fixed results for lr, knn, rf and their MEAN.
+
+    ``drop`` removes one (classifier, metric) row; ``nan`` sets one to NaN.
+    """
+    from bmfm_targets.training import callbacks
+
+    classifiers = ["MEAN(knn,lr,rf)", "lr", "knn", "rf"]
+    metrics = ["mean_fold_accuracy", "mean_fold_f1", "mean_fold_auroc"]
+    results = []
+    for clf in classifiers:
+        for metric in metrics:
+            if (clf, metric) == drop:
+                continue
+            value = float("nan") if (clf, metric) == nan else 0.5
+            results.append(
+                SimpleNamespace(
+                    metric_type=SimpleNamespace(value=metric),
+                    params={"classifier": clf},
+                    value=value,
+                )
+            )
+    monkeypatch.setattr(
+        callbacks.MetadataLabelPredictionTask,
+        "run",
+        lambda self, cell_representation, task_input: results,
+    )
+
+
+def test_complete_stub_result_is_accepted(emb_and_labels, tmp_path, monkeypatch):
+    _, embeddings, labels = emb_and_labels
+    _stub_label_prediction(monkeypatch)
+    cb, _ = _callback(tmp_path)
+
+    cb._report_label_prediction(embeddings, labels)
+
+    assert len(cb._rows) == 12
+
+
+@pytest.mark.parametrize(
+    "stub_kwargs",
+    [
+        {"drop": ("rf", "mean_fold_f1")},
+        {"drop": ("MEAN(knn,lr,rf)", "mean_fold_accuracy")},
+        {"nan": ("knn", "mean_fold_auroc")},
+    ],
+    ids=["rf-f1-dropped", "mean-row-dropped", "knn-auroc-nan"],
+)
+def test_incomplete_label_prediction_fails_the_task(
+    emb_and_labels, tmp_path, monkeypatch, stub_kwargs
+):
+    """A missing row must not quietly shrink the mean over classifiers."""
+    adata_emb, embeddings, labels = emb_and_labels
+    _stub_label_prediction(monkeypatch, **stub_kwargs)
+    cb, trainer = _callback(tmp_path)
+    cb._ctx = (trainer, adata_emb, labels)
+
+    with pytest.raises(ValueError, match="incomplete"):
+        cb._report_label_prediction(embeddings, labels)
+
+    cb._run_task(
+        "label_prediction", lambda: cb._report_label_prediction(embeddings, labels)
+    )
+    assert cb._failed == ["label_prediction"]
+    assert cb._rows == []
+    assert not (tmp_path / "czbenchmarks_metrics.csv").exists()
