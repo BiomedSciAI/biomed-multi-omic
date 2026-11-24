@@ -13,7 +13,8 @@ data_module:
   sequence_order: random
   switch_ratio: 0.0
   batch_size: 8
-  save_state: true
+  # The published run also set `save_state: true`, which this DataModule does not
+  # accept; it had no effect and is removed.
   limit_genes: protein_coding
   rda_transform: downsample
   pad_zero_expression_strategy: batch_wise

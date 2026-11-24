@@ -27,7 +27,7 @@ As of April 2026 the v2 provenance yamls are now checked in under `run/checkpoin
 | HuggingFace id | Training config | Shape | Objective | Key overrides |
 | --- | --- | --- | --- | --- |
 | `ibm-research/biomed.rna.llama.32m.mlm.multitask.v1` | `run/checkpoints/biomed.rna.llama.32m.mlm.multitask.v1.yaml` | Llama 12L/12H/384, ~32M | MLM Multitask | `change_ratio: 0.15`, `mask_ratio: 0.95`, HCE on cell_type, focal on tissue/tissue_general, **GRL on donor_id (coef 1.0, loss weight 0.05)** |
-| `ibm-research/biomed.rna.llama.47m.wced.multitask.v1` | `run/checkpoints/biomed.rna.llama.47m.wced.multitask.v1.yaml` | Llama 12L/12H/384, ~47M | WCED Multitask | `sequence_dropout_ratio: 0.2`, `WCEDMasker` + WCED losses on `all_genes`, **multiple CLS tokens (`prepend_tokens: [CLS, CLS_0..CLS_3]`) with per-label `decode_from` routing** |
+| `ibm-research/biomed.rna.llama.47m.wced.multitask.v1` | `run/checkpoints/biomed.rna.llama.47m.wced.multitask.v1.yaml` | Llama 12L/12H/384, ~47M | WCED Multitask | no sequence dropout (the released yaml had a dead `sequence_dropout_ratio` key), `WCEDMasker` + WCED losses on `all_genes`, **multiple CLS tokens (`prepend_tokens: [CLS, CLS_0..CLS_3]`) with per-label `decode_from` routing** |
 
 **Shared v2 training setup** (read from both yamls):
 
