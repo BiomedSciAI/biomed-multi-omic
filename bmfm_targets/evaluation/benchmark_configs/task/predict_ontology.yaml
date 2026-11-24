@@ -1,0 +1,31 @@
+# Zero-shot cell type annotation on the cell ontology. Needs the `ontology` extra, the
+# graphviz `dot` executable and an ontology graph (datasets/label_ontology/README.md).
+defaults:
+  - predict
+
+output_predictions: true
+callbacks:
+  - _target_: bmfm_targets.training.callbacks.OntologyAnalysisCallback
+    config:
+      # ontology ids, or names found in the ontology
+      ground_truth_column: ${data_module.label_column_name}
+      # label column of the checkpoint's ontology head
+      model_label_column: cell_type_ontology_term_id
+      # null uses datasets/label_ontology/_celltypeont/ontology.graphml
+      ontology_path: null
+      thresholds: [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
+      # set a plot to null to skip it
+      sankey:
+        n_true_labels: 15
+        n_pred_labels: 15
+      probability_graph:
+        top_n_labels: 5
+        prob_threshold: 0.035
+      greedy_flow:
+        root_node: cell
+        min_flow_fraction: 0.001
+        max_nodes_per_layer: 30
+      # also decode from the root down
+      topdown: false
+      # agreement of embeddings with the ontology; null skips it
+      alignment: null
