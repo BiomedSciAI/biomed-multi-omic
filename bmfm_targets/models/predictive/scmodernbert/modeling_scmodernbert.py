@@ -5,7 +5,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from transformers.activations import ACT2FN
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 from transformers.modeling_outputs import (
     BaseModelOutputWithPoolingAndCrossAttentions,
     MaskedLMOutput,
@@ -41,6 +40,19 @@ else:
     RotaryEmbedding = object
 
 logger = logging.get_logger(__name__)
+
+
+def _prepare_4d_attention_mask(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Expand a ``(batch, seq)`` padding mask to an additive ``(batch, 1, seq, seq)`` mask.
+
+    Kept positions become 0 and padded positions become the dtype minimum. Local copy of
+    the helper transformers removed from ``modeling_attn_mask_utils`` in 5.24.
+    """
+    bsz, src_len = mask.size()
+    expanded = mask[:, None, None, :].expand(bsz, 1, src_len, src_len).to(dtype)
+    inverted = 1.0 - expanded
+    return inverted.masked_fill(inverted.to(torch.bool), torch.finfo(dtype).min)
 
 
 class ApplyRotaryEmbUnpad(torch.autograd.Function):
