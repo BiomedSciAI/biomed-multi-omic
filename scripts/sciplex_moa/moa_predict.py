@@ -68,8 +68,8 @@ def parse_args():
         "--embedding_keys",
         type=str,
         nargs="+",
-        default=["X_bmfm_mlm", "X_bmfm_wced_v1", "X_bmfm_wced"],
-        help="List of embedding keys to compare (default: X_bmfm_mlm X_bmfm_wced_v1 X_bmfm_wced)",
+        default=["X_bmfm_wced_cls_0", "X_bmfm_mlm"],
+        help="List of embedding keys to compare (default: X_bmfm_wced_cls_0 X_bmfm_mlm)",
     )
     parser.add_argument(
         "--n_repeats",
