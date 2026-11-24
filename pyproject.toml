@@ -51,6 +51,7 @@ dependencies = [
   "numexpr",
   "pybigwig",
   "networkx",
+  "statsmodels",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +69,7 @@ baselines=[
   "cz-benchmarks",
 ]
 notebook = ["cellxgene-ontology-guide", "jupyter", "swatch"]
+gene_annotations = ["rdflib"]
 vllm = [
   "vllm>=0.23.0",
 ]
@@ -92,6 +94,7 @@ include = ["bmfm_targets*", "vllm_biomed_rna_plugin*", "run*"]
 
 [tool.setuptools.package-data]
 bmfm_targets = ["py.typed"]
+"bmfm_targets.evaluation.resources" = ["*.csv"]
 "bmfm_targets.tests.resources.pretrain.panglao" = [
   "metadata/*.csv",
   "metadata/*.txt",
@@ -170,5 +173,6 @@ omit = [
   "bmfm_targets/datasets/perturbation/vcc/vcc_util.py",
   "bmfm_targets/datasets/perturbation/vcc/perturbation_util.py",
   "bmfm_targets/datasets/sciplex3/cell_drug_response_utils.py",
-  "bmfm_targets/datasets/SNPdb/parquet2litdata_token_label.py"
+  "bmfm_targets/datasets/SNPdb/parquet2litdata_token_label.py",
+  "bmfm_targets/evaluation/gene_annotations/build.py"
 ]
