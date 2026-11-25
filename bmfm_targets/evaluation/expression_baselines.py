@@ -150,11 +150,12 @@ def select_coexpressed_genes(
     if n_predictors >= n_genes:
         raise ValueError("n_predictors must be smaller than the number of genes")
     fold_ids = np.unique(folds)
+    rows = x.tocsr()
     selected = np.empty((n_genes, len(fold_ids), n_predictors), dtype=np.int32)
     for i, fold in enumerate(fold_ids):
-        train = x.tocsr()[folds != fold]
+        train = rows[folds != fold]
         mean = np.asarray(train.mean(axis=0)).ravel()
-        cov = (train.T @ train).toarray() / train.shape[0] - np.outer(mean, mean)
+        cov = _gram(train) / train.shape[0] - np.outer(mean, mean)
         std = np.sqrt(np.maximum(np.diag(cov), 0))
         scale = np.where(std > 0, 1 / np.where(std > 0, std, 1), 0)
         corr = np.abs(cov * scale[:, None] * scale[None, :])
@@ -425,6 +426,15 @@ def _coexpression_genes(x, folds, predictors, min_train) -> Iterator[tuple]:
             [(i, test) for i, test in tests if test.any()],
             lambda i, block=block, columns=columns: block[:, columns[i]],
         )
+
+
+def _gram(rows: sp.csr_matrix, size: int = 4096) -> np.ndarray:
+    """Dense ``rows.T @ rows``; chunked BLAS is faster than the sparse product."""
+    total = np.zeros((rows.shape[1], rows.shape[1]))
+    for part in _chunks(np.arange(rows.shape[0]), size):
+        dense = rows[part].toarray()
+        total += dense.T @ dense
+    return total
 
 
 def _line(z: np.ndarray, y: np.ndarray, train: np.ndarray) -> np.ndarray:
