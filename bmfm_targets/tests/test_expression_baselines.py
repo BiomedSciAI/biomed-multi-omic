@@ -185,3 +185,25 @@ def test_compare_skips_unscored_genes():
 def test_stored_zero_is_rejected():
     with pytest.raises(ValueError, match="positive"):
         eb.check_expression_matrix(sp.csc_matrix(([0.0], ([0], [0])), shape=(2, 2)))
+
+
+@pytest.mark.parametrize("with_cell_type", [False, True])
+def test_coexpression_ignores_nearly_collinear_predictors(with_cell_type):
+    rng = np.random.default_rng(0)
+    n = 200
+    folds = np.arange(n) % 2
+    a = rng.uniform(1, 2, n)
+    # the second predictor differs from the first by 1e-6 in fold 0 and by 0.5 in fold 1
+    b = a + np.where(folds == 0, 1e-6, 0.5) * rng.normal(size=n)
+    y = 1 + a + 0.1 * rng.normal(size=n)
+    x = sp.csc_matrix(np.column_stack([y, a, b]))
+    predictors = np.zeros((3, 2, 2), dtype=int)
+    predictors[0] = [1, 2]
+    predictors[1], predictors[2] = [0, 2], [0, 1]
+    if with_cell_type:
+        pred = eb.predict_cell_type_library_size_coexpression(
+            x, folds, np.zeros(n), np.exp(rng.normal(size=n)), predictors
+        )
+    else:
+        pred = eb.predict_coexpression(x, folds, predictors)
+    assert np.abs(pred[:n] - y).max() < 1

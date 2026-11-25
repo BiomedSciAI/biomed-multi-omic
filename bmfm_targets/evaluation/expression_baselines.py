@@ -15,6 +15,10 @@ import pandas as pd
 import scipy.sparse as sp
 from sklearn.utils.extmath import randomized_svd
 
+# Singular values below this fraction of the largest are dropped. Few expressing cells
+# can leave co-expressed genes nearly collinear, and the fit then extrapolates wildly.
+RCOND = 1e-5
+
 
 def check_expression_matrix(x) -> sp.csc_matrix:
     """Return ``x`` as CSC with sorted indices, rejecting non-positive stored values."""
@@ -180,7 +184,7 @@ def predict_coexpression(
     ):
         for i, test in fold_rows:
             design = np.column_stack([values(i), np.ones(len(cells))])
-            beta = np.linalg.lstsq(design[~test], y[~test], rcond=None)[0]
+            beta = np.linalg.lstsq(design[~test], y[~test], rcond=RCOND)[0]
             pred[entries[test]] = design[test] @ beta
     return pred
 
@@ -224,7 +228,7 @@ def predict_cell_type_library_size_coexpression(
             beta = np.linalg.lstsq(
                 design[train] - mean_x[t[train]],
                 y[train] - mean_y[t[train]],
-                rcond=None,
+                rcond=RCOND,
             )[0]
             pred[entries[test]] = (
                 mean_y[t[test]] + (design[test] - mean_x[t[test]]) @ beta
