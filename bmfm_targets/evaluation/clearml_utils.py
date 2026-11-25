@@ -60,6 +60,53 @@ def get_metric_from_clearml_task(project_name, task_name, metric):
     return metrics["Summary"][metric]["last"]
 
 
+def latest_task_per_name(tasks: list[Task]) -> dict[str, Task]:
+    """
+    Newest task for each task name.
+
+    ClearML does not enforce unique names within a project. Tasks are identified by id
+    and the one created last is kept, with a warning naming the others.
+    """
+    latest: dict[str, Task] = {}
+    for task in {t.id: t for t in tasks}.values():
+        other = latest.get(task.name)
+        if other is None or task.data.created > other.data.created:
+            latest[task.name] = task
+        if other is not None:
+            kept = latest[task.name]
+            dropped = other if kept is task else task
+            logging.warning(
+                f"Task name {task.name} is not unique: keeping {kept.id}, "
+                f"ignoring {dropped.id}"
+            )
+    return latest
+
+
+def collect_project_metrics(project_name: str, section: str = "Summary"):
+    """
+    Last value of every metric in one section, for all finished tasks of a project.
+
+    Returns
+    -------
+        DataFrame with columns `task_name`, `task_id`, `metric`, `value`.
+    """
+    tasks = Task.get_tasks(
+        project_name=project_name,
+        task_filter={"status": ["completed", "published", "closed"]},
+    )
+    rows = [
+        {
+            "task_name": name,
+            "task_id": task.id,
+            "metric": metric,
+            "value": values["last"],
+        }
+        for name, task in sorted(latest_task_per_name(tasks).items())
+        for metric, values in task.get_last_scalar_metrics().get(section, {}).items()
+    ]
+    return pd.DataFrame(rows, columns=["task_name", "task_id", "metric", "value"])
+
+
 def get_folder_of_checkpoints(task_name):
     """
     Returns the path to the folder with checkpoints of ClearML task.
