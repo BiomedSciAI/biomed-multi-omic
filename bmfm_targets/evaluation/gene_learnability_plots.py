@@ -3,7 +3,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
+from scipy.stats import norm, spearmanr
 
 from bmfm_targets.evaluation.gene_learnability import quantification_skill
 
@@ -40,28 +40,59 @@ def plot_detection_vs_quantification(skills: pd.DataFrame, ax=None):
     return ax, rho
 
 
-def family_medians(skills: pd.DataFrame, families: pd.Series) -> pd.DataFrame:
-    """Median `det_dev` and `q_skill` per family, sorted by `q_skill`, with gene counts."""
-    grouped = skills.groupby(families.reindex(skills.index))
-    table = grouped[["det_dev", "q_skill"]].median()
-    table["n"] = grouped.size()
-    return table.sort_values("q_skill")
+def family_intervals(gate: pd.DataFrame, level: float = 0.95) -> pd.DataFrame:
+    """
+    Normal-approximation intervals for family medians, from their permutation p values.
+
+    The standard error is the one for which the family's median difference from the gene
+    pool has the p value reported by `family_permutation_gate`, so an interval excludes
+    zero exactly when `p_median < 1 - level`. The p value is before BH adjustment.
+
+    Args:
+    ----
+        gate: output of `bmfm_targets.evaluation.gene_learnability.family_permutation_gate`
+        level: confidence level
+
+    Returns:
+    -------
+        Table indexed by family: `median` (difference from the pool median), `low`,
+        `high`, `n`.
+    """
+    z = norm.ppf(1 - gate["p_median"].clip(lower=1e-4) / 2).clip(min=0.01)
+    half = norm.ppf(0.5 + level / 2) * gate["delta_median"].abs().to_numpy() / z
+    center = gate["delta_median"].to_numpy()
+    return pd.DataFrame(
+        {"median": center, "low": center - half, "high": center + half},
+        index=gate["family"].to_numpy(),
+    ).assign(n=gate["n"].to_numpy())
 
 
-def plot_family_medians(table: pd.DataFrame, ax=None):
-    """Family medians from `family_medians` on a shared row per family."""
+def plot_family_intervals(
+    quantification: pd.DataFrame, detection: pd.DataFrame, families=None, ax=None
+):
+    """
+    Family intervals of the two skills from `family_intervals`, on twin x axes.
+
+    Families are ordered by quantification; `families` restricts which are drawn.
+    """
     ax = ax or plt.gca()
     twin = ax.twiny()
-    rows = np.arange(len(table))
-    ax.scatter(table["q_skill"], rows - 0.15, color=QUANTIFICATION_COLOR)
-    twin.scatter(table["det_dev"], rows + 0.15, color=DETECTION_COLOR)
-    for axis, column in ((ax, "q_skill"), (twin, "det_dev")):
-        limit = table[column].abs().max() * 1.1
+    shown = quantification.index if families is None else pd.Index(families)
+    order = quantification.loc[shown].sort_values("median").index
+    rows = np.arange(len(order))
+    for axis, table, shift, color in (
+        (ax, quantification.loc[order], -0.17, QUANTIFICATION_COLOR),
+        (twin, detection.loc[order], 0.17, DETECTION_COLOR),
+    ):
+        axis.hlines(rows + shift, table["low"], table["high"], color=color, lw=2.5)
+        axis.scatter(table["median"], rows + shift, color=color)
+        limit = np.abs(table[["low", "high"]].to_numpy()).max() * 1.1
         axis.set_xlim(-limit, limit)
+        axis.tick_params(axis="x", colors=color)
     ax.axvline(0, color="#444444", ls="--")
-    ax.set_yticks(rows, [f"{f} (n={n})" for f, n in table["n"].items()])
-    ax.set_xlabel("median quantification skill", color=QUANTIFICATION_COLOR)
-    twin.set_xlabel("median detection AUC - overall median", color=DETECTION_COLOR)
+    ax.set_yticks(rows, [f"{f} (n={quantification.n[f]})" for f in order])
+    ax.set_xlabel("median quantification skill - pool", color=QUANTIFICATION_COLOR)
+    twin.set_xlabel("median detection AUC - pool", color=DETECTION_COLOR)
     return ax
 
 

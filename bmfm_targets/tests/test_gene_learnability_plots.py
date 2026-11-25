@@ -51,14 +51,23 @@ def test_detection_vs_quantification_rho(skills):
     assert glp.plot_detection_vs_quantification(skills)[1] == pytest.approx(-1)
 
 
-def test_family_medians_known_case(skills):
-    families = pd.Series(np.where(np.arange(len(skills)) < 10, "A", "B"), skills.index)
-    skills["q_skill"] = np.where(families == "A", 2.0, -1.0)
-    table = glp.family_medians(skills, families)
-    assert table["q_skill"].to_dict() == {"B": -1.0, "A": 2.0}
-    assert table["n"].to_dict() == {"B": len(skills) - 10, "A": 10}
-    labels = [t.get_text() for t in glp.plot_family_medians(table).get_yticklabels()]
-    assert labels[1] == "A (n=10)"
+def test_family_intervals_exclude_zero_only_when_significant():
+    gate = pd.DataFrame(
+        {
+            "family": ["edge", "strong", "null"],
+            "n": [10, 20, 30],
+            "delta_median": [0.5, -1.0, 0.1],
+            "p_median": [0.05, 0.001, 0.8],
+        }
+    )
+    table = glp.family_intervals(gate)
+    assert table.loc["edge", "low"] == pytest.approx(0)
+    assert table.loc["edge", "high"] == pytest.approx(1)
+    assert table.loc["strong", "high"] < 0
+    assert table.loc["null", "low"] < 0 < table.loc["null", "high"]
+    ax = glp.plot_family_intervals(table, table, families=["edge", "strong"])
+    labels = [t.get_text() for t in ax.get_yticklabels()]
+    assert labels == ["strong (n=20)", "edge (n=10)"]
 
 
 def test_trajectories_and_ranks_known_case():
