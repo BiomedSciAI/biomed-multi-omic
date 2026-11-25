@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import scanpy as sc
 from anndata import AnnData
@@ -121,3 +122,18 @@ def merge_bmfm_adata(bmfm_adata: AnnData, reference_adata: AnnData) -> AnnData:
         bmfm_adata.obs, how="left", lsuffix="_bmfm"
     )
     return reference_adata
+
+
+def constant_prediction_macro_f1(labels) -> float:
+    """
+    Macro F1 of predicting the most common label for every cell.
+
+    A classification head whose macro F1 equals this has collapsed to one class. Only
+    classes present in `labels` count, as in sklearn's macro F1.
+    """
+    labels = np.asarray(labels)
+    if not len(labels):
+        raise ValueError("labels is empty")
+    _, counts = np.unique(labels, return_counts=True)
+    majority = counts.max() / len(labels)
+    return float(2 * majority / (majority + 1) / len(counts))
