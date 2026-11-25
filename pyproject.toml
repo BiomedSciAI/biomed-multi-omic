@@ -70,6 +70,7 @@ baselines=[
 ]
 notebook = ["cellxgene-ontology-guide", "jupyter", "swatch"]
 gene_annotations = ["rdflib"]
+ontology = ["plotly", "graphviz"] # probability graphs also need the graphviz `dot` executable
 vllm = [
   "vllm>=0.23.0",
 ]

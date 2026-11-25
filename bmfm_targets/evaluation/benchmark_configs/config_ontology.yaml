@@ -1,0 +1,40 @@
+# Zero-shot ontology annotation (paper Figure 3). Run with task=predict_ontology ~model ~fields
+defaults:
+  - data_module: sceval_default
+  - tokenizer: protein_coding
+  - fields: genes_expressions_cve_scale_adapt
+  - trainer: default
+  - task: predict_ontology
+  - model: llama_384
+  - label_columns: default
+  - _self_
+seed:
+  seed_value: 1234
+
+trainer:
+  losses:
+    - name: focal
+      label_column_name: cell_type_ontology_term_id
+      focal_gamma: 3
+  # for rda models this should be set to `first_token`, for multitask 'pooling_layer' or 'mean_pooling'
+  pooling_method: 1
+  batch_prediction_behavior: track
+
+track_clearml:
+  project_name: "bmfm-targets/evaluate/${checkpoint_name}"
+  task_name: "${data_module.dataset_name}_zero_shot_ontology"
+  continue_last_task: False
+
+# to adapt all of the dataset input to the ckpt modify this section
+# in general it should match the pretraining config except for masking settings
+data_module:
+  max_length: 8192
+  batch_size: 8
+  collation_strategy: multitask
+
+max_finetuning_epochs: 10
+
+dataset_name: ""
+checkpoint_path: ???
+checkpoint_name: ???
+output_directory: ${oc.env:BMFM_TARGETS_TRAINING_DIR}/benchmarking

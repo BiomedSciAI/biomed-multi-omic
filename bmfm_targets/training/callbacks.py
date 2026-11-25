@@ -2,7 +2,7 @@ import logging
 import os
 import pathlib
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,6 +28,9 @@ from scipy.sparse import csr_matrix
 
 from bmfm_targets.datasets.datasets_utils import make_group_means, random_subsampling
 from bmfm_targets.training.metrics import perturbation_metrics as pm
+
+if TYPE_CHECKING:
+    from bmfm_targets.evaluation.ontology import OntologyConfig, OntologyResults
 
 logger = logging.getLogger(__name__)
 
@@ -469,6 +472,110 @@ class BatchIntegrationCallback(pl.Callback):
         bm.benchmark()
         table = bm.plot_results_table(min_max_scale=False)
         return table.figure
+
+
+class OntologyAnalysisCallback(pl.Callback):
+    """
+    Hierarchical cell type analysis of predictions on an ontology.
+
+    Tables and figures are written to `{trainer.log_dir}/ontology`; ClearML is optional.
+    """
+
+    def __init__(self, config: "OntologyConfig | dict"):
+        """
+        Initialize the callback.
+
+        Args:
+        ----
+            config: `OntologyConfig`, or a mapping of its fields. Unknown fields and
+                missing plot dependencies raise here, before any prediction is made.
+        """
+        from omegaconf import OmegaConf
+
+        from bmfm_targets.evaluation.ontology import OntologyConfig
+        from bmfm_targets.evaluation.ontology.run import check_config_dependencies
+
+        super().__init__()
+        if not isinstance(config, OntologyConfig):
+            if OmegaConf.is_config(config):
+                config = OmegaConf.to_container(config, resolve=True)
+            config = OmegaConf.to_object(
+                OmegaConf.merge(OmegaConf.structured(OntologyConfig), config)
+            )
+        check_config_dependencies(config)
+        self.config = config
+
+    def on_predict_end(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ) -> None:
+        from scipy.special import softmax
+
+        from bmfm_targets.evaluation.ontology import run_ontology_analysis
+
+        predictions = extract_predictions(trainer)
+        column = self.config.model_label_column
+        logits_key = f"{column}_logits"
+        if logits_key not in predictions:
+            raise ValueError(
+                f"No '{logits_key}' in predictions. Ontology analysis needs a model "
+                f"with a '{column}' head."
+            )
+        cell_names = pd.Index(predictions["cell_name"])
+        probabilities = softmax(predictions[logits_key], axis=1)
+        probabilities_df = pd.DataFrame(
+            {
+                f"{column}_{label}": probabilities[:, i]
+                for label, i in pl_module.label_dict[column].items()
+            },
+            index=cell_names,
+        )
+        embeddings = None
+        if "embeddings" in predictions:
+            embeddings = pd.DataFrame(predictions["embeddings"], index=cell_names)
+        results = run_ontology_analysis(
+            self.config,
+            trainer.datamodule.predict_dataset.processed_data.obs,
+            probabilities_df,
+            pathlib.Path(trainer.log_dir) / "ontology",
+            embeddings,
+        )
+        cl = Logger.current_logger()
+        if cl:
+            self._report(cl, results)
+
+    @staticmethod
+    def _report(cl: Logger, results: "OntologyResults") -> None:
+        """Report metrics and figures to ClearML."""
+        cl.report_table(
+            title="Ontology Metrics", series="metrics", table_plot=results.metrics
+        )
+        for row in results.metrics.to_dict("records"):
+            for name in ("hierarchical_accuracy", "exact_accuracy", "avg_bio"):
+                if not np.isnan(row[name]):
+                    cl.report_single_value(
+                        name=f"Ontology {name} {row['decoder']} th {row['threshold']}",
+                        value=row[name],
+                    )
+        if results.alignment is not None:
+            cl.report_table(
+                title="Ontology Alignment",
+                series="alignment",
+                table_plot=results.alignment,
+            )
+        for threshold, fig in results.sankeys.items():
+            cl.report_plotly(
+                title="Ontology Sankey", series=f"threshold {threshold}", figure=fig
+            )
+        if results.greedy_flow is not None:
+            cl.report_plotly(
+                title="Ontology Greedy Flow",
+                series="greedy flow",
+                figure=results.greedy_flow,
+            )
+        for label, path in results.probability_graphs.items():
+            cl.report_image(
+                title="Ontology Probability Graph", series=label, local_path=str(path)
+            )
 
 
 class CziBenchmarkCallback(pl.Callback):
