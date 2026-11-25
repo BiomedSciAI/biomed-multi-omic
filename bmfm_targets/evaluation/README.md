@@ -37,3 +37,7 @@ per_gene, summary = eb.compare_to_baseline(x, model_pred, baseline, groups)
 
 `model_pred` holds one value per stored entry, in the order of `x.data`. Build `x` and
 `model_pred` from the same sorted CSC structure.
+
+The co-expression baselines are unregularized fits with about 50 predictors. Genes with
+few expressing cells can have very large errors, and these weigh on the pooled squared
+error ratio. Prefer the median ratio there.
